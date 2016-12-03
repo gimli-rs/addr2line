@@ -1,6 +1,12 @@
 [package]
 authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
+description = "A cross-platform `addr2line` clone written in Rust, using `gimli`"
+documentation = "https://docs.rs/addr2line"
+keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
+license = "Apache-2.0/MIT"
 name = "addr2line"
+readme = "./README.md"
+repository = "https://github.com/gimli-rs/addr2line"
 version = "0.1.0"
 
 [dependencies]
@@ -9,3 +15,6 @@ getopts = "0.2.14"
 gimli = "0.9.0"
 memmap = "0.5.0"
 object = "0.1.0"
+
+[features]
+nightly = []
