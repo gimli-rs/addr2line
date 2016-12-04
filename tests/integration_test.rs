@@ -27,7 +27,7 @@ fn identity_map() {
     let ours = addr2line::Mapping::new(&debug).unwrap();
 
     // Spin up the "real" addr2line
-    let mut theirs = spawn_oracle(target.as_path());
+    let mut theirs = spawn_oracle(target.as_path(), &[]);
 
     // Find some addresses to test using nm (we'll later filter to just text section symbols)
     let mut theirs_in = theirs.stdin.take().unwrap();
@@ -46,13 +46,14 @@ fn identity_map() {
         let oracle = canonicalize_oracle_output(&*oracle);
 
         // Does our answer match?
-        if let Some((mut file, lineno)) = ours.locate(addr) {
+        if let Some((file, lineno, _)) = ours.locate(addr) {
             // We dared to guess -- did we give the right answer?
+            let mut file = file.to_string_lossy();
             if cfg!(target_os = "macos") {
+                use std::borrow::Cow;
                 // atos doesn't include the full path, just file name
-                let f = path::PathBuf::from(&file);
-                let f = f.file_name().unwrap().to_string_lossy().into_owned();
-                file = f;
+                let f = path::PathBuf::from(&*file);
+                file = Cow::Owned(f.file_name().unwrap().to_string_lossy().into_owned());
             }
 
             assert_eq!(oracle.0, Some(&*file));
@@ -80,8 +81,76 @@ fn identity_map() {
              excusable);
 }
 
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn with_functions() {
+    // Ignored on macOS since atos doesn't support -f
+
+    let target = env::current_exe().unwrap();
+    let debug = target.clone();
+
+    // Parse the debug symbols using "our" addr2line
+    let ours = addr2line::Mapping::with_functions(&debug).unwrap();
+
+    // Spin up the "real" addr2line
+    let mut theirs = spawn_oracle(target.as_path(), &["-f"]);
+
+    // Find some addresses to test using nm (we'll later filter to just text section symbols)
+    let mut theirs_in = theirs.stdin.take().unwrap();
+    let mappings = get_test_addresses(target.as_path(), &mut theirs_in);
+    drop(theirs_in);
+
+    // Go through addresses one by one, and check that we get the same answer as addr2line does.
+    use std::io::BufReader;
+    let mut theirs_out = BufReader::new(theirs.stdout.take().unwrap()).lines();
+    let mut all = 0;
+    let mut excusable = 0;
+    let mut func_hits = 0;
+    let mut got = 0;
+    for addr in mappings {
+        // Read the oracle ouput
+        let function = theirs_out.next().unwrap().unwrap();
+        let oracle = theirs_out.next().unwrap().unwrap();
+        let oracle = canonicalize_oracle_output(&*oracle);
+
+        // Does our answer match?
+        if let Some((file, lineno, func)) = ours.locate(addr) {
+            // We dared to guess -- did we give the right answer?
+            assert_eq!(oracle.0, Some(&*file.to_string_lossy()));
+            assert_eq!(oracle.1, Some(lineno));
+
+            if let Some(func) = func {
+                // We even tried to guess the function!
+                assert_eq!(function, func);
+                func_hits += 1;
+            }
+            got += 1;
+            all += 1;
+        } else {
+            if oracle.0.is_some() {
+                // addr2line found something, and we didn't :(
+                println!("we missed 0x{:08x}: {:?}", addr, oracle);
+                all += 1;
+                if oracle.1.is_none() {
+                    excusable += 1;
+                }
+            } else {
+                // addr2line did not find a source file, so it's okay that we didn't either.
+            }
+        }
+    }
+
+    assert_ne!(got, 0);
+    assert_ne!(func_hits, 0);
+    println!("resolved {}/{} addresses ({} file-only misses, {} function hits)",
+             got,
+             all,
+             excusable,
+             func_hits);
+}
+
 /// Spawns the oracle version of addr2line on this platform for the given executable.
-fn spawn_oracle(target: &path::Path) -> process::Child {
+fn spawn_oracle(target: &path::Path, args: &[&str]) -> process::Child {
     let (theirs, exe) = if cfg!(target_os = "macos") {
         // We have to use atos on macOS
         ("atos", "-o")
@@ -93,6 +162,7 @@ fn spawn_oracle(target: &path::Path) -> process::Child {
     process::Command::new(theirs)
         .arg(exe)
         .arg(target)
+        .args(args)
         .stdin(process::Stdio::piped())
         .stdout(process::Stdio::piped())
         .spawn()

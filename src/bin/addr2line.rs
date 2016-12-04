@@ -40,6 +40,10 @@ fn main() {
             .help("Display the address before the function name, file and line number \
                    information. The address is printed with a `0x' prefix to easily identify \
                    it."))
+        .arg(Arg::with_name("functions")
+            .short("f")
+            .long("functions")
+            .help("Display function names as well as file and line number information."))
         .arg(Arg::with_name("addr")
             .multiple(true)
             .index(1))
@@ -47,7 +51,13 @@ fn main() {
         .get_matches();
 
     let exe = matches.value_of("executable").unwrap_or("./a.out");
-    let debug = addr2line::Mapping::new(path::Path::new(&exe));
+    let show_funcs = matches.is_present("functions");
+
+    let debug = if show_funcs {
+        addr2line::Mapping::with_functions(path::Path::new(&exe))
+    } else {
+        addr2line::Mapping::new(path::Path::new(&exe))
+    };
 
     if let Err(e) = debug {
         println!("addr2line: {:?}", e);
@@ -65,10 +75,17 @@ fn main() {
                 _ => println!("0x{:08x}", addr),
             }
         }
-        if let Some((file, lineno)) = debug.locate(addr) {
-            println!("{}:{}", file, lineno);
+        if let Some((file, lineno, func)) = debug.locate(addr) {
+            if show_funcs {
+                use std::borrow::Cow;
+                println!("{}", func.unwrap_or(Cow::Borrowed("??")));
+            }
+            println!("{}:{}", file.to_string_lossy(), lineno);
         } else {
-            println!("??:0")
+            if show_funcs {
+                println!("??")
+            }
+            println!("??:?")
         }
     };
 
