@@ -24,9 +24,9 @@ before_script:
 
 script:
 - |
-  cargo build &&
-  cargo test &&
-  cargo bench
+  travis-cargo build &&
+  travis-cargo test &&
+  travis-cargo bench
 
 after_success:
 - if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then travis-cargo coveralls --no-sudo --verify; fi
