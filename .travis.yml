@@ -24,10 +24,9 @@ before_script:
 - if [[ -e ~/.local/bin ]]; then export PATH=~/.local/bin:$PATH; fi
 
 script:
-- |
-  travis-cargo build &&
-  travis-cargo test &&
-  travis-cargo bench
+-  travis-cargo build
+-  travis-cargo test
+-  travis-cargo bench
 
 after_success:
 - if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then travis-cargo coveralls --no-sudo --verify; fi
