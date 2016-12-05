@@ -27,16 +27,92 @@ extern crate memmap;
 extern crate object;
 extern crate owning_ref;
 extern crate fallible_iterator;
+#[macro_use]
+extern crate error_chain;
 
 use object::Object;
 use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 
+use std::fmt;
 use std::path;
+use std::error;
 use std::borrow::Cow;
 
-pub mod error;
-pub use error::*;
+/// An error occured while traversing the debug symbols in the provided executable.
+#[derive(Debug)]
+pub enum DebugInfoError {
+    /// DebugLine refers to a file that does not exist
+    InvalidDebugLineTarget,
+    /// A unit was completely empty (i.e., did not contain a compilation unit)
+    MissingComplilationUnit,
+    /// The first entry in a unit is not a compilation unit
+    UnitWithoutCompilationUnit,
+    /// A subroutine (unit offset, routine offset) has no name
+    SubroutineMissingName(usize, usize),
+    /// Abstract origin points to empty entry
+    DanglingAbstractOrigin,
+    /// Asked to parse non-contiguous range as contiguous.
+    RangeBothContiguousAndNot,
+    /// A range was inverted (high > low)
+    RangeInverted,
+}
+
+impl fmt::Display for DebugInfoError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            DebugInfoError::InvalidDebugLineTarget => {
+                write!(f, "DebugLine referst to a file that does not exist")
+            }
+            DebugInfoError::MissingComplilationUnit => {
+                write!(f,
+                       "A unit was completely empty (i.e., did not contain a compilation unit)")
+            }
+            DebugInfoError::UnitWithoutCompilationUnit => {
+                write!(f, "The first entry in a unit is not a compilation unit")
+            }
+            DebugInfoError::SubroutineMissingName(u, r) => {
+                write!(f, "A subroutine (<{:x}><{:x}>) has no name", u, r)
+            }
+            DebugInfoError::DanglingAbstractOrigin => {
+                write!(f, "Abstract origin points to empty entry")
+            }
+            DebugInfoError::RangeBothContiguousAndNot => {
+                write!(f, "Asked to parse non-contiguous range as contiguous.")
+            }
+            DebugInfoError::RangeInverted => write!(f, "A range was inverted (high > low)"),
+        }
+    }
+}
+
+impl error::Error for DebugInfoError {
+    fn description(&self) -> &str {
+        "An error occured while traversing debug symbols"
+    }
+}
+
+mod errors {
+    use gimli;
+    use std::io;
+    use super::DebugInfoError;
+
+    error_chain! {
+        foreign_links {
+            Gimli(gimli::Error) #[doc="An error given by the `gimli` library while parsing the DWARF debug symbols."];
+            BadPath(io::Error) #[doc="The path given could not be used to extract debug symbols."];
+            InvalidDebugSymbols(DebugInfoError) #[doc="An error occured while traversing the debug symbols in the provided executable."];
+        }
+
+        errors {
+            /// A necessary debug section is missing from the provided executable.
+            MissingDebugSection(s: &'static str) {
+                description("missing debug section")
+                display("missing debug section: '.{}'", s)
+            }
+        }
+    }
+}
+pub use errors::*;
 
 /// A `Mapping` locates and maintains the state necessary to perform address to line translation.
 ///
@@ -77,7 +153,7 @@ impl Mapping {
     /// The returned `Mapping` will also include debug information for functions, enabling
     /// `Mapping::locate()` to also indicate what function a given address appears in. This comes
     /// at some parsing and lookup cost.
-    pub fn with_functions(file_path: &path::Path) -> MappingResult<Mapping> {
+    pub fn with_functions(file_path: &path::Path) -> Result<Mapping> {
         Self::new_inner(file_path, true)
     }
 
@@ -88,13 +164,13 @@ impl Mapping {
     ///
     /// Note that this constructor will *not* include function mapping information, and thus
     /// `Mapping::locate()` will always return `None` for the function mapping of addresses.
-    pub fn new(file_path: &path::Path) -> MappingResult<Mapping> {
+    pub fn new(file_path: &path::Path) -> Result<Mapping> {
         Self::new_inner(file_path, false)
     }
 
-    fn new_inner(file_path: &path::Path, with_functions: bool) -> MappingResult<Mapping> {
+    fn new_inner(file_path: &path::Path, with_functions: bool) -> Result<Mapping> {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
-            .map_err(MappingError::BadPath)?;
+            .map_err(|e| ErrorKind::BadPath(e))?;
 
         Ok(Mapping {
             inner: OwningHandle::new(Box::new(file), |mmap| {
@@ -104,7 +180,7 @@ impl Mapping {
                     inner: OwningHandle::new(Box::new(file), |file| {
                         let file: &object::File = unsafe { &*file };
 
-                        // unwrap here is currently necessary
+                        // expect here is currently necessary
                         // awaiting https://github.com/Kimundi/owning-ref-rs/issues/19
                         Box::new(Self::symbolicate(file, with_functions)
                             .expect("not all necessary debug symbols are present"))
@@ -118,13 +194,16 @@ impl Mapping {
     ///
     /// If the `Mapping` was constructed with `with_functions`, information about the containing
     /// function may also be returned when available.
-    pub fn locate(&self, addr: u64) -> Option<(path::PathBuf, u64, Option<Cow<str>>)> {
-        self.inner.locate(addr)
+    pub fn locate(&self, addr: u64) -> Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)> {
+        self.inner.locate(addr).unwrap_or_else(|_| {
+            // TODO: we probably want to log this, or assert failure when testing?
+            None
+        })
     }
 
     fn symbolicate<'a>(file: &'a object::File,
                        with_functions: bool)
-                       -> MappingResult<EndianDebugInfo<'a>> {
+                       -> Result<EndianDebugInfo<'a>> {
         if file.is_little_endian() {
             Ok(EndianDebugInfo::LEInfo(DebugInfo::new(file, with_functions)?))
         } else {
@@ -134,7 +213,7 @@ impl Mapping {
 }
 
 impl<'object> EndianDebugInfo<'object> {
-    fn locate(&self, addr: u64) -> Option<(path::PathBuf, u64, Option<Cow<str>>)> {
+    fn locate(&self, addr: u64) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         match *self {
             EndianDebugInfo::LEInfo(ref dbg) => dbg.locate(addr),
             EndianDebugInfo::BEInfo(ref dbg) => dbg.locate(addr),
@@ -145,17 +224,15 @@ impl<'object> EndianDebugInfo<'object> {
 impl<'object, Endian> DebugInfo<'object, Endian>
     where Endian: gimli::Endianity
 {
-    fn new<'a>(file: &'a object::File,
-               with_functions: bool)
-               -> MappingResult<DebugInfo<'a, Endian>> {
+    fn new<'a>(file: &'a object::File, with_functions: bool) -> Result<DebugInfo<'a, Endian>> {
         let debug_info = file.get_section(".debug_info")
-            .ok_or(MappingError::MissingDebugInfo(".debug_info"))?;
+            .ok_or(ErrorKind::MissingDebugSection("debug_info"))?;
         let debug_info = gimli::DebugInfo::<Endian>::new(debug_info);
         let debug_abbrev = file.get_section(".debug_abbrev")
-            .ok_or(MappingError::MissingDebugInfo(".debug_abbrev"))?;
+            .ok_or(ErrorKind::MissingDebugSection("debug_abbrev"))?;
         let debug_abbrev = gimli::DebugAbbrev::<Endian>::new(debug_abbrev);
         let debug_line = file.get_section(".debug_line")
-            .ok_or(MappingError::MissingDebugInfo(".debug_line"))?;
+            .ok_or(ErrorKind::MissingDebugSection("debug_line"))?;
         let debug_line = gimli::DebugLine::<Endian>::new(debug_line);
         let debug_ranges = file.get_section(".debug_ranges").unwrap_or(&[]);
         let debug_ranges = gimli::DebugRanges::<Endian>::new(debug_ranges);
@@ -165,12 +242,13 @@ impl<'object, Endian> DebugInfo<'object, Endian>
         let mut units = Vec::new();
         let mut headers = debug_info.units();
         while let Some(header) = headers.next()
-            .map_err(|_| MappingError::MissingDebugInfo("couldn't get DIE header"))? {
+            .chain_err(|| "couldn't get DIE header")? {
             let unit = Unit::parse(&debug_abbrev,
                                    &debug_ranges,
                                    &debug_str,
                                    &header,
                                    with_functions);
+            let unit = unit.chain_err(|| "encountered invalid compilation unit")?;
             if let Some(unit) = unit {
                 units.push(unit);
             }
@@ -182,7 +260,9 @@ impl<'object, Endian> DebugInfo<'object, Endian>
         })
     }
 
-    pub fn locate(&self, addr: u64) -> Option<(path::PathBuf, u64, Option<Cow<str>>)> {
+    pub fn locate(&self,
+                  addr: u64)
+                  -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &self.units {
             if !unit.contains_address(addr) {
@@ -190,11 +270,8 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             }
 
             // Okay, this is the right unit. Check our DebugLine rows.
-            let rows = unit.line_rows(&self.debug_line);
-            if rows.is_err() {
-                return None;
-            }
-            let mut rows = rows.unwrap();
+            let mut rows = unit.line_rows(&self.debug_line)
+                .chain_err(|| "cannot get line rows for unit")?;
 
             // Now, find the last row before a row with a higher address than the one we seek.
             let mut current = None;
@@ -213,12 +290,24 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             }
 
             // The row we just last iterated to is *after* the address, to the previous row we
-            // saw (stored in current) is the one we want. There better be one...
+            // saw (stored in current) is the one we want. If there is no current, then we have to
+            // give up on locating the address in this unit (and thus in the program too).
+            //
+            // TODO
+            // Can we return partial information here by giving, say, information from the
+            // compilation unit itself?
+            if current.is_none() {
+                return Ok(None);
+            }
             let row = current.unwrap();
             let header = rows.header();
 
+            let file = row.file(header)
+                .ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
+                })?;
+
             let mut path = path::PathBuf::new();
-            let file = row.file(header).unwrap();
             if let Some(directory) = file.directory(header) {
                 let directory = directory.to_string_lossy();
                 if !directory.starts_with('/') {
@@ -230,9 +319,9 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             }
             path.push(&*file.path_name().to_string_lossy());
 
-            let line = row.line().unwrap();
+            let line = row.line();
             if unit.programs.is_empty() {
-                return Some((path, line, None));
+                return Ok(Some((path, line, None)));
             }
 
             // The unit also has programs, so let's look for the function wrapping this address.
@@ -248,7 +337,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                     .filter(|range| addr >= range.begin && addr < range.end)
                     .map(|range| (range, addr - range.begin))
                     .min_by_key(|&(_, dist)| dist)
-                    .unwrap();
+                    .expect("p.contains_address() is true, but no matching range found");
 
                 if let Some((prev, prange, pdist)) = func.take() {
                     // are we a better match?
@@ -290,9 +379,9 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                 // matches us better. We need to keep going until we find the best one.
             }
 
-            return Some((path, line, func.map(|u| u.0.name.to_string_lossy())));
+            return Ok(Some((path, line, func.map(|u| u.0.name.to_string_lossy()))));
         }
-        None
+        Ok(None)
     }
 }
 
@@ -316,28 +405,37 @@ impl<'input, Endian> Unit<'input, Endian>
              debug_str: &gimli::DebugStr<'input, Endian>,
              header: &gimli::CompilationUnitHeader<'input, Endian>,
              with_functions: bool)
-             -> Option<Unit<'input, Endian>> {
+             -> Result<Option<Unit<'input, Endian>>> {
 
         // We first want to parse out the compilation unit, and then any contained subprograms.
-        let abbrev = header.abbreviations(*debug_abbrev).expect("Fail");
+        let abbrev = header.abbreviations(*debug_abbrev)
+            .chain_err(|| "compilation unit refers to non-existing abbreviations")?;
+
         let mut entries = header.entries(&abbrev);
         let mut unit = {
             // Scoped so that we can continue using entries for the loop below
-            let first = entries.next_dfs();
-            let (_, entry) = first.expect("Should parse first entry OK")
-                .expect("And first entry should exist!");
-            assert_eq!(entry.tag(), gimli::DW_TAG_compile_unit);
+            let (_, entry) = entries.next_dfs()
+                .chain_err(|| "compilation unit is broken")?
+                .ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::UnitWithoutCompilationUnit)
+                })?;
+
+            if entry.tag() != gimli::DW_TAG_compile_unit {
+                return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::MissingComplilationUnit)
+                    .into());
+            }
 
             // Where does our compilation unit live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size());
+            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size())
+                .chain_err(|| "compilation unit has invalid ranges")?;
             if ranges.is_empty() {
-                return None;
+                return Ok(None);
             }
 
             // Extract source file and line information about the compilation unit
             let line_offset = match entry.attr_value(gimli::DW_AT_stmt_list) {
                 Some(gimli::AttributeValue::DebugLineRef(offset)) => offset,
-                _ => return None,
+                _ => return Ok(None),
             };
             let comp_dir = entry.attr(gimli::DW_AT_comp_dir)
                 .and_then(|attr| attr.string_value(debug_str));
@@ -357,10 +455,12 @@ impl<'input, Endian> Unit<'input, Endian>
 
         // Do we also need to extract function information?
         if !with_functions {
-            return Some(unit);
+            return Ok(Some(unit));
         }
 
-        while let Ok(Some((_, entry))) = entries.next_dfs() {
+        while let Some((_, entry)) = entries.next_dfs()
+            .chain_err(|| "tree below compilation unit yielded invalid entry")? {
+
             // We only care about functions
             match entry.tag() {
                 gimli::DW_TAG_inlined_subroutine |
@@ -369,7 +469,8 @@ impl<'input, Endian> Unit<'input, Endian>
             }
 
             // Where does this function live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size());
+            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size())
+                .chain_err(|| "subroutine has invalid ranges")?;
             if ranges.is_empty() {
                 continue;
             }
@@ -383,115 +484,135 @@ impl<'input, Endian> Unit<'input, Endian>
                 }
             }
 
+            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev).chain_err(|| {
+                    format!("failed to resolve name for subroutine at <{:x}><{:x}>",
+                            header.offset().0,
+                            entry.offset().0)
+                })?;
+
+            let name = maybe_name.ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::SubroutineMissingName(header.offset().0, entry.offset().0))
+                })?;
+
             unit.programs.push(Program {
                 ranges: ranges,
                 inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
-                name: Self::resolve_name(entry, header, debug_str, &abbrev)
-                    .expect(&format!("subprogram {:x} has neither (linkage_,)name, nor abstract \
-                                     origin",
-                                     entry.offset().0)),
+                name: name,
             });
         }
 
-        Some(unit)
+        Ok(Some(unit))
     }
 
     fn resolve_name<'a, 'b>(entry: &gimli::DebuggingInformationEntry<'input, 'a, 'b, Endian>,
                             header: &gimli::CompilationUnitHeader<'input, Endian>,
                             debug_str: &gimli::DebugStr<'input, Endian>,
                             abbrev: &gimli::Abbreviations)
-                            -> Option<&'input std::ffi::CStr> {
+                            -> Result<Option<&'input std::ffi::CStr>> {
 
         // For naming, we prefer the linked name, if available
         if let Some(name) = entry.attr(gimli::DW_AT_linkage_name)
             .and_then(|attr| attr.string_value(debug_str)) {
-            return Some(name);
+            return Ok(Some(name));
         }
 
         // Linked name is not available, so fall back to just plain old name, if that's available.
         if let Some(name) = entry.attr(gimli::DW_AT_name)
             .and_then(|attr| attr.string_value(debug_str)) {
-            return Some(name);
+            return Ok(Some(name));
         }
 
         // If we don't have the link name, check if this function refers to another
         if let Some(gimli::AttributeValue::UnitRef(origin)) =
             entry.attr_value(gimli::DW_AT_abstract_origin) {
-            let mut entries = header.entries_at_offset(abbrev, origin).unwrap();
-            if let Ok(Some((_, parent))) = entries.next_dfs() {
-                return Some(Self::resolve_name(parent, header, debug_str, abbrev)
-                    .expect(&format!("failed to resolve subprogram origin {:x}", origin.0)));
-            } else {
-                panic!("unit has no entry at offset {:x} as required by {:x}",
-                       origin.0,
-                       entry.offset().0);
-            }
+            let mut entries = header.entries_at_offset(abbrev, origin)
+                .chain_err(|| "illegal offset in abstract origin")?;
+            let (_, parent) = entries.next_dfs()
+                .chain_err(|| "abstract origin does not point to a valid entry")?
+                .ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingAbstractOrigin)
+                })?;
+
+            let name = Self::resolve_name(parent, header, debug_str, abbrev)
+                .chain_err(|| "abstract origin does not resolve to a name")?;
+            return Ok(name);
         }
 
-        // This really shouldn't happen
-        None
+        Ok(None)
     }
 
     fn get_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
                   debug_ranges: &gimli::DebugRanges<Endian>,
                   address_size: u8)
-                  -> Vec<gimli::Range> {
-        Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size)
-            .or_else(|| Self::parse_contiguous_range(entry).map(|range| vec![range]))
-            .unwrap_or_else(Vec::new)
+                  -> Result<Vec<gimli::Range>> {
+        if let Some(range) = Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size)? {
+            return Ok(range);
+        }
+        if let Some(range) = Self::parse_contiguous_range(entry)?.map(|range| vec![range]) {
+            return Ok(range);
+        }
+        return Ok(vec![]);
     }
 
     // This must be checked before `parse_contiguous_range`.
     fn parse_noncontiguous_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
                                   debug_ranges: &gimli::DebugRanges<Endian>,
                                   address_size: u8)
-                                  -> Option<Vec<gimli::Range>> {
+                                  -> Result<Option<Vec<gimli::Range>>> {
         let offset = match entry.attr_value(gimli::DW_AT_ranges) {
             Some(gimli::AttributeValue::DebugRangesRef(offset)) => offset,
-            _ => return None,
+            _ => return Ok(None),
         };
         let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
             Some(gimli::AttributeValue::Addr(addr)) => addr,
             _ => 0,
         };
+
         let ranges = debug_ranges.ranges(offset, address_size, base_address)
-            .expect("Range offset should be valid");
-        Some(ranges.collect().expect("Should parse ranges"))
+            .chain_err(|| "range offsets are not valid")?;
+        let ranges = ranges.collect().chain_err(|| "range could not be parsed")?;
+        Ok(Some(ranges))
     }
 
     fn parse_contiguous_range(entry: &gimli::DebuggingInformationEntry<Endian>)
-                              -> Option<gimli::Range> {
-        debug_assert!(entry.attr_value(gimli::DW_AT_ranges).is_none());
+                              -> Result<Option<gimli::Range>> {
+
+        if entry.attr_value(gimli::DW_AT_ranges).is_some() {
+            return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot)
+                .into());
+        }
 
         let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
             Some(gimli::AttributeValue::Addr(addr)) => addr,
-            _ => return None,
+            _ => return Ok(None),
         };
 
         let high_pc = match entry.attr_value(gimli::DW_AT_high_pc) {
             Some(gimli::AttributeValue::Addr(addr)) => addr,
             Some(gimli::AttributeValue::Udata(size)) => low_pc.wrapping_add(size),
             None => low_pc.wrapping_add(1),
-            _ => return None,
+            _ => return Ok(None),
         };
 
         if low_pc == 0 {
             // https://sourceware.org/git/gitweb.cgi?p=binutils-gdb.git;a=blob;f=gdb/dwarf2read.c;h=ed10e03812f381ccdb5c51e1c689df8d61ab87f6;hb=HEAD#l16000
             // TODO: *technically* there could be a relocatable section placed at VA 0
-            return None;
+            return Ok(None);
         }
 
         if low_pc == high_pc {
             // https://sourceware.org/ml/gdb-patches/2011-03/msg00739.html
-            return None;
+            return Ok(None);
         }
 
-        // TODO: convert to error
-        assert!(low_pc < high_pc);
-        Some(gimli::Range {
+        if low_pc > high_pc {
+            return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeInverted).into());
+        }
+
+        Ok(Some(gimli::Range {
             begin: low_pc,
             end: high_pc,
-        })
+        }))
     }
 
     fn contains_address(&self, address: u64) -> bool {

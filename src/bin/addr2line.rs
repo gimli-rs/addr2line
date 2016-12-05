@@ -80,7 +80,9 @@ fn main() {
                 use std::borrow::Cow;
                 println!("{}", func.unwrap_or(Cow::Borrowed("??")));
             }
-            println!("{}:{}", file.to_string_lossy(), lineno);
+            println!("{}:{}",
+                     file.to_string_lossy(),
+                     lineno.map(|n| format!("{}", n)).unwrap_or("?".to_owned()));
         } else {
             if show_funcs {
                 println!("??")
