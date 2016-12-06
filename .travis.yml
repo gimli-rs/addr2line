@@ -1,6 +1,10 @@
 language: rust
 cache: cargo
 
+# use a more up-to-date Travis environment
+dist: trusty
+sudo: false
+
 os:
 - linux
 - osx
