@@ -75,12 +75,17 @@ fn main() {
                 _ => println!("0x{:08x}", addr),
             }
         }
-        if let Some((file, lineno, func)) = debug.locate(addr) {
+
+        // TODO: we may want to print an error here. GNU binutils addr2line doesn't though...
+        let loc = debug.locate(addr).unwrap_or(None);
+        if let Some((file, lineno, func)) = loc {
             if show_funcs {
                 use std::borrow::Cow;
                 println!("{}", func.unwrap_or(Cow::Borrowed("??")));
             }
-            println!("{}:{}", file.to_string_lossy(), lineno);
+            println!("{}:{}",
+                     file.to_string_lossy(),
+                     lineno.map(|n| format!("{}", n)).unwrap_or("?".to_owned()));
         } else {
             if show_funcs {
                 println!("??")

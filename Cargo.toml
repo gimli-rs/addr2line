@@ -17,6 +17,7 @@ gimli = { git = "https://github.com/gimli-rs/gimli.git" } # need entries_at_offs
 memmap = "0.5.0"
 object = "0.1.0"
 owning_ref = { git = "https://github.com/Kimundi/owning-ref-rs" } # need OwningHandle
+error-chain = "0.7.1"
 
 [dev-dependencies]
 glob = "0.2"

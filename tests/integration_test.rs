@@ -46,7 +46,9 @@ fn identity_map() {
         let oracle = canonicalize_oracle_output(&*oracle);
 
         // Does our answer match?
-        if let Some((file, lineno, _)) = ours.locate(addr) {
+        let loc = ours.locate(addr);
+        let loc = loc.expect("debug symbols for test binary should be error-free");
+        if let Some((file, lineno, _)) = loc {
             // We dared to guess -- did we give the right answer?
             let mut file = file.to_string_lossy();
             if cfg!(target_os = "macos") {
@@ -57,7 +59,7 @@ fn identity_map() {
             }
 
             assert_eq!(oracle.0, Some(&*file));
-            assert_eq!(oracle.1, Some(lineno));
+            assert_eq!(oracle.1, lineno);
             got += 1;
             all += 1;
         } else if oracle.0.is_some() {
@@ -112,10 +114,12 @@ fn with_functions() {
         let oracle = canonicalize_oracle_output(&*oracle);
 
         // Does our answer match?
-        if let Some((file, lineno, func)) = ours.locate(addr) {
+        let loc = ours.locate(addr);
+        let loc = loc.expect("debug symbols for test binary should be error-free");
+        if let Some((file, lineno, func)) = loc {
             // We dared to guess -- did we give the right answer?
             assert_eq!(oracle.0, Some(&*file.to_string_lossy()));
-            assert_eq!(oracle.1, Some(lineno));
+            assert_eq!(oracle.1, lineno);
 
             if let Some(func) = func {
                 // We even tried to guess the function!
