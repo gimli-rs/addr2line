@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate clap;
 extern crate addr2line;
+extern crate rustc_demangle;
+use rustc_demangle::demangle;
 
 use clap::{App, Arg};
 
@@ -40,6 +42,12 @@ fn main() {
             .help("Display the address before the function name, file and line number \
                    information. The address is printed with a `0x' prefix to easily identify \
                    it."))
+        .arg(Arg::with_name("demangle")
+            .short("C")
+            .long("demangle")
+            .help("Decode (demangle) low-level symbol names into user-level names.  Besides \
+                   removing any initial underscore prepended by the system, this makes C++ \
+                   function names readable."))
         .arg(Arg::with_name("functions")
             .short("f")
             .long("functions")
@@ -66,6 +74,7 @@ fn main() {
     let debug = debug.unwrap();
 
     let show_addrs = matches.is_present("addresses");
+    let do_demangle = matches.is_present("demangle");
     let one = |addr: &str| {
         let addr = parse_uint_from_hex_string(addr);
         if show_addrs {
@@ -81,7 +90,13 @@ fn main() {
         if let Some((file, lineno, func)) = loc {
             if show_funcs {
                 use std::borrow::Cow;
-                println!("{}", func.unwrap_or(Cow::Borrowed("??")));
+                println!("{}",
+                         func.map(|func| if do_demangle {
+                                 Cow::Owned(demangle(&*func).to_string())
+                             } else {
+                                 func
+                             })
+                             .unwrap_or(Cow::Borrowed("??")));
             }
             println!("{}:{}",
                      file.to_string_lossy(),
