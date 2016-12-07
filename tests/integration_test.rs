@@ -60,17 +60,15 @@ fn identity_map() {
             assert_eq!(oracle.1, Some(lineno));
             got += 1;
             all += 1;
-        } else {
-            if oracle.0.is_some() {
-                // addr2line found something, and we didn't :(
-                println!("we missed 0x{:08x}: {:?}", addr, oracle);
-                all += 1;
-                if oracle.1.is_none() {
-                    excusable += 1;
-                }
-            } else {
-                // addr2line did not find a source file, so it's okay that we didn't either.
+        } else if oracle.0.is_some() {
+            // addr2line found something, and we didn't :(
+            println!("we missed 0x{:08x}: {:?}", addr, oracle);
+            all += 1;
+            if oracle.1.is_none() {
+                excusable += 1;
             }
+        } else {
+            // addr2line did not find a source file, so it's okay that we didn't either.
         }
     }
 
@@ -126,17 +124,15 @@ fn with_functions() {
             }
             got += 1;
             all += 1;
-        } else {
-            if oracle.0.is_some() {
-                // addr2line found something, and we didn't :(
-                println!("we missed 0x{:08x}: {:?}", addr, oracle);
-                all += 1;
-                if oracle.1.is_none() {
-                    excusable += 1;
-                }
-            } else {
-                // addr2line did not find a source file, so it's okay that we didn't either.
+        } else if oracle.0.is_some() {
+            // addr2line found something, and we didn't :(
+            println!("we missed 0x{:08x}: {:?}", addr, oracle);
+            all += 1;
+            if oracle.1.is_none() {
+                excusable += 1;
             }
+        } else {
+            // addr2line did not find a source file, so it's okay that we didn't either.
         }
     }
 
@@ -197,9 +193,9 @@ fn get_test_addresses(target: &path::Path, oracle: &mut Write) -> Vec<u64> {
         })
         .step(5)
         .map(|addr| {
-            oracle.write_all("0x".as_bytes()).unwrap();
+            oracle.write_all(b"0x").unwrap();
             oracle.write_all(addr.as_bytes()).unwrap();
-            oracle.write_all("\n".as_bytes()).unwrap();
+            oracle.write_all(b"\n").unwrap();
             u64::from_str_radix(addr, 16).unwrap()
         })
         .collect()
@@ -213,8 +209,8 @@ fn canonicalize_oracle_output(line: &str) -> (Option<&str>, Option<u64>) {
         // atos on macOS prints lines in a funky way
         // e.g. "-[SKTGraphicView drawRect:] (in Sketch) (SKTGraphicView.m:445)"
         // We want only path and line number
-        let line = line.rsplitn(2, "(").next().unwrap().trim_right_matches(')');
-        if !line.contains(":") { "??:?" } else { line }
+        let line = line.rsplitn(2, '(').next().unwrap().trim_right_matches(')');
+        if !line.contains(':') { "??:?" } else { line }
     } else {
         line
     };

@@ -94,16 +94,15 @@ impl Mapping {
 
     fn new_inner(file_path: &path::Path, with_functions: bool) -> MappingResult<Mapping> {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
-            .map_err(|e| MappingError::BadPath(e))?;
+            .map_err(MappingError::BadPath)?;
 
         Ok(Mapping {
             inner: OwningHandle::new(Box::new(file), |mmap| {
-                use std::mem;
-                let mmap: &memmap::Mmap = unsafe { mem::transmute(mmap) };
+                let mmap: &memmap::Mmap = unsafe { &*mmap };
                 let file = object::File::parse(unsafe { mmap.as_slice() });
                 Box::new(MmapDerived {
                     inner: OwningHandle::new(Box::new(file), |file| {
-                        let file: &object::File = unsafe { mem::transmute(file) };
+                        let file: &object::File = unsafe { &*file };
 
                         // unwrap here is currently necessary
                         // awaiting https://github.com/Kimundi/owning-ref-rs/issues/19
@@ -206,7 +205,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                     } else {
                         // Might be the right row, but we won't know until we see the next one.
                         // The .clone is needed so we can keep iterating
-                        current = Some(row.clone());
+                        current = Some(*row);
                     }
                     continue;
                 }
@@ -219,10 +218,10 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             let header = rows.header();
 
             let mut path = path::PathBuf::new();
-            let file = row.file(&header).unwrap();
-            if let Some(directory) = file.directory(&header) {
+            let file = row.file(header).unwrap();
+            if let Some(directory) = file.directory(header) {
                 let directory = directory.to_string_lossy();
-                if !directory.starts_with("/") {
+                if !directory.starts_with('/') {
                     if let Some(comp_dir) = unit.comp_dir() {
                         path.push(&*comp_dir.to_string_lossy());
                     }
@@ -255,11 +254,10 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                     // are we a better match?
                     func = if dist == pdist {
                         // we're equally good -- are we tighter?
-                        if range.end < prange.end {
-                            // yes!
-                            Some((p, range, dist))
-                        } else if range.end == prange.end {
-                            // We found two equally good ranges for this address.
+                        if range.end <= prange.end {
+                            // If range.end < prange.end, then we're a tighter match.
+                            //
+                            // Otherwise, we found two equally good ranges for this address.
                             // This probably happened because of a function like:
                             //
                             //   fn foo() { bar() }
@@ -518,6 +516,7 @@ impl<'input, Endian> Unit<'input, Endian>
 struct Program<'input> {
     ranges: Vec<gimli::Range>,
     name: &'input std::ffi::CStr,
+    #[allow(dead_code)]
     inlined: bool,
 }
 
