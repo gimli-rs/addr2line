@@ -37,7 +37,8 @@ fn main() {
     let map = addr2line::Mapping::new(&us).expect("debug symbols not found");
     let addr = env::args().skip(1).next().expect("no address passed");
     let addr = u64::from_str_radix(&addr[2..], 16).expect("address not valid");
-    if let Some((file, line, func)) = map.locate(addr as u64) {
+    let loc = map.locate(addr as u64).expect("invalid debug symbols found");
+    if let Some((file, line, func)) = loc {
         print!("0x{:08x} is in {}", addr, file.display());
         if let Some(line) = line {
             print!(" on line {}", line);

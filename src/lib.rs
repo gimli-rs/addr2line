@@ -194,11 +194,10 @@ impl Mapping {
     ///
     /// If the `Mapping` was constructed with `with_functions`, information about the containing
     /// function may also be returned when available.
-    pub fn locate(&self, addr: u64) -> Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)> {
-        self.inner.locate(addr).unwrap_or_else(|_| {
-            // TODO: we probably want to log this, or assert failure when testing?
-            None
-        })
+    pub fn locate(&self,
+                  addr: u64)
+                  -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+        self.inner.locate(addr)
     }
 
     fn symbolicate<'a>(file: &'a object::File,
