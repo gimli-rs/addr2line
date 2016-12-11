@@ -58,8 +58,7 @@ fn identity_map() {
                 file = Cow::Owned(f.file_name().unwrap().to_string_lossy().into_owned());
             }
 
-            assert_eq!(oracle.0, Some(&*file));
-            assert_eq!(oracle.1, lineno);
+            assert_eq!(oracle, (Some(&*file), lineno));
             got += 1;
             all += 1;
         } else if oracle.0.is_some() {
@@ -118,8 +117,9 @@ fn with_functions() {
         let loc = loc.expect("debug symbols for test binary should be error-free");
         if let Some((file, lineno, func)) = loc {
             // We dared to guess -- did we give the right answer?
-            assert_eq!(oracle.0, Some(&*file.to_string_lossy()));
-            assert_eq!(oracle.1, lineno);
+            let f = &*file.to_string_lossy();
+            let test = (Some(f), lineno);
+            assert_eq!(oracle, test);
 
             if let Some(func) = func {
                 // We even tried to guess the function!
