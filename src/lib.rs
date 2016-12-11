@@ -433,12 +433,20 @@ impl<'input, Endian> Unit<'input, Endian>
 
             // Extract source file and line information about the compilation unit
             let line_offset = match entry.attr_value(gimli::DW_AT_stmt_list) {
-                Some(gimli::AttributeValue::DebugLineRef(offset)) => offset,
+                Ok(Some(gimli::AttributeValue::DebugLineRef(offset))) => offset,
+                Err(e) => {
+                    return Err(Error::from(ErrorKind::Gimli(e)))
+                        .chain_err(|| "invalid compilation unit statement list")
+                }
                 _ => return Ok(None),
             };
             let comp_dir = entry.attr(gimli::DW_AT_comp_dir)
+                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+                .chain_err(|| "invalid compilation unit directory")?
                 .and_then(|attr| attr.string_value(debug_str));
             let comp_name = entry.attr(gimli::DW_AT_name)
+                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+                .chain_err(|| "invalid compilation unit name")?
                 .and_then(|attr| attr.string_value(debug_str));
 
             Unit {
@@ -511,19 +519,25 @@ impl<'input, Endian> Unit<'input, Endian>
 
         // For naming, we prefer the linked name, if available
         if let Some(name) = entry.attr(gimli::DW_AT_linkage_name)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram linkage name")?
             .and_then(|attr| attr.string_value(debug_str)) {
             return Ok(Some(name));
         }
 
         // Linked name is not available, so fall back to just plain old name, if that's available.
         if let Some(name) = entry.attr(gimli::DW_AT_name)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram name")?
             .and_then(|attr| attr.string_value(debug_str)) {
             return Ok(Some(name));
         }
 
         // If we don't have the link name, check if this function refers to another
         if let Some(gimli::AttributeValue::UnitRef(origin)) =
-            entry.attr_value(gimli::DW_AT_abstract_origin) {
+            entry.attr_value(gimli::DW_AT_abstract_origin)
+                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+                .chain_err(|| "invalid subprogram abstract origin")? {
             let mut entries = header.entries_at_offset(abbrev, origin)
                 .chain_err(|| "illegal offset in abstract origin")?;
             let (_, parent) = entries.next_dfs()
@@ -559,11 +573,19 @@ impl<'input, Endian> Unit<'input, Endian>
                                   address_size: u8)
                                   -> Result<Option<Vec<gimli::Range>>> {
         let offset = match entry.attr_value(gimli::DW_AT_ranges) {
-            Some(gimli::AttributeValue::DebugRangesRef(offset)) => offset,
+            Ok(Some(gimli::AttributeValue::DebugRangesRef(offset))) => offset,
+            Err(e) => {
+                return Err(Error::from(ErrorKind::Gimli(e)))
+                    .chain_err(|| "invalid ranges attribute")
+            }
             _ => return Ok(None),
         };
         let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
-            Some(gimli::AttributeValue::Addr(addr)) => addr,
+            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+            Err(e) => {
+                return Err(Error::from(ErrorKind::Gimli(e)))
+                    .chain_err(|| "invalid low_pc attribute")
+            }
             _ => 0,
         };
 
@@ -576,20 +598,28 @@ impl<'input, Endian> Unit<'input, Endian>
     fn parse_contiguous_range(entry: &gimli::DebuggingInformationEntry<Endian>)
                               -> Result<Option<gimli::Range>> {
 
-        if entry.attr_value(gimli::DW_AT_ranges).is_some() {
+        if let Ok(Some(..)) = entry.attr_value(gimli::DW_AT_ranges) {
             return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot)
                 .into());
         }
 
         let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
-            Some(gimli::AttributeValue::Addr(addr)) => addr,
+            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+            Err(e) => {
+                return Err(Error::from(ErrorKind::Gimli(e)))
+                    .chain_err(|| "invalid low_pc attribute")
+            }
             _ => return Ok(None),
         };
 
         let high_pc = match entry.attr_value(gimli::DW_AT_high_pc) {
-            Some(gimli::AttributeValue::Addr(addr)) => addr,
-            Some(gimli::AttributeValue::Udata(size)) => low_pc.wrapping_add(size),
-            None => low_pc.wrapping_add(1),
+            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+            Ok(Some(gimli::AttributeValue::Udata(size))) => low_pc.wrapping_add(size),
+            Err(e) => {
+                return Err(Error::from(ErrorKind::Gimli(e)))
+                    .chain_err(|| "invalid high_pc attribute")
+            }
+            Ok(None) => low_pc.wrapping_add(1),
             _ => return Ok(None),
         };
 
