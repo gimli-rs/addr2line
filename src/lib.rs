@@ -35,6 +35,7 @@ use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 
 use std::fmt;
+use std::sync;
 use std::path;
 use std::error;
 use std::borrow::Cow;
@@ -142,6 +143,7 @@ struct DebugInfo<'object, Endian>
 {
     debug_line: gimli::DebugLine<'object, Endian>,
     units: Vec<Unit<'object, Endian>>,
+    cache_every: usize,
 }
 
 impl Mapping {
@@ -255,6 +257,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 
         Ok(DebugInfo {
             debug_line: debug_line,
+            cache_every: 100,
             units: units,
         })
     }
@@ -268,21 +271,93 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                 continue;
             }
 
+            let mut rowi = 0;
+            let mut current = None;
+
             // Okay, this is the right unit. Check our DebugLine rows.
-            let mut rows = unit.line_rows(&self.debug_line)
-                .chain_err(|| "cannot get line rows for unit")?;
+            let mut rows = {
+                // First, check our binary search list
+                if let Ok(skiplist) = unit.skiplist.read() {
+                    match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
+                        Ok(i) => {
+                            // we have a state machine for this address!
+                            current = Some(skiplist[i].2);
+                            rowi = (i + 1) * self.cache_every + 1;
+                            skiplist[i].1.clone()
+                        }
+                        Err(i) => {
+                            // i is the entry in the skiplist where addr *would* appear. Thus, we
+                            // don't have a state machine for *this* address, but we do know that:
+                            //
+                            //  - if i == 0, we have no state machine, and must from scratch
+                            //  - if i == skiplist.len(), we scan from the last state machine
+                            //  - otherwise, the state machine from i-1 eventually encounters addr
+                            if i == 0 {
+                                unit.line_rows(&self.debug_line)
+                                    .chain_err(|| "cannot get line rows for unit")?
+                            } else {
+                                current = Some(skiplist[i - 1].2);
+                                // NOTE
+                                // we need to use i * self.cache_every here, not (i+1) as above.
+                                // this is because i is the i *after* the one we're chooseing to
+                                // start from (skiplist[i-1] above).
+                                rowi = i * self.cache_every + 1;
+                                skiplist[i - 1].1.clone()
+                            }
+                        }
+                    }
+                } else {
+                    // the skiplist was poisoned -- fall back to linear scan
+                    unit.line_rows(&self.debug_line)
+                        .chain_err(|| "cannot get line rows for unit")?
+                }
+            };
 
             // Now, find the last row before a row with a higher address than the one we seek.
-            let mut current = None;
-            while let Ok(Some((_, row))) = rows.next_row() {
-                if row.address() <= addr {
-                    if row.end_sequence() {
-                        current = None;
-                    } else {
-                        // Might be the right row, but we won't know until we see the next one.
-                        // The .clone is needed so we can keep iterating
-                        current = Some(*row);
+            let mut praddr = 0;
+            let mut skipseq = false;
+            while let Ok(Some((_, &row))) = rows.next_row() {
+                if row.end_sequence() {
+                    current = None;
+                    skipseq = false;
+                    continue;
+                }
+
+                if skipseq {
+                    continue;
+                }
+
+                let raddr = row.address();
+                if raddr < praddr {
+                    // NOTE:
+                    // We currently skip these sequences, but we *should* of course handle them
+                    // correctly. It's unclear how the interplay between this and the skiplist
+                    // should work.
+                    // unimplemented!();
+                    skipseq = true;
+                    continue;
+                }
+                praddr = raddr;
+
+                if raddr <= addr {
+                    // Might be the right row, but we won't know until we see the next one.
+                    // The .clone is needed so we can keep iterating
+                    current = Some(row);
+
+                    // Add every self.cache_every'th non-empty row to the skiplist
+                    if rowi != 0 && rowi % self.cache_every == 0 {
+                        if let Ok(mut skiplist) = unit.skiplist.write() {
+                            let i = rowi / self.cache_every - 1;
+                            if i >= skiplist.len() {
+                                debug_assert!(i == skiplist.len(),
+                                              "we somehow didn't cache a StateMachine for a \
+                                               previous iteration step!");
+                                // cache this StateMachine
+                                skiplist.push((row.address(), rows.clone(), row));
+                            }
+                        }
                     }
+                    rowi += 1;
                     continue;
                 }
                 break;
@@ -386,7 +461,11 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 
 // TODO: most of this should be moved to the main library.
 use std::marker::PhantomData;
-struct Unit<'input, Endian> {
+struct Unit<'input, Endian>
+    where Endian: gimli::Endianity
+{
+    skiplist: sync::RwLock<Vec<(u64, gimli::StateMachine<'input, Endian>, gimli::LineNumberRow)>>,
+
     address_size: u8,
     ranges: Vec<gimli::Range>,
     line_offset: gimli::DebugLineOffset,
@@ -450,6 +529,8 @@ impl<'input, Endian> Unit<'input, Endian>
                 .and_then(|attr| attr.string_value(debug_str));
 
             Unit {
+                skiplist: sync::RwLock::default(),
+
                 address_size: header.address_size(),
                 ranges: ranges,
                 line_offset: line_offset,
