@@ -143,7 +143,6 @@ struct DebugInfo<'object, Endian>
 {
     debug_line: gimli::DebugLine<'object, Endian>,
     units: Vec<Unit<'object, Endian>>,
-    cache_every: usize,
 }
 
 impl Mapping {
@@ -257,7 +256,6 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 
         Ok(DebugInfo {
             debug_line: debug_line,
-            cache_every: 100,
             units: units,
         })
     }
@@ -282,7 +280,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                         Ok(i) => {
                             // we have a state machine for this address!
                             current = Some(skiplist[i].2);
-                            rowi = (i + 1) * self.cache_every + 1;
+                            rowi = (i + 1) * unit.cache_every + 1;
                             skiplist[i].1.clone()
                         }
                         Err(i) => {
@@ -298,10 +296,10 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                             } else {
                                 current = Some(skiplist[i - 1].2);
                                 // NOTE
-                                // we need to use i * self.cache_every here, not (i+1) as above.
+                                // we need to use i * unit.cache_every here, not (i+1) as above.
                                 // this is because i is the i *after* the one we're chooseing to
                                 // start from (skiplist[i-1] above).
-                                rowi = i * self.cache_every + 1;
+                                rowi = i * unit.cache_every + 1;
                                 skiplist[i - 1].1.clone()
                             }
                         }
@@ -344,10 +342,10 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                     // The .clone is needed so we can keep iterating
                     current = Some(row);
 
-                    // Add every self.cache_every'th non-empty row to the skiplist
-                    if rowi != 0 && rowi % self.cache_every == 0 {
+                    // Add every unit.cache_every'th non-empty row to the skiplist
+                    if rowi != 0 && rowi % unit.cache_every == 0 {
                         if let Ok(mut skiplist) = unit.skiplist.write() {
-                            let i = rowi / self.cache_every - 1;
+                            let i = rowi / unit.cache_every - 1;
                             if i >= skiplist.len() {
                                 debug_assert!(i == skiplist.len(),
                                               "we somehow didn't cache a StateMachine for a \
@@ -466,6 +464,7 @@ struct Unit<'input, Endian>
 {
     skiplist: sync::RwLock<Vec<(u64, gimli::StateMachine<'input, Endian>, gimli::LineNumberRow)>>,
 
+    cache_every: usize,
     address_size: u8,
     ranges: Vec<gimli::Range>,
     line_offset: gimli::DebugLineOffset,
@@ -530,6 +529,7 @@ impl<'input, Endian> Unit<'input, Endian>
 
             Unit {
                 skiplist: sync::RwLock::default(),
+                cache_every: 100,
 
                 address_size: header.address_size(),
                 ranges: ranges,
