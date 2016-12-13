@@ -245,6 +245,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             .chain_err(|| "couldn't get DIE header")? {
             let unit = Unit::parse(&debug_abbrev,
                                    &debug_ranges,
+                                   &debug_line,
                                    &debug_str,
                                    &header,
                                    with_functions);
@@ -485,6 +486,7 @@ impl<'input, Endian> Unit<'input, Endian>
 {
     fn parse(debug_abbrev: &gimli::DebugAbbrev<Endian>,
              debug_ranges: &gimli::DebugRanges<Endian>,
+             debug_line: &gimli::DebugLine<'input, Endian>,
              debug_str: &gimli::DebugStr<'input, Endian>,
              header: &gimli::CompilationUnitHeader<'input, Endian>,
              with_functions: bool)
@@ -533,9 +535,29 @@ impl<'input, Endian> Unit<'input, Endian>
                 .chain_err(|| "invalid compilation unit name")?
                 .and_then(|attr| attr.string_value(debug_str));
 
+            let lineh = debug_line.header(line_offset, header.address_size(), comp_dir, comp_name)
+                .chain_err(|| "invalid compilation unit line rows")?;
+
+            // We want to cache every sqrt(#rows).
+            // Unfortunately we don't know the number of rows (and we don't want to scan all of
+            // line rows to find it). However, we *do* know the number of bytes of debug line
+            // information, which we can use as a proxy.
+            //
+            // Based on some empirical data from a couple of applications, the relationship seems
+            // to be about 5.5 bytes/row for units with a decent number of rows. The values
+            // vary more for smaller units, but there cache_every also matters less.
+            let nrows = lineh.raw_program_buf().len() as f64 / 5.5;
+            // If a unit only has a very small number of rows, we can avoid the skiplist
+            // altogether (also, our estimate is more likely to be wrong).
+            let cache_every = if nrows >= 100.0 {
+                Some(nrows.sqrt() as usize)
+            } else {
+                None
+            };
+
             Unit {
                 skiplist: sync::RwLock::default(),
-                cache_every: Some(100),
+                cache_every: cache_every,
 
                 address_size: header.address_size(),
                 ranges: ranges,
