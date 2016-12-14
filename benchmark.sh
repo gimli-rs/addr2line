@@ -57,13 +57,19 @@ run() {
 	cmd="$3"
 	args="$4"
 	printf "%s\t%s\t" "$name" "$func"
-	/usr/bin/time -f '%e\t%M' "$cmd" $args -e "$target" < "$addresses" 2>&1 >/dev/null
+	if [[ "$cmd" =~ llvm-symbolizer ]]; then
+		/usr/bin/time -f '%e\t%M' "$cmd" $args -obj="$target" < "$addresses" 2>&1 >/dev/null
+	else
+		/usr/bin/time -f '%e\t%M' "$cmd" $args -e "$target" < "$addresses" 2>&1 >/dev/null
+	fi
 }
 
 # run without functions
 log1=$(mktemp tmp.XXXXXXXXXX)
 echo "==> Benchmarking"
 run nofunc binutils addr2line >> "$log1"
+run nofunc elfutils eu-addr2line >> "$log1"
+run nofunc llvm-sym llvm-symbolizer -functions=none >> "$log1"
 for ref in "$@"; do
 	run nofunc "$ref" "$dirname/target/release/addr2line-$ref" >> "$log1"
 done
@@ -73,6 +79,8 @@ cat "$log1" | column -t
 log2=$(mktemp tmp.XXXXXXXXXX)
 echo "==> Benchmarking with -f"
 run func binutils addr2line -f >> "$log2"
+run func elfutils eu-addr2line -f >> "$log2"
+run func llvm-sym llvm-symbolizer -functions=linkage >> "$log2"
 for ref in "$@"; do
 	run func "$ref" "$dirname/target/release/addr2line-$ref" -f >> "$log2"
 done
