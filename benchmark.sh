@@ -60,24 +60,27 @@ run() {
 	/usr/bin/time -f '%e\t%M' "$cmd" $args -e "$target" < "$addresses" 2>&1 >/dev/null
 }
 
-log=$(mktemp tmp.XXXXXXXXXX)
-
 # run without functions
+log1=$(mktemp tmp.XXXXXXXXXX)
 echo "==> Benchmarking"
-run nofunc binutils addr2line > "$log"
+run nofunc binutils addr2line >> "$log1"
 for ref in "$@"; do
-	run nofunc "$ref" "$dirname/target/release/addr2line-$ref" >> "$log"
+	run nofunc "$ref" "$dirname/target/release/addr2line-$ref" >> "$log1"
 done
+cat "$log1" | column -t
 
 # run with functions
+log2=$(mktemp tmp.XXXXXXXXXX)
 echo "==> Benchmarking with -f"
-run func binutils addr2line -f >> "$log"
+run func binutils addr2line -f >> "$log2"
 for ref in "$@"; do
-	run func "$ref" "$dirname/target/release/addr2line-$ref" -f >> "$log"
+	run func "$ref" "$dirname/target/release/addr2line-$ref" -f >> "$log2"
 done
+cat "$log2" | column -t
+cat "$log2" >> "$log1"; rm "$log2"
 
 echo "==> Plotting"
-Rscript --no-readline --no-restore --no-save "$dirname/bench.plot.r" < "$log"
+Rscript --no-readline --no-restore --no-save "$dirname/bench.plot.r" < "$log1"
 
 echo "==> Cleaning up"
-rm "$log"
+rm "$log1"
