@@ -143,7 +143,6 @@ struct DebugInfo<'object, Endian>
 {
     debug_line: gimli::DebugLine<'object, Endian>,
     units: Vec<Unit<'object, Endian>>,
-    cache_every: usize,
 }
 
 impl Mapping {
@@ -246,6 +245,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             .chain_err(|| "couldn't get DIE header")? {
             let unit = Unit::parse(&debug_abbrev,
                                    &debug_ranges,
+                                   &debug_line,
                                    &debug_str,
                                    &header,
                                    with_functions);
@@ -257,7 +257,6 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 
         Ok(DebugInfo {
             debug_line: debug_line,
-            cache_every: 100,
             units: units,
         })
     }
@@ -275,42 +274,46 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             let mut current = None;
 
             // Okay, this is the right unit. Check our DebugLine rows.
-            let mut rows = {
-                // First, check our binary search list
-                if let Ok(skiplist) = unit.skiplist.read() {
-                    match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
-                        Ok(i) => {
-                            // we have a state machine for this address!
-                            current = Some(skiplist[i].2);
-                            rowi = (i + 1) * self.cache_every + 1;
-                            skiplist[i].1.clone()
-                        }
-                        Err(i) => {
-                            // i is the entry in the skiplist where addr *would* appear. Thus, we
-                            // don't have a state machine for *this* address, but we do know that:
-                            //
-                            //  - if i == 0, we have no state machine, and must from scratch
-                            //  - if i == skiplist.len(), we scan from the last state machine
-                            //  - otherwise, the state machine from i-1 eventually encounters addr
-                            if i == 0 {
-                                unit.line_rows(&self.debug_line)
-                                    .chain_err(|| "cannot get line rows for unit")?
-                            } else {
+            let rows = unit.cache_every
+                .and_then(|cache_every| {
+                    unit.skiplist.read().ok().and_then(|skiplist| {
+                        match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
+                            Ok(i) => {
+                                // we have a state machine for this address!
+                                current = Some(skiplist[i].2);
+                                rowi = (i + 1) * cache_every + 1;
+                                Some(skiplist[i].1.clone())
+                            }
+                            Err(i) if i == 0 => {
+                                // i is the entry in the skiplist where addr *would* appear. Thus,
+                                // we don't have a state machine for *this* address, but we do know
+                                // that:
+                                //
+                                //  - if i == 0, we have no state machine, and must from scratch
+                                //  - if i == skiplist.len(), we scan from the last state machine
+                                //  - otherwise, the machine from i-1 eventually encounters addr
+                                None
+                            }
+                            Err(i) => {
                                 current = Some(skiplist[i - 1].2);
                                 // NOTE
-                                // we need to use i * self.cache_every here, not (i+1) as above.
+                                // we need to use i * cache_every here, not (i+1) as above.
                                 // this is because i is the i *after* the one we're chooseing to
                                 // start from (skiplist[i-1] above).
-                                rowi = i * self.cache_every + 1;
-                                skiplist[i - 1].1.clone()
+                                rowi = i * cache_every + 1;
+                                Some(skiplist[i - 1].1.clone())
                             }
                         }
-                    }
-                } else {
-                    // the skiplist was poisoned -- fall back to linear scan
-                    unit.line_rows(&self.debug_line)
-                        .chain_err(|| "cannot get line rows for unit")?
-                }
+                    })
+                });
+
+            let mut rows = if let Some(rows) = rows {
+                rows
+            } else {
+                // fall back to linear scan
+                unit.line_rows(&self.debug_line)
+                    .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+                    .chain_err(|| "cannot get line rows for unit")?
             };
 
             // Now, find the last row before a row with a higher address than the one we seek.
@@ -344,16 +347,18 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                     // The .clone is needed so we can keep iterating
                     current = Some(row);
 
-                    // Add every self.cache_every'th non-empty row to the skiplist
-                    if rowi != 0 && rowi % self.cache_every == 0 {
-                        if let Ok(mut skiplist) = unit.skiplist.write() {
-                            let i = rowi / self.cache_every - 1;
-                            if i >= skiplist.len() {
-                                debug_assert!(i == skiplist.len(),
-                                              "we somehow didn't cache a StateMachine for a \
-                                               previous iteration step!");
-                                // cache this StateMachine
-                                skiplist.push((row.address(), rows.clone(), row));
+                    // Add every cache_every'th non-empty row to the skiplist
+                    if let Some(cache_every) = unit.cache_every {
+                        if rowi != 0 && rowi % cache_every == 0 {
+                            if let Ok(mut skiplist) = unit.skiplist.write() {
+                                let i = rowi / cache_every - 1;
+                                if i >= skiplist.len() {
+                                    debug_assert!(i == skiplist.len(),
+                                                  "we somehow didn't cache a StateMachine for a \
+                                                   previous iteration step!");
+                                    // cache this StateMachine
+                                    skiplist.push((row.address(), rows.clone(), row));
+                                }
                             }
                         }
                     }
@@ -466,6 +471,7 @@ struct Unit<'input, Endian>
 {
     skiplist: sync::RwLock<Vec<(u64, gimli::StateMachine<'input, Endian>, gimli::LineNumberRow)>>,
 
+    cache_every: Option<usize>,
     address_size: u8,
     ranges: Vec<gimli::Range>,
     line_offset: gimli::DebugLineOffset,
@@ -480,6 +486,7 @@ impl<'input, Endian> Unit<'input, Endian>
 {
     fn parse(debug_abbrev: &gimli::DebugAbbrev<Endian>,
              debug_ranges: &gimli::DebugRanges<Endian>,
+             debug_line: &gimli::DebugLine<'input, Endian>,
              debug_str: &gimli::DebugStr<'input, Endian>,
              header: &gimli::CompilationUnitHeader<'input, Endian>,
              with_functions: bool)
@@ -528,8 +535,29 @@ impl<'input, Endian> Unit<'input, Endian>
                 .chain_err(|| "invalid compilation unit name")?
                 .and_then(|attr| attr.string_value(debug_str));
 
+            let lineh = debug_line.header(line_offset, header.address_size(), comp_dir, comp_name)
+                .chain_err(|| "invalid compilation unit line rows")?;
+
+            // We want to cache every sqrt(#rows).
+            // Unfortunately we don't know the number of rows (and we don't want to scan all of
+            // line rows to find it). However, we *do* know the number of bytes of debug line
+            // information, which we can use as a proxy.
+            //
+            // Based on some empirical data from a couple of applications, the relationship seems
+            // to be about 5.5 bytes/row for units with a decent number of rows. The values
+            // vary more for smaller units, but there cache_every also matters less.
+            let nrows = lineh.raw_program_buf().len() as f64 / 5.5;
+            // If a unit only has a very small number of rows, we can avoid the skiplist
+            // altogether (also, our estimate is more likely to be wrong).
+            let cache_every = if nrows >= 100.0 {
+                Some(nrows.sqrt() as usize)
+            } else {
+                None
+            };
+
             Unit {
                 skiplist: sync::RwLock::default(),
+                cache_every: cache_every,
 
                 address_size: header.address_size(),
                 ranges: ranges,
