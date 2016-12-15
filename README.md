@@ -128,3 +128,14 @@ $ addr2line -e target/debug/addr2line-ex -f 0xcd80
 _ZN12addr2line_ex4mainE
 /home/jon/tmp/addr2line-ex/src/main.rs:3
 ```
+
+# Performance
+
+The library aims to perform similarly to equivalent existing tools such
+as `addr2line` from binutils, `eu-addr2line` from elfutils, and
+`llvm-symbolize` from the llvm project. We haven't done extensive
+benchmarking (yet), but the runtime and memory use results we observe
+for one relatively large Rust application around are quite promising:
+
+![addr2line runtime](time.png)
+![addr2line memory](memory.png)
