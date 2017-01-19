@@ -173,22 +173,18 @@ impl Mapping {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
             .map_err(|e| ErrorKind::BadPath(e))?;
 
-        Ok(Mapping {
-            inner: OwningHandle::new(Box::new(file), |mmap| {
+        OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
                 let mmap: &memmap::Mmap = unsafe { &*mmap };
                 let file = object::File::parse(unsafe { mmap.as_slice() });
-                Box::new(MmapDerived {
-                    inner: OwningHandle::new(Box::new(file), |file| {
+                OwningHandle::try_new(Box::new(file), |file| -> Result<_> {
                         let file: &object::File = unsafe { &*file };
-
-                        // expect here is currently necessary
-                        // awaiting https://github.com/Kimundi/owning-ref-rs/issues/19
-                        Box::new(Self::symbolicate(file, with_functions)
-                            .expect("not all necessary debug symbols are present"))
-                    }),
-                })
-            }),
-        })
+                        Self::symbolicate(file, with_functions)
+                            .chain_err(|| "failed to analyze debug information")
+                            .map(|di| Box::new(di))
+                    })
+                    .map(|di| Box::new(MmapDerived { inner: di }))
+            })
+            .map(|di| Mapping { inner: di })
     }
 
     /// Locate the source file and line corresponding to the given virtual memory address.
