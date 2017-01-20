@@ -3,12 +3,16 @@ authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
 description = "A cross-platform `addr2line` clone written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
+categories = ["development-tools::debugging", "command-line-utilities"]
 license = "Apache-2.0/MIT"
 name = "addr2line"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 version = "0.2.0"
 build = "build.rs"
+
+[badges]
+travis-ci = { repository = "gimli-rs/addr2line" }
 
 [dependencies]
 fallible-iterator = "0.1.3"
