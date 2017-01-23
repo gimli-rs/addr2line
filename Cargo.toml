@@ -1,5 +1,5 @@
 [package]
-authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
+authors = ["Nick Fitzgerald <fitzgen@gmail.com>", "Philip Craig <philipjcraig@gmail.com>", "Jon Gjengset <jon@thesquareplanet.com>"]
 description = "A cross-platform `addr2line` clone written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
