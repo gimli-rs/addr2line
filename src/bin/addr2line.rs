@@ -1,12 +1,8 @@
 #[macro_use]
 extern crate clap;
 extern crate addr2line;
-extern crate rustc_demangle;
-use rustc_demangle::demangle;
 
 use clap::{App, Arg};
-
-use std::path;
 
 #[cfg_attr(rustfmt, rustfmt_skip)]
 const POSTSCRIPT: &'static str = "\
@@ -25,8 +21,8 @@ question marks in their place. If the line number can not be
 determined, addr2line will print 0.
 ";
 
-fn main() {
-    let matches = App::new("addr2line")
+fn get_matches() -> clap::ArgMatches<'static> {
+    App::new("addr2line")
         .version(crate_version!())
         .about("Convert addresses into line number/file name pairs.\n\
                 If no addresses are specified on the command line, they will be read from stdin.")
@@ -56,16 +52,41 @@ fn main() {
             .multiple(true)
             .index(1))
         .after_help(POSTSCRIPT)
-        .get_matches();
+        .get_matches()
+}
+
+#[cfg(any(feature = "rustc-demangle", feature = "cpp_demangle"))]
+fn get_options(matches: &clap::ArgMatches) -> addr2line::Options {
+    let mut opts = addr2line::Options::default();
+
+    if matches.is_present("functions") {
+        opts = opts.with_functions();
+    }
+    if matches.is_present("demangle") {
+        opts = opts.with_demangling();
+    }
+
+    opts
+}
+
+#[cfg(not(any(feature = "rustc-demangle", feature = "cpp_demangle")))]
+fn get_options(matches: &clap::ArgMatches) -> addr2line::Options {
+    let mut opts = addr2line::Options::default();
+
+    if matches.is_present("functions") {
+        opts = opts.with_functions();
+    }
+
+    opts
+}
+
+fn main() {
+    let matches = get_matches();
+    let opts = get_options(&matches);
 
     let exe = matches.value_of("executable").unwrap_or("./a.out");
     let show_funcs = matches.is_present("functions");
-
-    let debug = if show_funcs {
-        addr2line::Mapping::with_functions(path::Path::new(&exe))
-    } else {
-        addr2line::Mapping::new(path::Path::new(&exe))
-    };
+    let debug = opts.build(exe);
 
     if let Err(e) = debug {
         println!("addr2line: {:?}", e);
@@ -74,7 +95,6 @@ fn main() {
     let debug = debug.unwrap();
 
     let show_addrs = matches.is_present("addresses");
-    let do_demangle = matches.is_present("demangle");
     let one = |addr: &str| {
         let addr = parse_uint_from_hex_string(addr);
         if show_addrs {
@@ -90,13 +110,7 @@ fn main() {
         if let Some((file, lineno, func)) = loc {
             if show_funcs {
                 use std::borrow::Cow;
-                println!("{}",
-                         func.map(|func| if do_demangle {
-                                 Cow::Owned(demangle(&*func).to_string())
-                             } else {
-                                 func
-                             })
-                             .unwrap_or(Cow::Borrowed("??")));
+                println!("{}", func.unwrap_or(Cow::Borrowed("??")));
             }
             println!("{}:{}",
                      file.to_string_lossy(),
