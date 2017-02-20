@@ -28,6 +28,9 @@ before_script:
 - if [[ -e ~/.local/bin ]]; then export PATH=~/.local/bin:$PATH; fi
 
 script:
+-  travis-cargo build -- --no-default-features
+-  travis-cargo build -- --no-default-features --features "cpp_demangle"
+-  travis-cargo build -- --no-default-features --features "rustc-demangle"
 -  travis-cargo build
 -  if [[ "$TRAVIS_OS_NAME" != "osx" ]]; then travis-cargo test; fi
 -  travis-cargo bench

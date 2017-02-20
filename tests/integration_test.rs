@@ -89,7 +89,10 @@ fn with_functions() {
     let debug = target.clone();
 
     // Parse the debug symbols using "our" addr2line
-    let ours = addr2line::Mapping::with_functions(&debug).unwrap();
+    let ours = addr2line::Options::default()
+        .with_functions()
+        .build(&debug)
+        .unwrap();
 
     // Spin up the "real" addr2line
     let mut theirs = spawn_oracle(target.as_path(), &["-f"]);

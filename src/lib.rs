@@ -27,6 +27,13 @@ extern crate memmap;
 extern crate object;
 extern crate owning_ref;
 extern crate fallible_iterator;
+
+#[cfg(feature = "rustc-demangle")]
+extern crate rustc_demangle;
+
+#[cfg(feature = "cpp_demangle")]
+extern crate cpp_demangle;
+
 #[macro_use]
 extern crate error_chain;
 
@@ -115,6 +122,60 @@ mod errors {
 }
 pub use errors::*;
 
+/// A builder for configuring a `Mapping`.
+///
+/// ```
+/// # fn foo() -> addr2line::Result<()> {
+/// use addr2line::Options;
+///
+/// let mapping = Options::default()
+///     .with_functions()
+///     .build("path/to/some/executable")?;
+/// # let _ = mapping;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// If `with_functions` is not added to these options, then `Mapping::locate()`
+/// will always return `None` for the function name.
+///
+/// Likewise, if `with_demangling` is not added to these options, then all
+/// function names (if any) returned by `Mapping::locate()` will not be
+/// demangled.
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    with_functions: bool,
+    with_demangling: bool,
+}
+
+impl Options {
+    /// Make the `Mapping` also include debug information for functions,
+    /// enabling `Mapping::locate()` to also indicate what function a given
+    /// address appears in. This comes at some parsing and lookup cost.
+    pub fn with_functions(mut self) -> Self {
+        self.with_functions = true;
+        self
+    }
+
+    /// Make the `Mapping` attempt to demangle Rust and/or C++ symbols. This
+    /// option implies `with_functions`.
+    #[cfg(any(feature = "cpp_demangle", feature = "rustc-demangle"))]
+    pub fn with_demangling(mut self) -> Self {
+        self.with_demangling = true;
+        self.with_functions()
+    }
+
+    /// Finish configuration and build the `Mapping`.
+    ///
+    /// The target file will be memmap'd, and then `gimli` is used to parse out
+    /// the necessary debug symbols, without copying data when possible.
+    pub fn build<P>(self, file_path: P) -> Result<Mapping>
+        where P: AsRef<path::Path>
+    {
+        Mapping::new_inner(file_path.as_ref(), self)
+    }
+}
+
 /// A `Mapping` locates and maintains the state necessary to perform address to line translation.
 ///
 /// Constructing a `Mapping` is somewhat costly, so users should aim to re-use created `Mapping`s
@@ -143,33 +204,21 @@ struct DebugInfo<'object, Endian>
 {
     debug_line: gimli::DebugLine<'object, Endian>,
     units: Vec<Unit<'object, Endian>>,
+    opts: Options,
 }
 
 impl Mapping {
-    /// Construct a new `Mapping` from the debug symbols in the given executable.
+    /// Construct a new `Mapping` with the default `Options`.
     ///
     /// The target file will be memmap'd, and then `gimli` is used to parse out the necessary debug
     /// symbols, without copying data when possible.
-    ///
-    /// The returned `Mapping` will also include debug information for functions, enabling
-    /// `Mapping::locate()` to also indicate what function a given address appears in. This comes
-    /// at some parsing and lookup cost.
-    pub fn with_functions(file_path: &path::Path) -> Result<Mapping> {
-        Self::new_inner(file_path, true)
+    pub fn new<P>(file_path: P) -> Result<Mapping>
+        where P: AsRef<path::Path>
+    {
+        Options::default().build(file_path)
     }
 
-    /// Construct a new `Mapping` from the debug symbols in the given executable.
-    ///
-    /// The target file will be memmap'd, and then `gimli` is used to parse out the necessary debug
-    /// symbols, without copying data when possible.
-    ///
-    /// Note that this constructor will *not* include function mapping information, and thus
-    /// `Mapping::locate()` will always return `None` for the function mapping of addresses.
-    pub fn new(file_path: &path::Path) -> Result<Mapping> {
-        Self::new_inner(file_path, false)
-    }
-
-    fn new_inner(file_path: &path::Path, with_functions: bool) -> Result<Mapping> {
+    fn new_inner(file_path: &path::Path, opts: Options) -> Result<Mapping> {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
             .map_err(|e| ErrorKind::BadPath(e))?;
 
@@ -178,7 +227,7 @@ impl Mapping {
                 let file = object::File::parse(unsafe { mmap.as_slice() });
                 OwningHandle::try_new(Box::new(file), |file| -> Result<_> {
                         let file: &object::File = unsafe { &*file };
-                        Self::symbolicate(file, with_functions)
+                        Self::symbolicate(file, opts)
                             .chain_err(|| "failed to analyze debug information")
                             .map(|di| Box::new(di))
                     })
@@ -197,13 +246,11 @@ impl Mapping {
         self.inner.locate(addr)
     }
 
-    fn symbolicate<'a>(file: &'a object::File,
-                       with_functions: bool)
-                       -> Result<EndianDebugInfo<'a>> {
+    fn symbolicate<'a>(file: &'a object::File, opts: Options) -> Result<EndianDebugInfo<'a>> {
         if file.is_little_endian() {
-            Ok(EndianDebugInfo::LEInfo(DebugInfo::new(file, with_functions)?))
+            Ok(EndianDebugInfo::LEInfo(DebugInfo::new(file, opts)?))
         } else {
-            Ok(EndianDebugInfo::BEInfo(DebugInfo::new(file, with_functions)?))
+            Ok(EndianDebugInfo::BEInfo(DebugInfo::new(file, opts)?))
         }
     }
 }
@@ -220,7 +267,7 @@ impl<'object> EndianDebugInfo<'object> {
 impl<'object, Endian> DebugInfo<'object, Endian>
     where Endian: gimli::Endianity
 {
-    fn new<'a>(file: &'a object::File, with_functions: bool) -> Result<DebugInfo<'a, Endian>> {
+    fn new<'a>(file: &'a object::File, opts: Options) -> Result<DebugInfo<'a, Endian>> {
         let debug_info = file.get_section(".debug_info")
             .ok_or(ErrorKind::MissingDebugSection("debug_info"))?;
         let debug_info = gimli::DebugInfo::<Endian>::new(debug_info);
@@ -244,7 +291,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                                    &debug_line,
                                    &debug_str,
                                    &header,
-                                   with_functions);
+                                   opts);
             let unit = unit.chain_err(|| "encountered invalid compilation unit")?;
             if let Some(unit) = unit {
                 units.push(unit);
@@ -254,6 +301,7 @@ impl<'object, Endian> DebugInfo<'object, Endian>
         Ok(DebugInfo {
             debug_line: debug_line,
             units: units,
+            opts: opts,
         })
     }
 
@@ -454,10 +502,51 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                 // matches us better. We need to keep going until we find the best one.
             }
 
-            return Ok(Some((path, line, func.map(|u| u.0.name.to_string_lossy()))));
+            let func = func.map(|u| {
+                if unit.language.is_some() {
+                    debug_assert!(self.opts.with_demangling,
+                                  "We shouldn't even bother finding the DW_AT_language if we \
+                                   aren't demangling");
+                }
+                match unit.language {
+                    Some(gimli::DW_LANG_C_plus_plus) |
+                    Some(gimli::DW_LANG_C_plus_plus_03) |
+                    Some(gimli::DW_LANG_C_plus_plus_11) => demangle_cpp_symbol(u.0.name),
+                    Some(gimli::DW_LANG_Rust) => demangle_rust_symbol(u.0.name),
+                    _ => u.0.name.to_string_lossy(),
+                }
+            });
+
+            return Ok(Some((path, line, func)));
         }
         Ok(None)
     }
+}
+
+#[cfg(feature = "cpp_demangle")]
+fn demangle_cpp_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
+    if let Ok(sym) = cpp_demangle::Symbol::new(mangled.to_bytes()) {
+        Cow::from(format!("{}", sym))
+    } else {
+        mangled.to_string_lossy()
+    }
+}
+
+#[cfg(not(feature = "cpp_demangle"))]
+fn demangle_cpp_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
+    mangled.to_string_lossy()
+}
+
+#[cfg(feature = "rustc-demangle")]
+fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
+    Cow::from(format!("{}",
+                      rustc_demangle::demangle(mangled.to_string_lossy()
+                          .as_ref())))
+}
+
+#[cfg(not(feature = "rustc-demangle"))]
+fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
+    mangled.to_string_lossy()
 }
 
 // TODO: most of this should be moved to the main library.
@@ -474,6 +563,7 @@ struct Unit<'input, Endian>
     comp_dir: Option<&'input std::ffi::CStr>,
     comp_name: Option<&'input std::ffi::CStr>,
     programs: Vec<Program<'input>>,
+    language: Option<gimli::DwLang>,
     phantom: PhantomData<Endian>,
 }
 
@@ -485,7 +575,7 @@ impl<'input, Endian> Unit<'input, Endian>
              debug_line: &gimli::DebugLine<'input, Endian>,
              debug_str: &gimli::DebugStr<'input, Endian>,
              header: &gimli::CompilationUnitHeader<'input, Endian>,
-             with_functions: bool)
+             opts: Options)
              -> Result<Option<Unit<'input, Endian>>> {
 
         // We first want to parse out the compilation unit, and then any contained subprograms.
@@ -530,6 +620,16 @@ impl<'input, Endian> Unit<'input, Endian>
                 .map_err(|e| Error::from(ErrorKind::Gimli(e)))
                 .chain_err(|| "invalid compilation unit name")?
                 .and_then(|attr| attr.string_value(debug_str));
+            let language = if opts.with_demangling {
+                entry.attr(gimli::DW_AT_language)
+                    .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
+                    .and_then(|attr| match attr.value() {
+                        gimli::AttributeValue::Language(lang) => Some(lang),
+                        _ => None,
+                    })
+            } else {
+                None
+            };
 
             let lineh = debug_line.header(line_offset, header.address_size(), comp_dir, comp_name)
                 .chain_err(|| "invalid compilation unit line rows")?;
@@ -561,12 +661,13 @@ impl<'input, Endian> Unit<'input, Endian>
                 comp_dir: comp_dir,
                 comp_name: comp_name,
                 programs: vec![],
+                language: language,
                 phantom: PhantomData,
             }
         };
 
         // Do we also need to extract function information?
-        if !with_functions {
+        if !opts.with_functions {
             return Ok(Some(unit));
         }
 
