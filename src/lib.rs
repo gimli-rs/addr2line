@@ -688,14 +688,19 @@ impl<'input, Endian> Unit<'input, Endian>
                 continue;
             }
 
-            if cfg!(debug_assertions) {
-                // All programs should be fully contained within their compilation unit
-                for r in &ranges {
-                    assert!(unit.ranges
-                        .iter()
-                        .any(|range| range.begin <= r.begin && range.end >= r.end));
-                }
-            }
+            // When resolving an address, the code first looks for which compilation units have
+            // ranges that cover the address in question, and then only search within those. This
+            // relies on the assumption that all program ranges within a compilation unit are fully
+            // contained within compilation unit's range. That is
+            //
+            //   ∀r ∈ cu.ranges (cu.begin <= r <= cu.end)
+            //
+            // It turns out that this is not true: https://github.com/gimli-rs/addr2line/issues/30.
+            // In such programs, we will fail to resolve addresses located in units whose range
+            // fall outside the range of the containing compilation unit. This is not a hard error,
+            // since we can still generally resolve addresses, and tools like binutils' addr2line
+            // exhibit the same behavior, but it is something we should aim to eventually work
+            // around. Hence: TODO
 
             let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev).chain_err(|| {
                     format!("failed to resolve name for subroutine at <{:x}><{:x}>",
