@@ -558,6 +558,7 @@ struct Unit<'input, Endian>
 
     cache_every: Option<usize>,
     address_size: u8,
+    base_address: u64,
     ranges: Vec<gimli::Range>,
     line_offset: gimli::DebugLineOffset,
     comp_dir: Option<&'input std::ffi::CStr>,
@@ -596,8 +597,26 @@ impl<'input, Endian> Unit<'input, Endian>
                     .into());
             }
 
+            let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
+                Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+                Err(e) => {
+                    return Err(Error::from(ErrorKind::Gimli(e)))
+                        .chain_err(|| "invalid low_pc attribute")
+                }
+                _ => {
+                    match entry.attr_value(gimli::DW_AT_entry_pc) {
+                        Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+                        Err(e) => {
+                            return Err(Error::from(ErrorKind::Gimli(e)))
+                                .chain_err(|| "invalid entry_pc attribute")
+                        }
+                        _ => 0,
+                    }
+                }
+            };
+
             // Where does our compilation unit live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size())
+            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size(), base_address)
                 .chain_err(|| "compilation unit has invalid ranges")?;
             if ranges.is_empty() {
                 return Ok(None);
@@ -656,6 +675,7 @@ impl<'input, Endian> Unit<'input, Endian>
                 cache_every: cache_every,
 
                 address_size: header.address_size(),
+                base_address: base_address,
                 ranges: ranges,
                 line_offset: line_offset,
                 comp_dir: comp_dir,
@@ -682,8 +702,11 @@ impl<'input, Endian> Unit<'input, Endian>
             }
 
             // Where does this function live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size())
-                .chain_err(|| "subroutine has invalid ranges")?;
+            let ranges =
+                Self::get_ranges(entry,
+                                 debug_ranges,
+                                 header.address_size(),
+                                 unit.base_address).chain_err(|| "subroutine has invalid ranges")?;
             if ranges.is_empty() {
                 continue;
             }
@@ -767,9 +790,13 @@ impl<'input, Endian> Unit<'input, Endian>
 
     fn get_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
                   debug_ranges: &gimli::DebugRanges<Endian>,
-                  address_size: u8)
+                  address_size: u8,
+                  base_address: u64)
                   -> Result<Vec<gimli::Range>> {
-        if let Some(range) = Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size)? {
+        if let Some(range) = Self::parse_noncontiguous_ranges(entry,
+                                                              debug_ranges,
+                                                              address_size,
+                                                              base_address)? {
             return Ok(range);
         }
         if let Some(range) = Self::parse_contiguous_range(entry)?.map(|range| vec![range]) {
@@ -781,7 +808,8 @@ impl<'input, Endian> Unit<'input, Endian>
     // This must be checked before `parse_contiguous_range`.
     fn parse_noncontiguous_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
                                   debug_ranges: &gimli::DebugRanges<Endian>,
-                                  address_size: u8)
+                                  address_size: u8,
+                                  base_address: u64)
                                   -> Result<Option<Vec<gimli::Range>>> {
         let offset = match entry.attr_value(gimli::DW_AT_ranges) {
             Ok(Some(gimli::AttributeValue::DebugRangesRef(offset))) => offset,
@@ -790,14 +818,6 @@ impl<'input, Endian> Unit<'input, Endian>
                     .chain_err(|| "invalid ranges attribute")
             }
             _ => return Ok(None),
-        };
-        let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
-            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-            Err(e) => {
-                return Err(Error::from(ErrorKind::Gimli(e)))
-                    .chain_err(|| "invalid low_pc attribute")
-            }
-            _ => 0,
         };
 
         let ranges = debug_ranges.ranges(offset, address_size, base_address)
