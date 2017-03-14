@@ -757,6 +757,12 @@ impl<'input, Endian> Unit<'input, Endian>
                .and_then(|attr| attr.string_value(debug_str)) {
             return Ok(Some(name));
         }
+        if let Some(name) = entry.attr(gimli::DW_AT_MIPS_linkage_name)
+               .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+               .chain_err(|| "invalid subprogram linkage name")?
+               .and_then(|attr| attr.string_value(debug_str)) {
+            return Ok(Some(name));
+        }
 
         // Linked name is not available, so fall back to just plain old name, if that's available.
         if let Some(name) = entry.attr(gimli::DW_AT_name)
