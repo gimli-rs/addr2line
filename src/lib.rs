@@ -58,8 +58,8 @@ pub enum DebugInfoError {
     UnitWithoutCompilationUnit,
     /// A subroutine (unit offset, routine offset) has no name
     SubroutineMissingName(usize, usize),
-    /// Abstract origin points to empty entry
-    DanglingAbstractOrigin,
+    /// Entry offset points to empty entry
+    DanglingEntryOffset,
     /// Asked to parse non-contiguous range as contiguous.
     RangeBothContiguousAndNot,
     /// A range was inverted (high > low)
@@ -82,9 +82,7 @@ impl fmt::Display for DebugInfoError {
             DebugInfoError::SubroutineMissingName(u, r) => {
                 write!(f, "A subroutine (<{:x}><{:x}>) has no name", u, r)
             }
-            DebugInfoError::DanglingAbstractOrigin => {
-                write!(f, "Abstract origin points to empty entry")
-            }
+            DebugInfoError::DanglingEntryOffset => write!(f, "Entry offset points to empty entry"),
             DebugInfoError::RangeBothContiguousAndNot => {
                 write!(f, "Asked to parse non-contiguous range as contiguous.")
             }
@@ -773,21 +771,36 @@ impl<'input, Endian> Unit<'input, Endian>
         }
 
         // If we don't have the link name, check if this function refers to another
-        if let Some(gimli::AttributeValue::UnitRef(origin)) =
-            entry.attr_value(gimli::DW_AT_abstract_origin)
-                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+        if let Some(abstract_origin) = Self::get_entry(entry, header, abbrev, gimli::DW_AT_abstract_origin)
                 .chain_err(|| "invalid subprogram abstract origin")? {
-            let mut entries = header.entries_at_offset(abbrev, origin)
-                .chain_err(|| "illegal offset in abstract origin")?;
-            let (_, parent) = entries.next_dfs()
-                .chain_err(|| "abstract origin does not point to a valid entry")?
-                .ok_or_else(|| {
-                    ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingAbstractOrigin)
-                })?;
-
-            let name = Self::resolve_name(parent, header, debug_str, abbrev)
+            let name = Self::resolve_name(&abstract_origin, header, debug_str, abbrev)
                 .chain_err(|| "abstract origin does not resolve to a name")?;
             return Ok(name);
+        }
+        if let Some(specification) = Self::get_entry(entry, header, abbrev, gimli::DW_AT_specification)
+                .chain_err(|| "invalid subprogram specification")? {
+            let name = Self::resolve_name(&specification, header, debug_str, abbrev)
+                .chain_err(|| "specification does not resolve to a name")?;
+            return Ok(name);
+        }
+
+        Ok(None)
+    }
+
+    fn get_entry<'a>
+        (entry: &gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>,
+         header: &'a gimli::CompilationUnitHeader<'input, Endian>,
+         abbrev: &'a gimli::Abbreviations,
+         attr: gimli::DwAt)
+         -> Result<Option<gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>>> {
+        if let Some(gimli::AttributeValue::UnitRef(offset)) =
+            entry.attr_value(attr).map_err(|e| Error::from(ErrorKind::Gimli(e)))? {
+            let mut entries = header.entries_at_offset(abbrev, offset)?;
+            let (_, entry) = entries.next_dfs()?
+            .ok_or_else(|| {
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
+            })?;
+            return Ok(Some(entry.clone()));
         }
 
         Ok(None)
