@@ -37,7 +37,6 @@ extern crate cpp_demangle;
 #[macro_use]
 extern crate error_chain;
 
-use object::Object;
 use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 
@@ -222,7 +221,7 @@ impl Mapping {
 
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
-            let file = object::File::parse(unsafe { mmap.as_slice() });
+            let file = object::File::parse(unsafe { mmap.as_slice() })?;
             OwningHandle::try_new(Box::new(file), |file| -> Result<_> {
                 let file: &object::File = unsafe { &*file };
                 Self::symbolicate(file, opts)
