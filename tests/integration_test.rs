@@ -15,10 +15,7 @@ fn identity_map() {
 
     // On macOS, symbols are kept in a separate .dSYM file
     if cfg!(target_os = "macos") {
-        let fname = debug.file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let fname = debug.file_name().unwrap().to_string_lossy().into_owned();
         debug.set_file_name(format!("{}.dSYM", fname));
         debug.push("Contents");
         debug.push("Resources");
@@ -58,10 +55,7 @@ fn identity_map() {
                 use std::borrow::Cow;
                 // atos doesn't include the full path, just file name
                 let f = path::PathBuf::from(&*file);
-                file = Cow::Owned(f.file_name()
-                                      .unwrap()
-                                      .to_string_lossy()
-                                      .into_owned());
+                file = Cow::Owned(f.file_name().unwrap().to_string_lossy().into_owned());
             }
 
             assert_eq!(oracle, (Some(&*file), lineno));
@@ -80,10 +74,12 @@ fn identity_map() {
     }
 
     assert_ne!(got, 0);
-    println!("resolved {}/{} addresses ({} file-only misses)",
-             got,
-             all,
-             excusable);
+    println!(
+        "resolved {}/{} addresses ({} file-only misses)",
+        got,
+        all,
+        excusable
+    );
 }
 
 #[test]
@@ -95,7 +91,10 @@ fn with_functions() {
     let debug = target.clone();
 
     // Parse the debug symbols using "our" addr2line
-    let ours = addr2line::Options::default().with_functions().build(&debug).unwrap();
+    let ours = addr2line::Options::default()
+        .with_functions()
+        .build(&debug)
+        .unwrap();
 
     // Spin up the "real" addr2line
     let mut theirs = spawn_oracle(target.as_path(), &["-f"]);
@@ -148,11 +147,13 @@ fn with_functions() {
 
     assert_ne!(got, 0);
     assert_ne!(func_hits, 0);
-    println!("resolved {}/{} addresses ({} file-only misses, {} function hits)",
-             got,
-             all,
-             excusable,
-             func_hits);
+    println!(
+        "resolved {}/{} addresses ({} file-only misses, {} function hits)",
+        got,
+        all,
+        excusable,
+        func_hits
+    );
 }
 
 /// Spawns the oracle version of addr2line on this platform for the given executable.
@@ -179,15 +180,18 @@ fn spawn_oracle(target: &path::Path, args: &[&str]) -> process::Child {
 /// Addresses are written to the given `oracle` in the same order as they are yielded.
 fn get_test_addresses(target: &path::Path, oracle: &mut Write) -> Vec<u64> {
     // Find some addresses to test using nm (we'll later filter to just text section symbols)
-    let names =
-        process::Command::new("/usr/bin/nm").arg(target).output().expect("failed to execute nm");
+    let names = process::Command::new("/usr/bin/nm")
+        .arg(target)
+        .output()
+        .expect("failed to execute nm");
 
     // Ideally, we'd just loop over mappings and do them one by one.
     // Unfortunately, atos on macOS doesn't flush its output for every
     // input line, and so this doesn't work. Instead, we pass all the
     // mappings to `theirs`, close stdin, and then start walking.
     let mappings = String::from_utf8_lossy(&names.stdout);
-    mappings.lines()
+    mappings
+        .lines()
         .filter_map(|map| {
             let mut fields = map.split_whitespace();
             let addr = fields.next().expect("nm address missing");
@@ -201,11 +205,11 @@ fn get_test_addresses(target: &path::Path, oracle: &mut Write) -> Vec<u64> {
         })
         .step(5)
         .map(|addr| {
-                 oracle.write_all(b"0x").unwrap();
-                 oracle.write_all(addr.as_bytes()).unwrap();
-                 oracle.write_all(b"\n").unwrap();
-                 u64::from_str_radix(addr, 16).unwrap()
-             })
+            oracle.write_all(b"0x").unwrap();
+            oracle.write_all(addr.as_bytes()).unwrap();
+            oracle.write_all(b"\n").unwrap();
+            u64::from_str_radix(addr, 16).unwrap()
+        })
         .collect()
 }
 
@@ -217,11 +221,12 @@ fn canonicalize_oracle_output(line: &str) -> (Option<&str>, Option<u64>) {
         // atos on macOS prints lines in a funky way
         // e.g. "-[SKTGraphicView drawRect:] (in Sketch) (SKTGraphicView.m:445)"
         // We want only path and line number
-        let line = line.rsplitn(2, '(')
-            .next()
-            .unwrap()
-            .trim_right_matches(')');
-        if !line.contains(':') { "??:?" } else { line }
+        let line = line.rsplitn(2, '(').next().unwrap().trim_right_matches(')');
+        if !line.contains(':') {
+            "??:?"
+        } else {
+            line
+        }
     } else {
         line
     };
