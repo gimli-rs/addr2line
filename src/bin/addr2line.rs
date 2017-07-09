@@ -24,33 +24,46 @@ determined, addr2line will print 0.
 fn get_matches() -> clap::ArgMatches<'static> {
     App::new("addr2line")
         .version(crate_version!())
-        .about("Convert addresses into line number/file name pairs.\n\
-                If no addresses are specified on the command line, they will be read from stdin.")
-        .arg(Arg::with_name("executable")
-            .short("e")
-            .long("exe")
-            .default_value("a.out")
-            .help("Specify the name of the executable for which addresses should be translated.")
-            .takes_value(true))
-        .arg(Arg::with_name("addresses")
-            .short("a")
-            .long("addresses")
-            .help("Display the address before the function name, file and line number \
-                   information. The address is printed with a `0x' prefix to easily identify \
-                   it."))
-        .arg(Arg::with_name("demangle")
-            .short("C")
-            .long("demangle")
-            .help("Decode (demangle) low-level symbol names into user-level names.  Besides \
-                   removing any initial underscore prepended by the system, this makes C++ \
-                   function names readable."))
-        .arg(Arg::with_name("functions")
-            .short("f")
-            .long("functions")
-            .help("Display function names as well as file and line number information."))
-        .arg(Arg::with_name("addr")
-            .multiple(true)
-            .index(1))
+        .about(
+            "Convert addresses into line number/file name pairs.\n\
+             If no addresses are specified on the command line, they will be read from stdin.",
+        )
+        .arg(
+            Arg::with_name("executable")
+                .short("e")
+                .long("exe")
+                .default_value("a.out")
+                .help(
+                    "Specify the name of the executable for which addresses should be translated.",
+                )
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("addresses")
+                .short("a")
+                .long("addresses")
+                .help(
+                    "Display the address before the function name, file and line number \
+                     information. The address is printed with a `0x' prefix to easily identify \
+                     it.",
+                ),
+        )
+        .arg(
+            Arg::with_name("demangle").short("C").long("demangle").help(
+                "Decode (demangle) low-level symbol names into user-level names.  Besides \
+                 removing any initial underscore prepended by the system, this makes C++ \
+                 function names readable.",
+            ),
+        )
+        .arg(
+            Arg::with_name("functions")
+                .short("f")
+                .long("functions")
+                .help(
+                    "Display function names as well as file and line number information.",
+                ),
+        )
+        .arg(Arg::with_name("addr").multiple(true).index(1))
         .after_help(POSTSCRIPT)
         .get_matches()
 }
@@ -112,9 +125,11 @@ fn main() {
                 use std::borrow::Cow;
                 println!("{}", func.unwrap_or(Cow::Borrowed("??")));
             }
-            println!("{}:{}",
-                     file.to_string_lossy(),
-                     lineno.map(|n| format!("{}", n)).unwrap_or("?".to_owned()));
+            println!(
+                "{}:{}",
+                file.to_string_lossy(),
+                lineno.map(|n| format!("{}", n)).unwrap_or("?".to_owned())
+            );
         } else {
             if show_funcs {
                 println!("??")

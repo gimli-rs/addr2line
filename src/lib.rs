@@ -37,7 +37,6 @@ extern crate cpp_demangle;
 #[macro_use]
 extern crate error_chain;
 
-use object::Object;
 use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 
@@ -73,8 +72,10 @@ impl fmt::Display for DebugInfoError {
                 write!(f, "DebugLine referst to a file that does not exist")
             }
             DebugInfoError::MissingComplilationUnit => {
-                write!(f,
-                       "A unit was completely empty (i.e., did not contain a compilation unit)")
+                write!(
+                    f,
+                    "A unit was completely empty (i.e., did not contain a compilation unit)"
+                )
             }
             DebugInfoError::UnitWithoutCompilationUnit => {
                 write!(f, "The first entry in a unit is not a compilation unit")
@@ -168,7 +169,8 @@ impl Options {
     /// The target file will be memmap'd, and then `gimli` is used to parse out
     /// the necessary debug symbols, without copying data when possible.
     pub fn build<P>(self, file_path: P) -> Result<Mapping>
-        where P: AsRef<path::Path>
+    where
+        P: AsRef<path::Path>,
     {
         Mapping::new_inner(file_path.as_ref(), self)
     }
@@ -198,7 +200,8 @@ enum EndianDebugInfo<'object> {
 
 /// `DebugInfo` holds the debug information derived from a wrapping `object::File`.
 struct DebugInfo<'object, Endian>
-    where Endian: gimli::Endianity
+where
+    Endian: gimli::Endianity,
 {
     debug_line: gimli::DebugLine<'object, Endian>,
     units: Vec<Unit<'object, Endian>>,
@@ -211,7 +214,8 @@ impl Mapping {
     /// The target file will be memmap'd, and then `gimli` is used to parse out the necessary debug
     /// symbols, without copying data when possible.
     pub fn new<P>(file_path: P) -> Result<Mapping>
-        where P: AsRef<path::Path>
+    where
+        P: AsRef<path::Path>,
     {
         Options::default().build(file_path)
     }
@@ -222,25 +226,24 @@ impl Mapping {
 
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
-            let file = object::File::parse(unsafe { mmap.as_slice() });
+            let file = object::File::parse(unsafe { mmap.as_slice() })?;
             OwningHandle::try_new(Box::new(file), |file| -> Result<_> {
                 let file: &object::File = unsafe { &*file };
                 Self::symbolicate(file, opts)
                     .chain_err(|| "failed to analyze debug information")
                     .map(|di| Box::new(di))
-            })
-                    .map(|di| Box::new(MmapDerived { inner: di }))
-        })
-                .map(|di| Mapping { inner: di })
+            }).map(|di| Box::new(MmapDerived { inner: di }))
+        }).map(|di| Mapping { inner: di })
     }
 
     /// Locate the source file and line corresponding to the given virtual memory address.
     ///
     /// If the `Mapping` was constructed with `with_functions`, information about the containing
     /// function may also be returned when available.
-    pub fn locate(&self,
-                  addr: u64)
-                  -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    pub fn locate(
+        &self,
+        addr: u64,
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         self.inner.locate(addr)
     }
 
@@ -263,7 +266,8 @@ impl<'object> EndianDebugInfo<'object> {
 }
 
 impl<'object, Endian> DebugInfo<'object, Endian>
-    where Endian: gimli::Endianity
+where
+    Endian: gimli::Endianity,
 {
     fn new<'a>(file: &'a object::File, opts: Options) -> Result<DebugInfo<'a, Endian>> {
         let debug_info = file.get_section(".debug_info")
@@ -283,12 +287,14 @@ impl<'object, Endian> DebugInfo<'object, Endian>
         let mut units = Vec::new();
         let mut headers = debug_info.units();
         while let Some(header) = headers.next().chain_err(|| "couldn't get DIE header")? {
-            let unit = Unit::parse(&debug_abbrev,
-                                   &debug_ranges,
-                                   &debug_line,
-                                   &debug_str,
-                                   &header,
-                                   opts);
+            let unit = Unit::parse(
+                &debug_abbrev,
+                &debug_ranges,
+                &debug_line,
+                &debug_str,
+                &header,
+                opts,
+            );
             let unit = unit.chain_err(|| "encountered invalid compilation unit")?;
             if let Some(unit) = unit {
                 units.push(unit);
@@ -296,15 +302,16 @@ impl<'object, Endian> DebugInfo<'object, Endian>
         }
 
         Ok(DebugInfo {
-               debug_line: debug_line,
-               units: units,
-               opts: opts,
-           })
+            debug_line: debug_line,
+            units: units,
+            opts: opts,
+        })
     }
 
-    pub fn locate(&self,
-                  addr: u64)
-                  -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    pub fn locate(
+        &self,
+        addr: u64,
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &self.units {
             if !unit.contains_address(addr) {
@@ -315,38 +322,37 @@ impl<'object, Endian> DebugInfo<'object, Endian>
             let mut current = None;
 
             // Okay, this is the right unit. Check our DebugLine rows.
-            let rows =
-                unit.cache_every.and_then(|cache_every| {
-                    unit.skiplist.read().ok().and_then(|skiplist| {
-                        match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
-                            Ok(i) => {
-                                // we have a state machine for this address!
-                                current = Some(skiplist[i].2);
-                                rowi = (i + 1) * cache_every + 1;
-                                Some(skiplist[i].1.clone())
-                            }
-                            Err(i) if i == 0 => {
-                                // i is the entry in the skiplist where addr *would* appear. Thus,
-                                // we don't have a state machine for *this* address, but we do know
-                                // that:
-                                //
-                                //  - if i == 0, we have no state machine, and must from scratch
-                                //  - if i == skiplist.len(), we scan from the last state machine
-                                //  - otherwise, the machine from i-1 eventually encounters addr
-                                None
-                            }
-                            Err(i) => {
-                                current = Some(skiplist[i - 1].2);
-                                // NOTE
-                                // we need to use i * cache_every here, not (i+1) as above.
-                                // this is because i is the i *after* the one we're chooseing to
-                                // start from (skiplist[i-1] above).
-                                rowi = i * cache_every + 1;
-                                Some(skiplist[i - 1].1.clone())
-                            }
+            let rows = unit.cache_every.and_then(|cache_every| {
+                unit.skiplist.read().ok().and_then(|skiplist| {
+                    match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
+                        Ok(i) => {
+                            // we have a state machine for this address!
+                            current = Some(skiplist[i].2);
+                            rowi = (i + 1) * cache_every + 1;
+                            Some(skiplist[i].1.clone())
                         }
-                    })
-                });
+                        Err(i) if i == 0 => {
+                            // i is the entry in the skiplist where addr *would* appear. Thus,
+                            // we don't have a state machine for *this* address, but we do know
+                            // that:
+                            //
+                            //  - if i == 0, we have no state machine, and must from scratch
+                            //  - if i == skiplist.len(), we scan from the last state machine
+                            //  - otherwise, the machine from i-1 eventually encounters addr
+                            None
+                        }
+                        Err(i) => {
+                            current = Some(skiplist[i - 1].2);
+                            // NOTE
+                            // we need to use i * cache_every here, not (i+1) as above.
+                            // this is because i is the i *after* the one we're chooseing to
+                            // start from (skiplist[i-1] above).
+                            rowi = i * cache_every + 1;
+                            Some(skiplist[i - 1].1.clone())
+                        }
+                    }
+                })
+            });
 
             let mut rows = if let Some(rows) = rows {
                 rows
@@ -394,9 +400,11 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                             if let Ok(mut skiplist) = unit.skiplist.write() {
                                 let i = rowi / cache_every - 1;
                                 if i >= skiplist.len() {
-                                    debug_assert!(i == skiplist.len(),
-                                                  "we somehow didn't cache a StateMachine for a \
-                                                   previous iteration step!");
+                                    debug_assert!(
+                                        i == skiplist.len(),
+                                        "we somehow didn't cache a StateMachine for a \
+                                         previous iteration step!"
+                                    );
                                     // cache this StateMachine
                                     skiplist.push((row.address(), rows.clone(), row));
                                 }
@@ -452,13 +460,12 @@ impl<'object, Endian> DebugInfo<'object, Endian>
                 }
 
                 // This program covers the given address -- calculate how well it matches
-                let (range, dist) =
-                    p.ranges
-                        .iter()
-                        .filter(|range| addr >= range.begin && addr < range.end)
-                        .map(|range| (range, addr - range.begin))
-                        .min_by_key(|&(_, dist)| dist)
-                        .expect("p.contains_address() is true, but no matching range found");
+                let (range, dist) = p.ranges
+                    .iter()
+                    .filter(|range| addr >= range.begin && addr < range.end)
+                    .map(|range| (range, addr - range.begin))
+                    .min_by_key(|&(_, dist)| dist)
+                    .expect("p.contains_address() is true, but no matching range found");
 
                 if let Some((prev, prange, pdist)) = func.take() {
                     // are we a better match?
@@ -502,9 +509,11 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 
             let func = func.map(|u| {
                 if unit.language.is_some() {
-                    debug_assert!(self.opts.with_demangling,
-                                  "We shouldn't even bother finding the DW_AT_language if we \
-                                   aren't demangling");
+                    debug_assert!(
+                        self.opts.with_demangling,
+                        "We shouldn't even bother finding the DW_AT_language if we \
+                         aren't demangling"
+                    );
                 }
                 match unit.language {
                     Some(gimli::DW_LANG_C_plus_plus) |
@@ -537,8 +546,10 @@ fn demangle_cpp_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
 
 #[cfg(feature = "rustc-demangle")]
 fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
-    Cow::from(format!("{}",
-                      rustc_demangle::demangle(mangled.to_string_lossy().as_ref())))
+    Cow::from(format!(
+        "{}",
+        rustc_demangle::demangle(mangled.to_string_lossy().as_ref())
+    ))
 }
 
 #[cfg(not(feature = "rustc-demangle"))]
@@ -549,9 +560,22 @@ fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
 // TODO: most of this should be moved to the main library.
 use std::marker::PhantomData;
 struct Unit<'input, Endian>
-    where Endian: gimli::Endianity
+where
+    Endian: gimli::Endianity,
 {
-    skiplist: sync::RwLock<Vec<(u64, gimli::StateMachine<'input, Endian>, gimli::LineNumberRow)>>,
+    skiplist: sync::RwLock<
+        Vec<
+            (
+                u64,
+                gimli::StateMachine<
+                    'input,
+                    gimli::IncompleteLineNumberProgram<'input, Endian>,
+                    Endian,
+                >,
+                gimli::LineNumberRow,
+            ),
+        >,
+    >,
 
     cache_every: Option<usize>,
     address_size: u8,
@@ -566,32 +590,37 @@ struct Unit<'input, Endian>
 }
 
 impl<'input, Endian> Unit<'input, Endian>
-    where Endian: gimli::Endianity
+where
+    Endian: gimli::Endianity,
 {
-    fn parse(debug_abbrev: &gimli::DebugAbbrev<Endian>,
-             debug_ranges: &gimli::DebugRanges<Endian>,
-             debug_line: &gimli::DebugLine<'input, Endian>,
-             debug_str: &gimli::DebugStr<'input, Endian>,
-             header: &gimli::CompilationUnitHeader<'input, Endian>,
-             opts: Options)
-             -> Result<Option<Unit<'input, Endian>>> {
+    fn parse(
+        debug_abbrev: &gimli::DebugAbbrev<Endian>,
+        debug_ranges: &gimli::DebugRanges<Endian>,
+        debug_line: &gimli::DebugLine<'input, Endian>,
+        debug_str: &gimli::DebugStr<'input, Endian>,
+        header: &gimli::CompilationUnitHeader<'input, Endian>,
+        opts: Options,
+    ) -> Result<Option<Unit<'input, Endian>>> {
 
         // We first want to parse out the compilation unit, and then any contained subprograms.
-        let abbrev = header.abbreviations(*debug_abbrev)
+        let abbrev = header
+            .abbreviations(*debug_abbrev)
             .chain_err(|| "compilation unit refers to non-existing abbreviations")?;
 
         let mut entries = header.entries(&abbrev);
         let mut unit = {
             // Scoped so that we can continue using entries for the loop below
-            let (_, entry) = entries.next_dfs()
+            let (_, entry) = entries
+                .next_dfs()
                 .chain_err(|| "compilation unit is broken")?
                 .ok_or_else(|| {
                     ErrorKind::InvalidDebugSymbols(DebugInfoError::UnitWithoutCompilationUnit)
                 })?;
 
             if entry.tag() != gimli::DW_TAG_compile_unit {
-                return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::MissingComplilationUnit)
-                               .into());
+                return Err(
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::MissingComplilationUnit).into(),
+                );
             }
 
             let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
@@ -628,26 +657,30 @@ impl<'input, Endian> Unit<'input, Endian>
                 }
                 _ => return Ok(None),
             };
-            let comp_dir = entry.attr(gimli::DW_AT_comp_dir)
+            let comp_dir = entry
+                .attr(gimli::DW_AT_comp_dir)
                 .map_err(|e| Error::from(ErrorKind::Gimli(e)))
                 .chain_err(|| "invalid compilation unit directory")?
                 .and_then(|attr| attr.string_value(debug_str));
-            let comp_name = entry.attr(gimli::DW_AT_name)
+            let comp_name = entry
+                .attr(gimli::DW_AT_name)
                 .map_err(|e| Error::from(ErrorKind::Gimli(e)))
                 .chain_err(|| "invalid compilation unit name")?
                 .and_then(|attr| attr.string_value(debug_str));
             let language = if opts.with_demangling {
-                entry.attr(gimli::DW_AT_language)
+                entry
+                    .attr(gimli::DW_AT_language)
                     .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
                     .and_then(|attr| match attr.value() {
-                                  gimli::AttributeValue::Language(lang) => Some(lang),
-                                  _ => None,
-                              })
+                        gimli::AttributeValue::Language(lang) => Some(lang),
+                        _ => None,
+                    })
             } else {
                 None
             };
 
-            let lineh = debug_line.header(line_offset, header.address_size(), comp_dir, comp_name)
+            let linep = debug_line
+                .program(line_offset, header.address_size(), comp_dir, comp_name)
                 .chain_err(|| "invalid compilation unit line rows")?;
 
             // We want to cache every sqrt(#rows).
@@ -658,7 +691,7 @@ impl<'input, Endian> Unit<'input, Endian>
             // Based on some empirical data from a couple of applications, the relationship seems
             // to be about 5.5 bytes/row for units with a decent number of rows. The values
             // vary more for smaller units, but there cache_every also matters less.
-            let nrows = lineh.raw_program_buf().len() as f64 / 5.5;
+            let nrows = linep.header().raw_program_buf().len() as f64 / 5.5;
             // If a unit only has a very small number of rows, we can avoid the skiplist
             // altogether (also, our estimate is more likely to be wrong).
             let cache_every = if nrows >= 100.0 {
@@ -688,8 +721,10 @@ impl<'input, Endian> Unit<'input, Endian>
             return Ok(Some(unit));
         }
 
-        while let Some((_, entry)) =
-            entries.next_dfs().chain_err(|| "tree below compilation unit yielded invalid entry")? {
+        while let Some((_, entry)) = entries
+            .next_dfs()
+            .chain_err(|| "tree below compilation unit yielded invalid entry")?
+        {
 
             // We only care about functions
             match entry.tag() {
@@ -699,11 +734,12 @@ impl<'input, Endian> Unit<'input, Endian>
             }
 
             // Where does this function live?
-            let ranges =
-                Self::get_ranges(entry,
-                                 debug_ranges,
-                                 header.address_size(),
-                                 unit.base_address).chain_err(|| "subroutine has invalid ranges")?;
+            let ranges = Self::get_ranges(
+                entry,
+                debug_ranges,
+                header.address_size(),
+                unit.base_address,
+            ).chain_err(|| "subroutine has invalid ranges")?;
             if ranges.is_empty() {
                 continue;
             }
@@ -722,63 +758,80 @@ impl<'input, Endian> Unit<'input, Endian>
             // exhibit the same behavior, but it is something we should aim to eventually work
             // around. Hence: TODO
 
-            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev).chain_err(|| {
-                               format!("failed to resolve name for subroutine at <{:x}><{:x}>",
-                                       header.offset().0,
-                                       entry.offset().0)
-                           })?;
-
-            let name = maybe_name.ok_or_else(|| {
-                    ErrorKind::InvalidDebugSymbols(DebugInfoError::SubroutineMissingName(header.offset().0, entry.offset().0))
+            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev)
+                .chain_err(|| {
+                    format!(
+                        "failed to resolve name for subroutine at <{:x}><{:x}>",
+                        header.offset().0,
+                        entry.offset().0
+                    )
                 })?;
 
+            let name = maybe_name.ok_or_else(|| {
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::SubroutineMissingName(
+                    header.offset().0,
+                    entry.offset().0,
+                ))
+            })?;
+
             unit.programs.push(Program {
-                                   ranges: ranges,
-                                   inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
-                                   name: name,
-                               });
+                ranges: ranges,
+                inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
+                name: name,
+            });
         }
 
         Ok(Some(unit))
     }
 
-    fn resolve_name<'a, 'b>(entry: &gimli::DebuggingInformationEntry<'input, 'a, 'b, Endian>,
-                            header: &gimli::CompilationUnitHeader<'input, Endian>,
-                            debug_str: &gimli::DebugStr<'input, Endian>,
-                            abbrev: &gimli::Abbreviations)
-                            -> Result<Option<&'input std::ffi::CStr>> {
+    fn resolve_name<'a, 'b>(
+        entry: &gimli::DebuggingInformationEntry<'input, 'a, 'b, Endian>,
+        header: &gimli::CompilationUnitHeader<'input, Endian>,
+        debug_str: &gimli::DebugStr<'input, Endian>,
+        abbrev: &gimli::Abbreviations,
+    ) -> Result<Option<&'input std::ffi::CStr>> {
 
         // For naming, we prefer the linked name, if available
-        if let Some(name) = entry.attr(gimli::DW_AT_linkage_name)
-               .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-               .chain_err(|| "invalid subprogram linkage name")?
-               .and_then(|attr| attr.string_value(debug_str)) {
+        if let Some(name) = entry
+            .attr(gimli::DW_AT_linkage_name)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram linkage name")?
+            .and_then(|attr| attr.string_value(debug_str))
+        {
             return Ok(Some(name));
         }
-        if let Some(name) = entry.attr(gimli::DW_AT_MIPS_linkage_name)
-               .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-               .chain_err(|| "invalid subprogram linkage name")?
-               .and_then(|attr| attr.string_value(debug_str)) {
+        if let Some(name) = entry
+            .attr(gimli::DW_AT_MIPS_linkage_name)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram linkage name")?
+            .and_then(|attr| attr.string_value(debug_str))
+        {
             return Ok(Some(name));
         }
 
         // Linked name is not available, so fall back to just plain old name, if that's available.
-        if let Some(name) = entry.attr(gimli::DW_AT_name)
-               .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-               .chain_err(|| "invalid subprogram name")?
-               .and_then(|attr| attr.string_value(debug_str)) {
+        if let Some(name) = entry
+            .attr(gimli::DW_AT_name)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram name")?
+            .and_then(|attr| attr.string_value(debug_str))
+        {
             return Ok(Some(name));
         }
 
         // If we don't have the link name, check if this function refers to another
-        if let Some(abstract_origin) = Self::get_entry(entry, header, abbrev, gimli::DW_AT_abstract_origin)
-                .chain_err(|| "invalid subprogram abstract origin")? {
+        if let Some(abstract_origin) =
+            Self::get_entry(entry, header, abbrev, gimli::DW_AT_abstract_origin)
+                .chain_err(|| "invalid subprogram abstract origin")?
+        {
             let name = Self::resolve_name(&abstract_origin, header, debug_str, abbrev)
                 .chain_err(|| "abstract origin does not resolve to a name")?;
             return Ok(name);
         }
-        if let Some(specification) = Self::get_entry(entry, header, abbrev, gimli::DW_AT_specification)
-                .chain_err(|| "invalid subprogram specification")? {
+        if let Some(specification) =
+            Self::get_entry(entry, header, abbrev, gimli::DW_AT_specification)
+                .chain_err(|| "invalid subprogram specification")?
+        {
             let name = Self::resolve_name(&specification, header, debug_str, abbrev)
                 .chain_err(|| "specification does not resolve to a name")?;
             return Ok(name);
@@ -787,48 +840,58 @@ impl<'input, Endian> Unit<'input, Endian>
         Ok(None)
     }
 
-    fn get_entry<'a>
-        (entry: &gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>,
-         header: &'a gimli::CompilationUnitHeader<'input, Endian>,
-         abbrev: &'a gimli::Abbreviations,
-         attr: gimli::DwAt)
-         -> Result<Option<gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>>> {
+    fn get_entry<'a>(
+        entry: &gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>,
+        header: &'a gimli::CompilationUnitHeader<'input, Endian>,
+        abbrev: &'a gimli::Abbreviations,
+        attr: gimli::DwAt,
+    ) -> Result<Option<gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>>> {
         if let Some(gimli::AttributeValue::UnitRef(offset)) =
-            entry.attr_value(attr).map_err(|e| Error::from(ErrorKind::Gimli(e)))? {
+            entry
+                .attr_value(attr)
+                .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
+        {
             let mut entries = header.entries_at_offset(abbrev, offset)?;
-            let (_, entry) = entries.next_dfs()?
-            .ok_or_else(|| {
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
-            })?;
+            let (_, entry) = entries
+                .next_dfs()?
+                .ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
+                })?;
             return Ok(Some(entry.clone()));
         }
 
         Ok(None)
     }
 
-    fn get_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
-                  debug_ranges: &gimli::DebugRanges<Endian>,
-                  address_size: u8,
-                  base_address: u64)
-                  -> Result<Vec<gimli::Range>> {
-        if let Some(range) = Self::parse_noncontiguous_ranges(entry,
-                                                              debug_ranges,
-                                                              address_size,
-                                                              base_address)? {
+    fn get_ranges(
+        entry: &gimli::DebuggingInformationEntry<Endian>,
+        debug_ranges: &gimli::DebugRanges<Endian>,
+        address_size: u8,
+        base_address: u64,
+    ) -> Result<Vec<gimli::Range>> {
+        if let Some(range) = Self::parse_noncontiguous_ranges(
+            entry,
+            debug_ranges,
+            address_size,
+            base_address,
+        )? {
             return Ok(range);
         }
-        if let Some(range) = Self::parse_contiguous_range(entry)?.map(|range| vec![range]) {
+        if let Some(range) = Self::parse_contiguous_range(entry)?
+            .map(|range| vec![range])
+        {
             return Ok(range);
         }
         return Ok(vec![]);
     }
 
     // This must be checked before `parse_contiguous_range`.
-    fn parse_noncontiguous_ranges(entry: &gimli::DebuggingInformationEntry<Endian>,
-                                  debug_ranges: &gimli::DebugRanges<Endian>,
-                                  address_size: u8,
-                                  base_address: u64)
-                                  -> Result<Option<Vec<gimli::Range>>> {
+    fn parse_noncontiguous_ranges(
+        entry: &gimli::DebuggingInformationEntry<Endian>,
+        debug_ranges: &gimli::DebugRanges<Endian>,
+        address_size: u8,
+        base_address: u64,
+    ) -> Result<Option<Vec<gimli::Range>>> {
         let offset = match entry.attr_value(gimli::DW_AT_ranges) {
             Ok(Some(gimli::AttributeValue::DebugRangesRef(offset))) => offset,
             Err(e) => {
@@ -838,18 +901,21 @@ impl<'input, Endian> Unit<'input, Endian>
             _ => return Ok(None),
         };
 
-        let ranges = debug_ranges.ranges(offset, address_size, base_address)
+        let ranges = debug_ranges
+            .ranges(offset, address_size, base_address)
             .chain_err(|| "range offsets are not valid")?;
         let ranges = ranges.collect().chain_err(|| "range could not be parsed")?;
         Ok(Some(ranges))
     }
 
-    fn parse_contiguous_range(entry: &gimli::DebuggingInformationEntry<Endian>)
-                              -> Result<Option<gimli::Range>> {
+    fn parse_contiguous_range(
+        entry: &gimli::DebuggingInformationEntry<Endian>,
+    ) -> Result<Option<gimli::Range>> {
 
         if let Ok(Some(..)) = entry.attr_value(gimli::DW_AT_ranges) {
-            return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot)
-                           .into());
+            return Err(
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot).into(),
+            );
         }
 
         let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
@@ -884,26 +950,36 @@ impl<'input, Endian> Unit<'input, Endian>
         }
 
         if low_pc > high_pc {
-            return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeInverted).into());
+            return Err(
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeInverted).into(),
+            );
         }
 
         Ok(Some(gimli::Range {
-                    begin: low_pc,
-                    end: high_pc,
-                }))
+            begin: low_pc,
+            end: high_pc,
+        }))
     }
 
     fn contains_address(&self, address: u64) -> bool {
-        self.ranges.iter().any(|range| address >= range.begin && address < range.end)
+        self.ranges
+            .iter()
+            .any(|range| address >= range.begin && address < range.end)
     }
 
-    fn line_rows(&self,
-                 debug_line: &gimli::DebugLine<'input, Endian>)
-                 -> gimli::Result<gimli::StateMachine<'input, Endian>> {
-        debug_line.header(self.line_offset,
-                          self.address_size,
-                          self.comp_dir,
-                          self.comp_name)
+    fn line_rows(
+        &self,
+        debug_line: &gimli::DebugLine<'input, Endian>,
+    ) -> gimli::Result<
+        gimli::StateMachine<'input, gimli::IncompleteLineNumberProgram<'input, Endian>, Endian>,
+    > {
+        debug_line
+            .program(
+                self.line_offset,
+                self.address_size,
+                self.comp_dir,
+                self.comp_name,
+            )
             .map(|h| h.rows())
     }
 
@@ -921,7 +997,9 @@ struct Program<'input> {
 
 impl<'input> Program<'input> {
     fn contains_address(&self, address: u64) -> bool {
-        self.ranges.iter().any(|range| address >= range.begin && address < range.end)
+        self.ranges
+            .iter()
+            .any(|range| address >= range.begin && address < range.end)
     }
 }
 
