@@ -55,8 +55,6 @@ pub enum DebugInfoError {
     MissingComplilationUnit,
     /// The first entry in a unit is not a compilation unit
     UnitWithoutCompilationUnit,
-    /// A subroutine (unit offset, routine offset) has no name
-    SubroutineMissingName(usize, usize),
     /// Entry offset points to empty entry
     DanglingEntryOffset,
     /// Asked to parse non-contiguous range as contiguous.
@@ -79,9 +77,6 @@ impl fmt::Display for DebugInfoError {
             }
             DebugInfoError::UnitWithoutCompilationUnit => {
                 write!(f, "The first entry in a unit is not a compilation unit")
-            }
-            DebugInfoError::SubroutineMissingName(u, r) => {
-                write!(f, "A subroutine (<{:x}><{:x}>) has no name", u, r)
             }
             DebugInfoError::DanglingEntryOffset => write!(f, "Entry offset points to empty entry"),
             DebugInfoError::RangeBothContiguousAndNot => {
@@ -767,18 +762,13 @@ where
                     )
                 })?;
 
-            let name = maybe_name.ok_or_else(|| {
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::SubroutineMissingName(
-                    header.offset().0,
-                    entry.offset().0,
-                ))
-            })?;
-
-            unit.programs.push(Program {
-                ranges: ranges,
-                inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
-                name: name,
-            });
+            if let Some(name) = maybe_name {
+                unit.programs.push(Program {
+                    ranges: ranges,
+                    inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
+                    name: name,
+                });
+            }
         }
 
         Ok(Some(unit))
