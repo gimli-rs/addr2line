@@ -198,7 +198,7 @@ struct DebugInfo<'object, Endian>
 where
     Endian: gimli::Endianity,
 {
-    debug_line: gimli::DebugLine<'object, Endian>,
+    debug_line: gimli::DebugLine<gimli::EndianBuf<'object, Endian>>,
     units: Vec<Unit<'object, Endian>>,
     opts: Options,
 }
@@ -244,9 +244,13 @@ impl Mapping {
 
     fn symbolicate<'a>(file: &'a object::File, opts: Options) -> Result<EndianDebugInfo<'a>> {
         if file.is_little_endian() {
-            Ok(EndianDebugInfo::LEInfo(DebugInfo::new(file, opts)?))
+            Ok(EndianDebugInfo::LEInfo(
+                DebugInfo::new(file, opts, gimli::LittleEndian)?,
+            ))
         } else {
-            Ok(EndianDebugInfo::BEInfo(DebugInfo::new(file, opts)?))
+            Ok(EndianDebugInfo::BEInfo(
+                DebugInfo::new(file, opts, gimli::BigEndian)?,
+            ))
         }
     }
 }
@@ -264,20 +268,24 @@ impl<'object, Endian> DebugInfo<'object, Endian>
 where
     Endian: gimli::Endianity,
 {
-    fn new<'a>(file: &'a object::File, opts: Options) -> Result<DebugInfo<'a, Endian>> {
+    fn new<'a>(
+        file: &'a object::File,
+        opts: Options,
+        endian: Endian,
+    ) -> Result<DebugInfo<'a, Endian>> {
         let debug_info = file.get_section(".debug_info")
             .ok_or(ErrorKind::MissingDebugSection("debug_info"))?;
-        let debug_info = gimli::DebugInfo::<Endian>::new(debug_info);
+        let debug_info = gimli::DebugInfo::new(debug_info, endian);
         let debug_abbrev = file.get_section(".debug_abbrev")
             .ok_or(ErrorKind::MissingDebugSection("debug_abbrev"))?;
-        let debug_abbrev = gimli::DebugAbbrev::<Endian>::new(debug_abbrev);
+        let debug_abbrev = gimli::DebugAbbrev::new(debug_abbrev, endian);
         let debug_line = file.get_section(".debug_line")
             .ok_or(ErrorKind::MissingDebugSection("debug_line"))?;
-        let debug_line = gimli::DebugLine::<Endian>::new(debug_line);
+        let debug_line = gimli::DebugLine::new(debug_line, endian);
         let debug_ranges = file.get_section(".debug_ranges").unwrap_or(&[]);
-        let debug_ranges = gimli::DebugRanges::<Endian>::new(debug_ranges);
+        let debug_ranges = gimli::DebugRanges::new(debug_ranges, endian);
         let debug_str = file.get_section(".debug_str").unwrap_or(&[]);
-        let debug_str = gimli::DebugStr::<Endian>::new(debug_str);
+        let debug_str = gimli::DebugStr::new(debug_str, endian);
 
         let mut units = Vec::new();
         let mut headers = debug_info.units();
@@ -448,7 +456,7 @@ where
             }
 
             // The unit also has programs, so let's look for the function wrapping this address.
-            let mut func: Option<(&Program, &gimli::Range, u64)> = None;
+            let mut func: Option<(&Program<Endian>, &gimli::Range, u64)> = None;
             for p in &unit.programs {
                 if !p.contains_address(addr) {
                     continue;
@@ -513,8 +521,8 @@ where
                 match unit.language {
                     Some(gimli::DW_LANG_C_plus_plus) |
                     Some(gimli::DW_LANG_C_plus_plus_03) |
-                    Some(gimli::DW_LANG_C_plus_plus_11) => demangle_cpp_symbol(u.0.name),
-                    Some(gimli::DW_LANG_Rust) => demangle_rust_symbol(u.0.name),
+                    Some(gimli::DW_LANG_C_plus_plus_11) => demangle_cpp_symbol(u.0.name.buf()),
+                    Some(gimli::DW_LANG_Rust) => demangle_rust_symbol(u.0.name.buf()),
                     _ => u.0.name.to_string_lossy(),
                 }
             });
@@ -526,34 +534,33 @@ where
 }
 
 #[cfg(feature = "cpp_demangle")]
-fn demangle_cpp_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
-    if let Ok(sym) = cpp_demangle::Symbol::new(mangled.to_bytes()) {
+fn demangle_cpp_symbol(mangled: &[u8]) -> Cow<str> {
+    if let Ok(sym) = cpp_demangle::Symbol::new(mangled) {
         Cow::from(format!("{}", sym))
     } else {
-        mangled.to_string_lossy()
+        String::from_utf8_lossy(mangled)
     }
 }
 
 #[cfg(not(feature = "cpp_demangle"))]
-fn demangle_cpp_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
-    mangled.to_string_lossy()
+fn demangle_cpp_symbol(mangled: &[u8]) -> Cow<str> {
+    String::from_utf8_lossy(mangled)
 }
 
 #[cfg(feature = "rustc-demangle")]
-fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
+fn demangle_rust_symbol(mangled: &[u8]) -> Cow<str> {
     Cow::from(format!(
         "{}",
-        rustc_demangle::demangle(mangled.to_string_lossy().as_ref())
+        rustc_demangle::demangle(String::from_utf8_lossy(mangled).as_ref())
     ))
 }
 
 #[cfg(not(feature = "rustc-demangle"))]
-fn demangle_rust_symbol(mangled: &std::ffi::CStr) -> Cow<str> {
-    mangled.to_string_lossy()
+fn demangle_rust_symbol(mangled: &[u8]) -> Cow<str> {
+    String::from_utf8_lossy(mangled)
 }
 
 // TODO: most of this should be moved to the main library.
-use std::marker::PhantomData;
 struct Unit<'input, Endian>
 where
     Endian: gimli::Endianity,
@@ -563,9 +570,8 @@ where
             (
                 u64,
                 gimli::StateMachine<
-                    'input,
-                    gimli::IncompleteLineNumberProgram<'input, Endian>,
-                    Endian,
+                    gimli::EndianBuf<'input, Endian>,
+                    gimli::IncompleteLineNumberProgram<gimli::EndianBuf<'input, Endian>>,
                 >,
                 gimli::LineNumberRow,
             ),
@@ -577,11 +583,10 @@ where
     base_address: u64,
     ranges: Vec<gimli::Range>,
     line_offset: gimli::DebugLineOffset,
-    comp_dir: Option<&'input std::ffi::CStr>,
-    comp_name: Option<&'input std::ffi::CStr>,
-    programs: Vec<Program<'input>>,
+    comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
+    comp_name: Option<gimli::EndianBuf<'input, Endian>>,
+    programs: Vec<Program<'input, Endian>>,
     language: Option<gimli::DwLang>,
-    phantom: PhantomData<Endian>,
 }
 
 impl<'input, Endian> Unit<'input, Endian>
@@ -589,17 +594,17 @@ where
     Endian: gimli::Endianity,
 {
     fn parse(
-        debug_abbrev: &gimli::DebugAbbrev<Endian>,
-        debug_ranges: &gimli::DebugRanges<Endian>,
-        debug_line: &gimli::DebugLine<'input, Endian>,
-        debug_str: &gimli::DebugStr<'input, Endian>,
-        header: &gimli::CompilationUnitHeader<'input, Endian>,
+        debug_abbrev: &gimli::DebugAbbrev<gimli::EndianBuf<Endian>>,
+        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
+        debug_line: &gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
+        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
+        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
         opts: Options,
     ) -> Result<Option<Unit<'input, Endian>>> {
 
         // We first want to parse out the compilation unit, and then any contained subprograms.
         let abbrev = header
-            .abbreviations(*debug_abbrev)
+            .abbreviations(debug_abbrev)
             .chain_err(|| "compilation unit refers to non-existing abbreviations")?;
 
         let mut entries = header.entries(&abbrev);
@@ -707,7 +712,6 @@ where
                 comp_name: comp_name,
                 programs: vec![],
                 language: language,
-                phantom: PhantomData,
             }
         };
 
@@ -775,11 +779,11 @@ where
     }
 
     fn resolve_name<'a, 'b>(
-        entry: &gimli::DebuggingInformationEntry<'input, 'a, 'b, Endian>,
-        header: &gimli::CompilationUnitHeader<'input, Endian>,
-        debug_str: &gimli::DebugStr<'input, Endian>,
+        entry: &gimli::DebuggingInformationEntry<'a, 'b, gimli::EndianBuf<'input, Endian>>,
+        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
+        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
         abbrev: &gimli::Abbreviations,
-    ) -> Result<Option<&'input std::ffi::CStr>> {
+    ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
 
         // For naming, we prefer the linked name, if available
         if let Some(name) = entry
@@ -831,11 +835,11 @@ where
     }
 
     fn get_entry<'a>(
-        entry: &gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>,
-        header: &'a gimli::CompilationUnitHeader<'input, Endian>,
+        entry: &gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>,
+        header: &'a gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
         abbrev: &'a gimli::Abbreviations,
         attr: gimli::DwAt,
-    ) -> Result<Option<gimli::DebuggingInformationEntry<'input, 'a, 'a, Endian>>> {
+    ) -> Result<Option<gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>>> {
         if let Some(gimli::AttributeValue::UnitRef(offset)) =
             entry
                 .attr_value(attr)
@@ -854,8 +858,8 @@ where
     }
 
     fn get_ranges(
-        entry: &gimli::DebuggingInformationEntry<Endian>,
-        debug_ranges: &gimli::DebugRanges<Endian>,
+        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
+        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
         address_size: u8,
         base_address: u64,
     ) -> Result<Vec<gimli::Range>> {
@@ -877,8 +881,8 @@ where
 
     // This must be checked before `parse_contiguous_range`.
     fn parse_noncontiguous_ranges(
-        entry: &gimli::DebuggingInformationEntry<Endian>,
-        debug_ranges: &gimli::DebugRanges<Endian>,
+        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
+        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
         address_size: u8,
         base_address: u64,
     ) -> Result<Option<Vec<gimli::Range>>> {
@@ -899,7 +903,7 @@ where
     }
 
     fn parse_contiguous_range(
-        entry: &gimli::DebuggingInformationEntry<Endian>,
+        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
     ) -> Result<Option<gimli::Range>> {
 
         if let Ok(Some(..)) = entry.attr_value(gimli::DW_AT_ranges) {
@@ -959,9 +963,12 @@ where
 
     fn line_rows(
         &self,
-        debug_line: &gimli::DebugLine<'input, Endian>,
+        debug_line: &gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
     ) -> gimli::Result<
-        gimli::StateMachine<'input, gimli::IncompleteLineNumberProgram<'input, Endian>, Endian>,
+        gimli::StateMachine<
+            gimli::EndianBuf<'input, Endian>,
+            gimli::IncompleteLineNumberProgram<gimli::EndianBuf<'input, Endian>>,
+        >,
     > {
         debug_line
             .program(
@@ -973,19 +980,25 @@ where
             .map(|h| h.rows())
     }
 
-    fn comp_dir(&self) -> Option<&std::ffi::CStr> {
+    fn comp_dir(&self) -> Option<gimli::EndianBuf<'input, Endian>> {
         self.comp_dir
     }
 }
 
-struct Program<'input> {
+struct Program<'input, Endian>
+where
+    Endian: gimli::Endianity,
+{
     ranges: Vec<gimli::Range>,
-    name: &'input std::ffi::CStr,
+    name: gimli::EndianBuf<'input, Endian>,
     #[allow(dead_code)]
     inlined: bool,
 }
 
-impl<'input> Program<'input> {
+impl<'input, Endian> Program<'input, Endian>
+where
+    Endian: gimli::Endianity,
+{
     fn contains_address(&self, address: u64) -> bool {
         self.ranges
             .iter()
