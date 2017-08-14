@@ -176,30 +176,24 @@ impl Options {
 /// Constructing a `Mapping` is somewhat costly, so users should aim to re-use created `Mapping`s
 /// when performing lookups for many addresses over the same executable.
 pub struct Mapping {
-    // we use `OwningHandle` so that we can store both the Mmap and its associated object::File.
-    // the lifetime of MmapDeriver here isn't *technically* static, it's *out* lifetime, but there
-    // isn't a good way to express that as far as I am aware? suggestions welcome.
-    inner: OwningHandle<Box<memmap::Mmap>, Box<MmapDerived<'static>>>,
+    // we use `OwningHandle` so that we can store both the Mmap and the parsed debug info.
+    // the lifetime of EndianDebugInfo here isn't *technically* static, it's *our* lifetime,
+    // but there isn't a good way to express that as far as I am aware? suggestions welcome.
+    inner: OwningHandle<Box<memmap::Mmap>, Box<EndianDebugInfo<'static>>>,
 }
 
-/// `MmapDerived` uses an `OwningHandle` to allow an `object::File` and the data structures we
-/// derive from it to be co-owned.
-struct MmapDerived<'mmap> {
-    inner: OwningHandle<Box<object::File<'mmap>>, Box<EndianDebugInfo<'mmap>>>,
+enum EndianDebugInfo<'input> {
+    LEInfo(DebugInfo<'input, gimli::LittleEndian>),
+    BEInfo(DebugInfo<'input, gimli::BigEndian>),
 }
 
-enum EndianDebugInfo<'object> {
-    LEInfo(DebugInfo<'object, gimli::LittleEndian>),
-    BEInfo(DebugInfo<'object, gimli::BigEndian>),
-}
-
-/// `DebugInfo` holds the debug information derived from a wrapping `object::File`.
-struct DebugInfo<'object, Endian>
+/// `DebugInfo` holds the debug information derived from a data buffer.
+struct DebugInfo<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    debug_line: gimli::DebugLine<gimli::EndianBuf<'object, Endian>>,
-    units: Vec<Unit<'object, Endian>>,
+    debug_line: gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
+    units: Vec<Unit<'input, Endian>>,
     opts: Options,
 }
 
@@ -222,12 +216,9 @@ impl Mapping {
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
             let file = object::File::parse(unsafe { mmap.as_slice() })?;
-            OwningHandle::try_new(Box::new(file), |file| -> Result<_> {
-                let file: &object::File = unsafe { &*file };
-                Self::symbolicate(file, opts)
-                    .chain_err(|| "failed to analyze debug information")
-                    .map(|di| Box::new(di))
-            }).map(|di| Box::new(MmapDerived { inner: di }))
+            Self::symbolicate(&file, opts)
+                .chain_err(|| "failed to analyze debug information")
+                .map(|di| Box::new(di))
         }).map(|di| Mapping { inner: di })
     }
 
@@ -242,7 +233,7 @@ impl Mapping {
         self.inner.locate(addr)
     }
 
-    fn symbolicate<'a>(file: &'a object::File, opts: Options) -> Result<EndianDebugInfo<'a>> {
+    fn symbolicate<'a>(file: &object::File<'a>, opts: Options) -> Result<EndianDebugInfo<'a>> {
         if file.is_little_endian() {
             Ok(EndianDebugInfo::LEInfo(
                 DebugInfo::new(file, opts, gimli::LittleEndian)?,
@@ -255,7 +246,7 @@ impl Mapping {
     }
 }
 
-impl<'object> EndianDebugInfo<'object> {
+impl<'input> EndianDebugInfo<'input> {
     fn locate(&self, addr: u64) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         match *self {
             EndianDebugInfo::LEInfo(ref dbg) => dbg.locate(addr),
@@ -264,15 +255,15 @@ impl<'object> EndianDebugInfo<'object> {
     }
 }
 
-impl<'object, Endian> DebugInfo<'object, Endian>
+impl<'input, Endian> DebugInfo<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    fn new<'a>(
-        file: &'a object::File,
+    fn new(
+        file: &object::File<'input>,
         opts: Options,
         endian: Endian,
-    ) -> Result<DebugInfo<'a, Endian>> {
+    ) -> Result<DebugInfo<'input, Endian>> {
         let debug_info = file.get_section(".debug_info")
             .ok_or(ErrorKind::MissingDebugSection("debug_info"))?;
         let debug_info = gimli::DebugInfo::new(debug_info, endian);
@@ -1003,14 +994,5 @@ where
         self.ranges
             .iter()
             .any(|range| address >= range.begin && address < range.end)
-    }
-}
-
-// https://github.com/Kimundi/owning-ref-rs/issues/18
-use std::ops::Deref;
-impl<'mmap> Deref for MmapDerived<'mmap> {
-    type Target = EndianDebugInfo<'mmap>;
-    fn deref(&self) -> &Self::Target {
-        &*self.inner
     }
 }
