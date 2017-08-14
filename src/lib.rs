@@ -116,7 +116,7 @@ mod errors {
 }
 pub use errors::*;
 
-/// A builder for configuring a `Mapping`.
+/// A builder for configuring a `Mapping` or `BufferMapping`.
 ///
 /// ```
 /// # fn foo() -> addr2line::Result<()> {
@@ -159,7 +159,7 @@ impl Options {
         self.with_functions()
     }
 
-    /// Finish configuration and build the `Mapping`.
+    /// Finish configuration and build a `Mapping`.
     ///
     /// The target file will be memmap'd, and then `gimli` is used to parse out
     /// the necessary debug symbols, without copying data when possible.
@@ -169,9 +169,17 @@ impl Options {
     {
         Mapping::new_inner(file_path.as_ref(), self)
     }
+
+    /// Finish configuration and build a `BufferMapping`.
+    pub fn build_from_buffer<'input>(self, buffer: &'input [u8]) -> Result<BufferMapping<'input>> {
+        BufferMapping::new_inner(buffer, self)
+    }
 }
 
 /// A `Mapping` locates and maintains the state necessary to perform address to line translation.
+///
+/// This mapping manages reading the data from the file, and ensures this data is valid as long
+/// as the mapping exists.
 ///
 /// Constructing a `Mapping` is somewhat costly, so users should aim to re-use created `Mapping`s
 /// when performing lookups for many addresses over the same executable.
@@ -182,12 +190,22 @@ pub struct Mapping {
     inner: OwningHandle<Box<memmap::Mmap>, Box<EndianDebugInfo<'static>>>,
 }
 
+/// A `BufferMapping` locates and maintains the state necessary to perform address to line
+/// translation for a given buffer containing the executable file data.
+///
+/// This mapping requires the caller to read the data from the file and ensure the lifetime
+/// of the buffer encompasses the lifetime of the mapping.
+///
+/// Constructing a `BufferMapping` is somewhat costly, so users should aim to re-use created
+/// `BufferMapping`s when performing lookups for many addresses over the same executable.
+pub struct BufferMapping<'input>(EndianDebugInfo<'input>);
+
 enum EndianDebugInfo<'input> {
     LEInfo(DebugInfo<'input, gimli::LittleEndian>),
     BEInfo(DebugInfo<'input, gimli::BigEndian>),
 }
 
-/// `DebugInfo` holds the debug information derived from a data buffer.
+/// `DebugInfo` holds the debug information derived from an input buffer.
 struct DebugInfo<'input, Endian>
 where
     Endian: gimli::Endianity,
@@ -215,8 +233,8 @@ impl Mapping {
 
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
-            let file = object::File::parse(unsafe { mmap.as_slice() })?;
-            Self::symbolicate(&file, opts)
+            let bytes = unsafe { mmap.as_slice() };
+            EndianDebugInfo::new(bytes, opts)
                 .chain_err(|| "failed to analyze debug information")
                 .map(|di| Box::new(di))
         }).map(|di| Mapping { inner: di })
@@ -232,21 +250,44 @@ impl Mapping {
     ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         self.inner.locate(addr)
     }
+}
 
-    fn symbolicate<'a>(file: &object::File<'a>, opts: Options) -> Result<EndianDebugInfo<'a>> {
-        if file.is_little_endian() {
-            Ok(EndianDebugInfo::LEInfo(
-                DebugInfo::new(file, opts, gimli::LittleEndian)?,
-            ))
-        } else {
-            Ok(EndianDebugInfo::BEInfo(
-                DebugInfo::new(file, opts, gimli::BigEndian)?,
-            ))
-        }
+impl<'input> BufferMapping<'input> {
+    /// Construct a new `BufferMapping` with the default `Options`.
+    pub fn new(bytes: &'input [u8]) -> Result<BufferMapping<'input>> {
+        Self::new_inner(bytes, Options::default())
+    }
+
+    fn new_inner(bytes: &'input [u8], opts: Options) -> Result<BufferMapping<'input>> {
+        Ok(BufferMapping(EndianDebugInfo::new(bytes, opts)?))
+    }
+
+    /// Locate the source file and line corresponding to the given virtual memory address.
+    ///
+    /// If the `BufferMapping` was constructed with `with_functions`, information about the
+    /// containing function may also be returned when available.
+    pub fn locate(
+        &self,
+        addr: u64,
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+        self.0.locate(addr)
     }
 }
 
 impl<'input> EndianDebugInfo<'input> {
+    fn new(bytes: &'input [u8], opts: Options) -> Result<EndianDebugInfo<'input>> {
+        let file = object::File::parse(bytes)?;
+        if file.is_little_endian() {
+            Ok(EndianDebugInfo::LEInfo(
+                DebugInfo::new(&file, opts, gimli::LittleEndian)?,
+            ))
+        } else {
+            Ok(EndianDebugInfo::BEInfo(
+                DebugInfo::new(&file, opts, gimli::BigEndian)?,
+            ))
+        }
+    }
+
     fn locate(&self, addr: u64) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         match *self {
             EndianDebugInfo::LEInfo(ref dbg) => dbg.locate(addr),
