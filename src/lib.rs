@@ -100,9 +100,19 @@ mod errors {
 
     error_chain! {
         foreign_links {
-            Gimli(gimli::Error) #[doc="An error given by the `gimli` library while parsing the DWARF debug symbols."];
-            BadPath(io::Error) #[doc="The path given could not be used to extract debug symbols."];
-            InvalidDebugSymbols(DebugInfoError) #[doc="An error occured while traversing the debug symbols in the provided executable."];
+            Gimli(gimli::Error)
+            /// An error given by the `gimli` library while parsing the DWARF
+            /// debug symbols.
+                ;
+
+            BadPath(io::Error)
+            /// The path given could not be used to extract debug symbols.
+                ;
+
+            InvalidDebugSymbols(DebugInfoError)
+            /// An error occured while traversing the debug symbols in the
+            /// provided executable.
+                ;
         }
 
         errors {
