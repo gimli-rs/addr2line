@@ -94,6 +94,7 @@ impl error::Error for DebugInfoError {
 }
 
 // The `error_chain!` macro spits about a bunch of these warnings on nightly.
+#[allow(unknown_lints)]
 #[allow(unused_doc_comment)]
 mod errors {
     use gimli;
