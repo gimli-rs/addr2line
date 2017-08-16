@@ -416,37 +416,29 @@ where
             let mut skipseq = false;
             while let Ok(Some((_, &row))) = rows.next_row() {
                 let row_addr = row.address();
+                if addr < row_addr {
+                    // Currently we only handle monotonically increasing sequences,
+                    // so our search is over, regardless of whether we found the row.
+                    break;
+                }
 
                 if row.end_sequence() {
-                    if current.is_some() && prev_row_addr <= addr && addr < row_addr {
-                        // We found the row we were looking for!
-                        break;
-                    }
-
                     current = None;
                     skipseq = false;
-                    continue;
-                }
-
-                if skipseq {
-                    continue;
-                }
-
-                if row_addr < prev_row_addr {
+                } else if skipseq {
+                    // Skip.
+                } else if row_addr < prev_row_addr {
                     // NOTE:
                     // We currently skip these sequences, but we *should* of course handle them
                     // correctly. It's unclear how the interplay between this and the skiplist
                     // should work.
                     // unimplemented!();
+                    current = None;
                     skipseq = true;
-                    continue;
-                }
-                prev_row_addr = row_addr;
-
-                if row_addr <= addr {
+                } else {
                     // Might be the right row, but we won't know until we see the next one.
-                    // The .clone is needed so we can keep iterating
                     current = Some(row);
+                    prev_row_addr = row_addr;
 
                     // Add every cache_every'th non-empty row to the skiplist
                     if let Some(cache_every) = unit.cache_every {
@@ -466,10 +458,7 @@ where
                         }
                     }
                     rowi += 1;
-                    continue;
                 }
-
-                break;
             }
 
             // The row we just last iterated to is *after* the address, to the previous row we
