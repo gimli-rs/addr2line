@@ -93,6 +93,8 @@ impl error::Error for DebugInfoError {
     }
 }
 
+// The `error_chain!` macro spits about a bunch of these warnings on nightly.
+#[allow(unused_doc_comment)]
 mod errors {
     use gimli;
     use std::io;
@@ -100,9 +102,19 @@ mod errors {
 
     error_chain! {
         foreign_links {
-            Gimli(gimli::Error) #[doc="An error given by the `gimli` library while parsing the DWARF debug symbols."];
-            BadPath(io::Error) #[doc="The path given could not be used to extract debug symbols."];
-            InvalidDebugSymbols(DebugInfoError) #[doc="An error occured while traversing the debug symbols in the provided executable."];
+            Gimli(gimli::Error)
+            /// An error given by the `gimli` library while parsing the DWARF
+            /// debug symbols.
+                ;
+
+            BadPath(io::Error)
+            /// The path given could not be used to extract debug symbols.
+                ;
+
+            InvalidDebugSymbols(DebugInfoError)
+            /// An error occured while traversing the debug symbols in the
+            /// provided executable.
+                ;
         }
 
         errors {
@@ -399,10 +411,17 @@ where
             };
 
             // Now, find the last row before a row with a higher address than the one we seek.
-            let mut praddr = 0;
+            let mut prev_row_addr = 0;
             let mut skipseq = false;
             while let Ok(Some((_, &row))) = rows.next_row() {
+                let row_addr = row.address();
+
                 if row.end_sequence() {
+                    if current.is_some() && prev_row_addr <= addr && addr < row_addr {
+                        // We found the row we were looking for!
+                        break;
+                    }
+
                     current = None;
                     skipseq = false;
                     continue;
@@ -412,8 +431,7 @@ where
                     continue;
                 }
 
-                let raddr = row.address();
-                if raddr < praddr {
+                if row_addr < prev_row_addr {
                     // NOTE:
                     // We currently skip these sequences, but we *should* of course handle them
                     // correctly. It's unclear how the interplay between this and the skiplist
@@ -422,9 +440,9 @@ where
                     skipseq = true;
                     continue;
                 }
-                praddr = raddr;
+                prev_row_addr = row_addr;
 
-                if raddr <= addr {
+                if row_addr <= addr {
                     // Might be the right row, but we won't know until we see the next one.
                     // The .clone is needed so we can keep iterating
                     current = Some(row);
@@ -449,6 +467,7 @@ where
                     rowi += 1;
                     continue;
                 }
+
                 break;
             }
 
