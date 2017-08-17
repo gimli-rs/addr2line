@@ -55,8 +55,6 @@ pub enum DebugInfoError {
     UnitWithoutCompilationUnit,
     /// Entry offset points to empty entry
     DanglingEntryOffset,
-    /// Asked to parse non-contiguous range as contiguous.
-    RangeBothContiguousAndNot,
     /// A range was inverted (high > low)
     RangeInverted,
 }
@@ -75,9 +73,6 @@ impl fmt::Display for DebugInfoError {
                 write!(f, "The first entry in a unit is not a compilation unit")
             }
             DebugInfoError::DanglingEntryOffset => write!(f, "Entry offset points to empty entry"),
-            DebugInfoError::RangeBothContiguousAndNot => {
-                write!(f, "Asked to parse non-contiguous range as contiguous.")
-            }
             DebugInfoError::RangeInverted => write!(f, "A range was inverted (high > low)"),
         }
     }
@@ -359,14 +354,14 @@ where
     ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &mut self.units {
-            if !unit.contains_address(addr) {
+            if !unit.maybe_contains_address(addr) {
                 continue;
             }
 
             unit.lines.read_sequences();
             let row = unit.lines.locate(addr);
             if row.is_none() {
-                return Ok(None);
+                continue;
             }
             let row = row.unwrap();
             let header = unit.lines.program_rows.header();
@@ -504,7 +499,7 @@ struct Unit<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    ranges: Vec<gimli::Range>,
+    range: Option<gimli::Range>,
     lines: Lines<'input, Endian>,
     comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
     programs: Vec<Program<'input, Endian>>,
@@ -563,11 +558,8 @@ where
             };
 
             // Where does our compilation unit live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size(), base_address)
-                .chain_err(|| "compilation unit has invalid ranges")?;
-            if ranges.is_empty() {
-                return Ok(None);
-            }
+            let range = Self::parse_contiguous_range(entry)
+                .chain_err(|| "compilation unit has invalid low_pc and/or high_pc")?;
 
             // Extract source file and line information about the compilation unit
             let line_offset = match entry.attr_value(gimli::DW_AT_stmt_list) {
@@ -609,7 +601,7 @@ where
             )?;
 
             Unit {
-                ranges: ranges,
+                range: range,
                 lines: lines,
                 comp_dir,
                 programs: vec![],
@@ -798,13 +790,6 @@ where
     fn parse_contiguous_range(
         entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
     ) -> Result<Option<gimli::Range>> {
-
-        if let Ok(Some(..)) = entry.attr_value(gimli::DW_AT_ranges) {
-            return Err(
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot).into(),
-            );
-        }
-
         let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
             Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
             Err(e) => {
@@ -821,7 +806,6 @@ where
                 return Err(Error::from(ErrorKind::Gimli(e)))
                     .chain_err(|| "invalid high_pc attribute")
             }
-            Ok(None) => low_pc.wrapping_add(1),
             _ => return Ok(None),
         };
 
@@ -848,10 +832,11 @@ where
         }))
     }
 
-    fn contains_address(&self, address: u64) -> bool {
-        self.ranges
-            .iter()
-            .any(|range| address >= range.begin && address < range.end)
+    fn maybe_contains_address(&self, address: u64) -> bool {
+        match self.range {
+            Some(range) => address >= range.begin && address < range.end,
+            None => true,
+        }
     }
 
     fn comp_dir(&self) -> Option<gimli::EndianBuf<'input, Endian>> {
