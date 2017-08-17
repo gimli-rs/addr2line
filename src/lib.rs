@@ -19,7 +19,6 @@
 //! functionality of the `addr2line` command line tool distributed with [GNU
 //! binutils](https://www.gnu.org/software/binutils/). The executable or relocatable object to use
 //! is specified with the -e option. The default is the file a.out.
-
 #![deny(missing_docs)]
 
 extern crate gimli;
@@ -68,12 +67,10 @@ impl fmt::Display for DebugInfoError {
             DebugInfoError::InvalidDebugLineTarget => {
                 write!(f, "DebugLine referst to a file that does not exist")
             }
-            DebugInfoError::MissingComplilationUnit => {
-                write!(
-                    f,
-                    "A unit was completely empty (i.e., did not contain a compilation unit)"
-                )
-            }
+            DebugInfoError::MissingComplilationUnit => write!(
+                f,
+                "A unit was completely empty (i.e., did not contain a compilation unit)"
+            ),
             DebugInfoError::UnitWithoutCompilationUnit => {
                 write!(f, "The first entry in a unit is not a compilation unit")
             }
@@ -555,16 +552,14 @@ where
                     return Err(Error::from(ErrorKind::Gimli(e)))
                         .chain_err(|| "invalid low_pc attribute")
                 }
-                _ => {
-                    match entry.attr_value(gimli::DW_AT_entry_pc) {
-                        Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-                        Err(e) => {
-                            return Err(Error::from(ErrorKind::Gimli(e)))
-                                .chain_err(|| "invalid entry_pc attribute")
-                        }
-                        _ => 0,
+                _ => match entry.attr_value(gimli::DW_AT_entry_pc) {
+                    Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+                    Err(e) => {
+                        return Err(Error::from(ErrorKind::Gimli(e)))
+                            .chain_err(|| "invalid entry_pc attribute")
                     }
-                }
+                    _ => 0,
+                },
             };
 
             // Where does our compilation unit live?
@@ -634,8 +629,7 @@ where
 
             // We only care about functions
             match entry.tag() {
-                gimli::DW_TAG_inlined_subroutine |
-                gimli::DW_TAG_subprogram => (),
+                gimli::DW_TAG_inlined_subroutine | gimli::DW_TAG_subprogram => (),
                 _ => continue,
             }
 
@@ -743,10 +737,9 @@ where
         abbrev: &'a gimli::Abbreviations,
         attr: gimli::DwAt,
     ) -> Result<Option<gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>>> {
-        if let Some(gimli::AttributeValue::UnitRef(offset)) =
-            entry
-                .attr_value(attr)
-                .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
+        if let Some(gimli::AttributeValue::UnitRef(offset)) = entry
+            .attr_value(attr)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
         {
             let mut entries = header.entries_at_offset(abbrev, offset)?;
             let (_, entry) = entries
@@ -766,12 +759,9 @@ where
         address_size: u8,
         base_address: u64,
     ) -> Result<Vec<gimli::Range>> {
-        if let Some(range) = Self::parse_noncontiguous_ranges(
-            entry,
-            debug_ranges,
-            address_size,
-            base_address,
-        )? {
+        if let Some(range) =
+            Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size, base_address)?
+        {
             return Ok(range);
         }
         if let Some(range) = Self::parse_contiguous_range(entry)?
