@@ -280,7 +280,7 @@ impl<'input> BufferMapping<'input> {
     pub fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         self.0.locate(addr)
     }
 }
@@ -302,7 +302,7 @@ impl<'input> EndianDebugInfo<'input> {
     fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         match *self {
             EndianDebugInfo::LEInfo(ref mut dbg) => dbg.locate(addr),
             EndianDebugInfo::BEInfo(ref mut dbg) => dbg.locate(addr),
@@ -359,7 +359,7 @@ where
     pub fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &mut self.units {
             if !unit.contains_address(addr) {
