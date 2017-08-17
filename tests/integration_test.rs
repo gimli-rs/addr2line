@@ -24,7 +24,7 @@ fn identity_map() {
     }
 
     // Parse the debug symbols using "our" addr2line
-    let ours = addr2line::Mapping::new(&debug).unwrap();
+    let mut ours = addr2line::Mapping::new(&debug).unwrap();
 
     // Spin up the "real" addr2line
     let mut theirs = spawn_oracle(target.as_path(), &[]);
@@ -91,7 +91,7 @@ fn with_functions() {
     let debug = target.clone();
 
     // Parse the debug symbols using "our" addr2line
-    let ours = addr2line::Options::default()
+    let mut ours = addr2line::Options::default()
         .with_functions()
         .build(&debug)
         .unwrap();
@@ -254,8 +254,15 @@ fn canonicalize_oracle_output(line: &str) -> (Option<&str>, Option<u64>) {
     let mut oracle = (file, lineno);
 
     // Workaround binutils addr2line bug.
-    if oracle == (Some("/checkout/src/liballoc_jemalloc/../jemalloc/src/prof.c"), Some(2093)) {
-        oracle = (Some("/checkout/src/liballoc_jemalloc/../jemalloc/src/prof.c"), Some(1906));
+    if oracle ==
+        (
+            Some("/checkout/src/liballoc_jemalloc/../jemalloc/src/prof.c"),
+            Some(2093),
+        ) {
+        oracle = (
+            Some("/checkout/src/liballoc_jemalloc/../jemalloc/src/prof.c"),
+            Some(1906),
+        );
     }
 
     oracle
