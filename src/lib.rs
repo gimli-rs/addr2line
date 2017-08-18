@@ -931,17 +931,14 @@ where
         let mut prev_address = 0;
         while let Ok(Some((_, &program_row))) = self.program_rows.next_row() {
             let address = program_row.address();
-            if program_row.address() < prev_address {
-                // The standard says:
-                // "Within a sequence, addresses and operation pointers may only increase."
-                // So this row is invalid, we can ignore it.
-                //
-                // If we wanted to handle this, we could start a new sequence
-                // here, but let's wait until that is needed.
-            } else if program_row.end_sequence() {
+            if program_row.end_sequence() {
                 if !sequence_rows.is_empty() {
                     let low_address = sequence_rows[0].address;
-                    let high_address = program_row.address();
+                    let high_address = if address < prev_address {
+                        prev_address + 1
+                    } else {
+                        address
+                    };
                     let mut rows = Vec::new();
                     std::mem::swap(&mut rows, &mut sequence_rows);
                     sequences.push(Sequence {
@@ -951,6 +948,13 @@ where
                     });
                 }
                 prev_address = 0;
+            } else if address < prev_address {
+                // The standard says:
+                // "Within a sequence, addresses and operation pointers may only increase."
+                // So this row is invalid, we can ignore it.
+                //
+                // If we wanted to handle this, we could start a new sequence
+                // here, but let's wait until that is needed.
             } else {
                 let file_index = program_row.file_index();
                 let line = program_row.line();
@@ -976,7 +980,7 @@ where
             // A sequence without an end_sequence row.
             // Let's assume the last row covered 1 byte.
             let low_address = sequence_rows[0].address;
-            let high_address = sequence_rows.last().unwrap().address + 1;
+            let high_address = prev_address + 1;
             sequences.push(Sequence {
                 low_address,
                 high_address,
@@ -990,6 +994,7 @@ where
     }
 
     fn locate(&self, address: u64) -> Option<&Row> {
+        debug_assert!(self.read_sequences);
         let idx = self.sequences
             .binary_search_by(|sequence| if address < sequence.low_address {
                 std::cmp::Ordering::Greater
