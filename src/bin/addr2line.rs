@@ -105,10 +105,10 @@ fn main() {
         println!("addr2line: {:?}", e);
         std::process::exit(1);
     };
-    let debug = debug.unwrap();
+    let mut debug = debug.unwrap();
 
     let show_addrs = matches.is_present("addresses");
-    let one = |addr: &str| {
+    let mut one = |addr: &str| {
         let addr = parse_uint_from_hex_string(addr);
         if show_addrs {
             use std::mem;

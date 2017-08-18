@@ -41,7 +41,6 @@ use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 
 use std::fmt;
-use std::sync;
 use std::path;
 use std::error;
 use std::borrow::Cow;
@@ -223,7 +222,6 @@ struct DebugInfo<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    debug_line: gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
     units: Vec<Unit<'input, Endian>>,
     opts: Options,
 }
@@ -258,7 +256,7 @@ impl Mapping {
     /// If the `Mapping` was constructed with `with_functions`, information about the containing
     /// function may also be returned when available.
     pub fn locate(
-        &self,
+        &mut self,
         addr: u64,
     ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
         self.inner.locate(addr)
@@ -280,9 +278,9 @@ impl<'input> BufferMapping<'input> {
     /// If the `BufferMapping` was constructed with `with_functions`, information about the
     /// containing function may also be returned when available.
     pub fn locate(
-        &self,
+        &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         self.0.locate(addr)
     }
 }
@@ -301,10 +299,13 @@ impl<'input> EndianDebugInfo<'input> {
         }
     }
 
-    fn locate(&self, addr: u64) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    fn locate(
+        &mut self,
+        addr: u64,
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         match *self {
-            EndianDebugInfo::LEInfo(ref dbg) => dbg.locate(addr),
-            EndianDebugInfo::BEInfo(ref dbg) => dbg.locate(addr),
+            EndianDebugInfo::LEInfo(ref mut dbg) => dbg.locate(addr),
+            EndianDebugInfo::BEInfo(ref mut dbg) => dbg.locate(addr),
         }
     }
 }
@@ -350,131 +351,31 @@ where
         }
 
         Ok(DebugInfo {
-            debug_line: debug_line,
             units: units,
             opts: opts,
         })
     }
 
     pub fn locate(
-        &self,
+        &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         // First, find the compilation unit for the given address
-        for unit in &self.units {
+        for unit in &mut self.units {
             if !unit.contains_address(addr) {
                 continue;
             }
 
-            let mut rowi = 0;
-            let mut current = None;
-
-            // Okay, this is the right unit. Check our DebugLine rows.
-            let rows = unit.cache_every.and_then(|cache_every| {
-                unit.skiplist.read().ok().and_then(|skiplist| {
-                    match skiplist.binary_search_by_key(&addr, |&(raddr, _, _)| raddr) {
-                        Ok(i) => {
-                            // we have a state machine for this address!
-                            current = Some(skiplist[i].2);
-                            rowi = (i + 1) * cache_every + 1;
-                            Some(skiplist[i].1.clone())
-                        }
-                        Err(i) if i == 0 => {
-                            // i is the entry in the skiplist where addr *would* appear. Thus,
-                            // we don't have a state machine for *this* address, but we do know
-                            // that:
-                            //
-                            //  - if i == 0, we have no state machine, and must from scratch
-                            //  - if i == skiplist.len(), we scan from the last state machine
-                            //  - otherwise, the machine from i-1 eventually encounters addr
-                            None
-                        }
-                        Err(i) => {
-                            current = Some(skiplist[i - 1].2);
-                            // NOTE
-                            // we need to use i * cache_every here, not (i+1) as above.
-                            // this is because i is the i *after* the one we're chooseing to
-                            // start from (skiplist[i-1] above).
-                            rowi = i * cache_every + 1;
-                            Some(skiplist[i - 1].1.clone())
-                        }
-                    }
-                })
-            });
-
-            let mut rows = if let Some(rows) = rows {
-                rows
-            } else {
-                // fall back to linear scan
-                unit.line_rows(&self.debug_line)
-                    .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-                    .chain_err(|| "cannot get line rows for unit")?
-            };
-
-            // Now, find the last row before a row with a higher address than the one we seek.
-            let mut prev_row_addr = 0;
-            let mut skipseq = false;
-            while let Ok(Some((_, &row))) = rows.next_row() {
-                let row_addr = row.address();
-                if addr < row_addr {
-                    // Currently we only handle monotonically increasing sequences,
-                    // so our search is over, regardless of whether we found the row.
-                    break;
-                }
-
-                if row.end_sequence() {
-                    current = None;
-                    skipseq = false;
-                } else if skipseq {
-                    // Skip.
-                } else if row_addr < prev_row_addr {
-                    // NOTE:
-                    // We currently skip these sequences, but we *should* of course handle them
-                    // correctly. It's unclear how the interplay between this and the skiplist
-                    // should work.
-                    // unimplemented!();
-                    current = None;
-                    skipseq = true;
-                } else {
-                    // Might be the right row, but we won't know until we see the next one.
-                    current = Some(row);
-                    prev_row_addr = row_addr;
-
-                    // Add every cache_every'th non-empty row to the skiplist
-                    if let Some(cache_every) = unit.cache_every {
-                        if rowi != 0 && rowi % cache_every == 0 {
-                            if let Ok(mut skiplist) = unit.skiplist.write() {
-                                let i = rowi / cache_every - 1;
-                                if i >= skiplist.len() {
-                                    debug_assert!(
-                                        i == skiplist.len(),
-                                        "we somehow didn't cache a StateMachine for a \
-                                         previous iteration step!"
-                                    );
-                                    // cache this StateMachine
-                                    skiplist.push((row.address(), rows.clone(), row));
-                                }
-                            }
-                        }
-                    }
-                    rowi += 1;
-                }
-            }
-
-            // The row we just last iterated to is *after* the address, to the previous row we
-            // saw (stored in current) is the one we want. If there is no current, then we have to
-            // give up on locating the address in this unit (and thus in the program too).
-            //
-            // TODO
-            // Can we return partial information here by giving, say, information from the
-            // compilation unit itself?
-            if current.is_none() {
+            unit.lines.read_sequences();
+            let row = unit.lines.locate(addr);
+            if row.is_none() {
                 return Ok(None);
             }
-            let row = current.unwrap();
-            let header = rows.header();
+            let row = row.unwrap();
+            let header = unit.lines.program_rows.header();
 
-            let file = row.file(header)
+            let file = header
+                .file(row.file_index)
                 .ok_or_else(|| {
                     ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
                 })?;
@@ -491,7 +392,7 @@ where
             }
             path.push(&*file.path_name().to_string_lossy());
 
-            let line = row.line();
+            let line = row.line;
             if unit.programs.is_empty() {
                 return Ok(Some((path, line, None)));
             }
@@ -551,10 +452,11 @@ where
                 // matches us better. We need to keep going until we find the best one.
             }
 
+            let with_demangling = self.opts.with_demangling;
             let func = func.map(|u| {
                 if unit.language.is_some() {
                     debug_assert!(
-                        self.opts.with_demangling,
+                        with_demangling,
                         "We shouldn't even bother finding the DW_AT_language if we \
                          aren't demangling"
                     );
@@ -601,31 +503,13 @@ fn demangle_rust_symbol(mangled: &[u8]) -> Cow<str> {
     String::from_utf8_lossy(mangled)
 }
 
-// TODO: most of this should be moved to the main library.
 struct Unit<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    skiplist: sync::RwLock<
-        Vec<
-            (
-                u64,
-                gimli::StateMachine<
-                    gimli::EndianBuf<'input, Endian>,
-                    gimli::IncompleteLineNumberProgram<gimli::EndianBuf<'input, Endian>>,
-                >,
-                gimli::LineNumberRow,
-            ),
-        >,
-    >,
-
-    cache_every: Option<usize>,
-    address_size: u8,
-    base_address: u64,
     ranges: Vec<gimli::Range>,
-    line_offset: gimli::DebugLineOffset,
+    lines: Lines<'input, Endian>,
     comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
-    comp_name: Option<gimli::EndianBuf<'input, Endian>>,
     programs: Vec<Program<'input, Endian>>,
     language: Option<gimli::DwLang>,
 }
@@ -649,6 +533,7 @@ where
             .chain_err(|| "compilation unit refers to non-existing abbreviations")?;
 
         let mut entries = header.entries(&abbrev);
+        let base_address;
         let mut unit = {
             // Scoped so that we can continue using entries for the loop below
             let (_, entry) = entries
@@ -664,7 +549,7 @@ where
                 );
             }
 
-            let base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
+            base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
                 Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
                 Err(e) => {
                     return Err(Error::from(ErrorKind::Gimli(e)))
@@ -720,37 +605,18 @@ where
                 None
             };
 
-            let linep = debug_line
-                .program(line_offset, header.address_size(), comp_dir, comp_name)
-                .chain_err(|| "invalid compilation unit line rows")?;
-
-            // We want to cache every sqrt(#rows).
-            // Unfortunately we don't know the number of rows (and we don't want to scan all of
-            // line rows to find it). However, we *do* know the number of bytes of debug line
-            // information, which we can use as a proxy.
-            //
-            // Based on some empirical data from a couple of applications, the relationship seems
-            // to be about 5.5 bytes/row for units with a decent number of rows. The values
-            // vary more for smaller units, but there cache_every also matters less.
-            let nrows = linep.header().raw_program_buf().len() as f64 / 5.5;
-            // If a unit only has a very small number of rows, we can avoid the skiplist
-            // altogether (also, our estimate is more likely to be wrong).
-            let cache_every = if nrows >= 100.0 {
-                Some(nrows.sqrt() as usize)
-            } else {
-                None
-            };
+            let lines = Lines::new(
+                debug_line,
+                line_offset,
+                header.address_size(),
+                comp_dir,
+                comp_name,
+            )?;
 
             Unit {
-                skiplist: sync::RwLock::default(),
-                cache_every: cache_every,
-
-                address_size: header.address_size(),
-                base_address: base_address,
                 ranges: ranges,
-                line_offset: line_offset,
-                comp_dir: comp_dir,
-                comp_name: comp_name,
+                lines: lines,
+                comp_dir,
                 programs: vec![],
                 language: language,
             }
@@ -774,12 +640,8 @@ where
             }
 
             // Where does this function live?
-            let ranges = Self::get_ranges(
-                entry,
-                debug_ranges,
-                header.address_size(),
-                unit.base_address,
-            ).chain_err(|| "subroutine has invalid ranges")?;
+            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size(), base_address)
+                .chain_err(|| "subroutine has invalid ranges")?;
             if ranges.is_empty() {
                 continue;
             }
@@ -1002,25 +864,6 @@ where
             .any(|range| address >= range.begin && address < range.end)
     }
 
-    fn line_rows(
-        &self,
-        debug_line: &gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
-    ) -> gimli::Result<
-        gimli::StateMachine<
-            gimli::EndianBuf<'input, Endian>,
-            gimli::IncompleteLineNumberProgram<gimli::EndianBuf<'input, Endian>>,
-        >,
-    > {
-        debug_line
-            .program(
-                self.line_offset,
-                self.address_size,
-                self.comp_dir,
-                self.comp_name,
-            )
-            .map(|h| h.rows())
-    }
-
     fn comp_dir(&self) -> Option<gimli::EndianBuf<'input, Endian>> {
         self.comp_dir
     }
@@ -1045,4 +888,146 @@ where
             .iter()
             .any(|range| address >= range.begin && address < range.end)
     }
+}
+
+struct Lines<'input, Endian>
+where
+    Endian: gimli::Endianity,
+{
+    program_rows: gimli::StateMachine<
+        gimli::EndianBuf<'input, Endian>,
+        gimli::IncompleteLineNumberProgram<gimli::EndianBuf<'input, Endian>>,
+    >,
+    sequences: Vec<Sequence>,
+    read_sequences: bool,
+}
+
+impl<'input, Endian> Lines<'input, Endian>
+where
+    Endian: gimli::Endianity,
+{
+    fn new(
+        debug_line: &gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
+        line_offset: gimli::DebugLineOffset,
+        address_size: u8,
+        comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
+        comp_name: Option<gimli::EndianBuf<'input, Endian>>,
+    ) -> Result<Self> {
+        let program = debug_line
+            .program(line_offset, address_size, comp_dir, comp_name)?;
+        Ok(Lines {
+            program_rows: program.rows(),
+            sequences: Vec::new(),
+            read_sequences: false,
+        })
+    }
+
+    fn read_sequences(&mut self) {
+        if self.read_sequences {
+            return;
+        }
+        let mut sequences = Vec::new();
+        let mut sequence_rows: Vec<Row> = Vec::new();
+        let mut prev_address = 0;
+        while let Ok(Some((_, &program_row))) = self.program_rows.next_row() {
+            let address = program_row.address();
+            if program_row.end_sequence() {
+                if !sequence_rows.is_empty() {
+                    let low_address = sequence_rows[0].address;
+                    let high_address = if address < prev_address {
+                        prev_address + 1
+                    } else {
+                        address
+                    };
+                    let mut rows = Vec::new();
+                    std::mem::swap(&mut rows, &mut sequence_rows);
+                    sequences.push(Sequence {
+                        low_address,
+                        high_address,
+                        rows,
+                    });
+                }
+                prev_address = 0;
+            } else if address < prev_address {
+                // The standard says:
+                // "Within a sequence, addresses and operation pointers may only increase."
+                // So this row is invalid, we can ignore it.
+                //
+                // If we wanted to handle this, we could start a new sequence
+                // here, but let's wait until that is needed.
+            } else {
+                let file_index = program_row.file_index();
+                let line = program_row.line();
+                let mut duplicate = false;
+                if let Some(last_row) = sequence_rows.last_mut() {
+                    if last_row.address == address {
+                        last_row.file_index = file_index;
+                        last_row.line = line;
+                        duplicate = true;
+                    }
+                }
+                if !duplicate {
+                    sequence_rows.push(Row {
+                        address,
+                        file_index,
+                        line,
+                    });
+                }
+                prev_address = address;
+            }
+        }
+        if !sequence_rows.is_empty() {
+            // A sequence without an end_sequence row.
+            // Let's assume the last row covered 1 byte.
+            let low_address = sequence_rows[0].address;
+            let high_address = prev_address + 1;
+            sequences.push(Sequence {
+                low_address,
+                high_address,
+                rows: sequence_rows,
+            });
+        }
+        // Sort so we can binary search.
+        sequences.sort_by(|a, b| a.low_address.cmp(&b.low_address));
+        self.sequences = sequences;
+        self.read_sequences = true;
+    }
+
+    fn locate(&self, address: u64) -> Option<&Row> {
+        debug_assert!(self.read_sequences);
+        let idx = self.sequences
+            .binary_search_by(|sequence| if address < sequence.low_address {
+                std::cmp::Ordering::Greater
+            } else if address < sequence.high_address {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Less
+            })
+            .ok();
+        idx.and_then(|idx| self.sequences[idx].locate(address))
+    }
+}
+
+#[derive(Debug)]
+struct Sequence {
+    low_address: u64,
+    high_address: u64,
+    rows: Vec<Row>,
+}
+
+impl Sequence {
+    fn locate(&self, address: u64) -> Option<&Row> {
+        match self.rows.binary_search_by(|row| row.address.cmp(&address)) {
+            Ok(idx) => self.rows.get(idx),
+            Err(0) => None,
+            Err(idx) => self.rows.get(idx - 1),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Row {
+    address: u64,
+    file_index: u64,
+    line: Option<u64>,
 }
