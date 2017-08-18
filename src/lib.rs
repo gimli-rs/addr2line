@@ -19,7 +19,6 @@
 //! functionality of the `addr2line` command line tool distributed with [GNU
 //! binutils](https://www.gnu.org/software/binutils/). The executable or relocatable object to use
 //! is specified with the -e option. The default is the file a.out.
-
 #![deny(missing_docs)]
 
 extern crate gimli;
@@ -56,8 +55,6 @@ pub enum DebugInfoError {
     UnitWithoutCompilationUnit,
     /// Entry offset points to empty entry
     DanglingEntryOffset,
-    /// Asked to parse non-contiguous range as contiguous.
-    RangeBothContiguousAndNot,
     /// A range was inverted (high > low)
     RangeInverted,
 }
@@ -68,19 +65,14 @@ impl fmt::Display for DebugInfoError {
             DebugInfoError::InvalidDebugLineTarget => {
                 write!(f, "DebugLine referst to a file that does not exist")
             }
-            DebugInfoError::MissingComplilationUnit => {
-                write!(
-                    f,
-                    "A unit was completely empty (i.e., did not contain a compilation unit)"
-                )
-            }
+            DebugInfoError::MissingComplilationUnit => write!(
+                f,
+                "A unit was completely empty (i.e., did not contain a compilation unit)"
+            ),
             DebugInfoError::UnitWithoutCompilationUnit => {
                 write!(f, "The first entry in a unit is not a compilation unit")
             }
             DebugInfoError::DanglingEntryOffset => write!(f, "Entry offset points to empty entry"),
-            DebugInfoError::RangeBothContiguousAndNot => {
-                write!(f, "Asked to parse non-contiguous range as contiguous.")
-            }
             DebugInfoError::RangeInverted => write!(f, "A range was inverted (high > low)"),
         }
     }
@@ -362,14 +354,14 @@ where
     ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &mut self.units {
-            if !unit.contains_address(addr) {
+            if !unit.maybe_contains_address(addr) {
                 continue;
             }
 
             unit.lines.read_sequences();
             let row = unit.lines.locate(addr);
             if row.is_none() {
-                return Ok(None);
+                continue;
             }
             let row = row.unwrap();
             let header = unit.lines.program_rows.header();
@@ -507,7 +499,7 @@ struct Unit<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
-    ranges: Vec<gimli::Range>,
+    range: Option<gimli::Range>,
     lines: Lines<'input, Endian>,
     comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
     programs: Vec<Program<'input, Endian>>,
@@ -555,24 +547,19 @@ where
                     return Err(Error::from(ErrorKind::Gimli(e)))
                         .chain_err(|| "invalid low_pc attribute")
                 }
-                _ => {
-                    match entry.attr_value(gimli::DW_AT_entry_pc) {
-                        Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-                        Err(e) => {
-                            return Err(Error::from(ErrorKind::Gimli(e)))
-                                .chain_err(|| "invalid entry_pc attribute")
-                        }
-                        _ => 0,
+                _ => match entry.attr_value(gimli::DW_AT_entry_pc) {
+                    Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
+                    Err(e) => {
+                        return Err(Error::from(ErrorKind::Gimli(e)))
+                            .chain_err(|| "invalid entry_pc attribute")
                     }
-                }
+                    _ => 0,
+                },
             };
 
             // Where does our compilation unit live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size(), base_address)
-                .chain_err(|| "compilation unit has invalid ranges")?;
-            if ranges.is_empty() {
-                return Ok(None);
-            }
+            let range = Self::parse_contiguous_range(entry)
+                .chain_err(|| "compilation unit has invalid low_pc and/or high_pc")?;
 
             // Extract source file and line information about the compilation unit
             let line_offset = match entry.attr_value(gimli::DW_AT_stmt_list) {
@@ -614,7 +601,7 @@ where
             )?;
 
             Unit {
-                ranges: ranges,
+                range: range,
                 lines: lines,
                 comp_dir,
                 programs: vec![],
@@ -634,8 +621,7 @@ where
 
             // We only care about functions
             match entry.tag() {
-                gimli::DW_TAG_inlined_subroutine |
-                gimli::DW_TAG_subprogram => (),
+                gimli::DW_TAG_inlined_subroutine | gimli::DW_TAG_subprogram => (),
                 _ => continue,
             }
 
@@ -743,10 +729,9 @@ where
         abbrev: &'a gimli::Abbreviations,
         attr: gimli::DwAt,
     ) -> Result<Option<gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>>> {
-        if let Some(gimli::AttributeValue::UnitRef(offset)) =
-            entry
-                .attr_value(attr)
-                .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
+        if let Some(gimli::AttributeValue::UnitRef(offset)) = entry
+            .attr_value(attr)
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
         {
             let mut entries = header.entries_at_offset(abbrev, offset)?;
             let (_, entry) = entries
@@ -766,12 +751,9 @@ where
         address_size: u8,
         base_address: u64,
     ) -> Result<Vec<gimli::Range>> {
-        if let Some(range) = Self::parse_noncontiguous_ranges(
-            entry,
-            debug_ranges,
-            address_size,
-            base_address,
-        )? {
+        if let Some(range) =
+            Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size, base_address)?
+        {
             return Ok(range);
         }
         if let Some(range) = Self::parse_contiguous_range(entry)?
@@ -808,13 +790,6 @@ where
     fn parse_contiguous_range(
         entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
     ) -> Result<Option<gimli::Range>> {
-
-        if let Ok(Some(..)) = entry.attr_value(gimli::DW_AT_ranges) {
-            return Err(
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeBothContiguousAndNot).into(),
-            );
-        }
-
         let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
             Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
             Err(e) => {
@@ -831,7 +806,6 @@ where
                 return Err(Error::from(ErrorKind::Gimli(e)))
                     .chain_err(|| "invalid high_pc attribute")
             }
-            Ok(None) => low_pc.wrapping_add(1),
             _ => return Ok(None),
         };
 
@@ -858,10 +832,11 @@ where
         }))
     }
 
-    fn contains_address(&self, address: u64) -> bool {
-        self.ranges
-            .iter()
-            .any(|range| address >= range.begin && address < range.end)
+    fn maybe_contains_address(&self, address: u64) -> bool {
+        match self.range {
+            Some(range) => address >= range.begin && address < range.end,
+            None => true,
+        }
     }
 
     fn comp_dir(&self) -> Option<gimli::EndianBuf<'input, Endian>> {

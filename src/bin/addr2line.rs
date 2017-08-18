@@ -134,7 +134,7 @@ fn main() {
             if show_funcs {
                 println!("??")
             }
-            println!("??:?")
+            println!("??:0")
         }
     };
 
