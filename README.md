@@ -34,7 +34,7 @@ extern crate addr2line;
 fn main() {
     use std::env;
     let us = env::current_exe().expect("not running as an executable");
-    let map = addr2line::Mapping::new(&us).expect("debug symbols not found");
+    let mut map = addr2line::Mapping::new(&us).expect("debug symbols not found");
     let addr = env::args().skip(1).next().expect("no address passed");
     let addr = u64::from_str_radix(&addr[2..], 16).expect("address not valid");
     let loc = map.locate(addr as u64).expect("invalid debug symbols found");
