@@ -1,6 +1,5 @@
 extern crate addr2line;
 extern crate itertools;
-extern crate glob;
 
 use std::env;
 use std::path;
@@ -58,9 +57,15 @@ fn identity_map() {
                 file = Cow::Owned(f.file_name().unwrap().to_string_lossy().into_owned());
             }
 
-            assert_eq!(oracle, (Some(&*file), lineno));
-            got += 1;
             all += 1;
+            if oracle.0.is_none() && lineno.is_none() {
+                // This can happen for the main() wrapper.
+                println!("we found 0x{:08x}: {}:??", addr, file);
+                excusable += 1;
+            } else {
+                assert_eq!((addr, oracle), (addr, (Some(&*file), lineno)));
+                got += 1;
+            }
         } else if oracle.0.is_some() {
             // addr2line found something, and we didn't :(
             println!("we missed 0x{:08x}: {:?}", addr, oracle);
@@ -124,15 +129,22 @@ fn with_functions() {
             // We dared to guess -- did we give the right answer?
             let f = &*file.to_string_lossy();
             let test = (Some(f), lineno);
-            assert_eq!(oracle, test);
 
-            if let Some(func) = func {
-                // We even tried to guess the function!
-                assert_eq!(function, func);
-                func_hits += 1;
-            }
-            got += 1;
             all += 1;
+            if oracle.0.is_none() && lineno.is_none() {
+                // This can happen for the main() wrapper.
+                println!("we found 0x{:08x}: {}", addr, f);
+                excusable += 1;
+            } else {
+                assert_eq!(oracle, test);
+
+                if let Some(func) = func {
+                    // We even tried to guess the function!
+                    assert_eq!(function, func);
+                    func_hits += 1;
+                }
+                got += 1;
+            }
         } else if oracle.0.is_some() {
             // addr2line found something, and we didn't :(
             println!("we missed 0x{:08x}: {:?}", addr, oracle);
