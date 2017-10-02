@@ -128,7 +128,9 @@ fn main() {
             println!(
                 "{}:{}",
                 file.to_string_lossy(),
-                lineno.map(|n| format!("{}", n)).unwrap_or("?".to_owned())
+                lineno
+                    .map(|n| format!("{}", n))
+                    .unwrap_or_else(|| "?".to_owned())
             );
         } else {
             if show_funcs {

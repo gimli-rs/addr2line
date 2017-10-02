@@ -175,7 +175,7 @@ impl Options {
     }
 
     /// Finish configuration and build a `BufferMapping`.
-    pub fn build_from_buffer<'input>(self, buffer: &'input [u8]) -> Result<BufferMapping<'input>> {
+    pub fn build_from_buffer(self, buffer: &[u8]) -> Result<BufferMapping> {
         BufferMapping::new_inner(buffer, self)
     }
 }
@@ -232,14 +232,14 @@ impl Mapping {
 
     fn new_inner(file_path: &path::Path, opts: Options) -> Result<Mapping> {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
-            .map_err(|e| ErrorKind::BadPath(e))?;
+            .map_err(ErrorKind::BadPath)?;
 
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
             let bytes = unsafe { mmap.as_slice() };
             EndianDebugInfo::new(bytes, opts)
                 .chain_err(|| "failed to analyze debug information")
-                .map(|di| Box::new(di))
+                .map(Box::new)
         }).map(|di| Mapping { inner: di })
     }
 
@@ -761,7 +761,7 @@ where
         {
             return Ok(range);
         }
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     // This must be checked before `parse_contiguous_range`.
