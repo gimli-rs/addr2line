@@ -266,8 +266,8 @@ fn canonicalize_oracle_output(line: &str) -> (Option<&str>, Option<u64>) {
     let mut oracle = (file, lineno);
 
     // Workaround binutils addr2line bug.
-    if oracle ==
-        (
+    if oracle
+        == (
             Some("/checkout/src/liballoc_jemalloc/../jemalloc/src/prof.c"),
             Some(2093),
         ) {

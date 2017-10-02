@@ -1,6 +1,6 @@
+extern crate addr2line;
 #[macro_use]
 extern crate clap;
-extern crate addr2line;
 
 use clap::{App, Arg};
 
@@ -59,9 +59,7 @@ fn get_matches() -> clap::ArgMatches<'static> {
             Arg::with_name("functions")
                 .short("f")
                 .long("functions")
-                .help(
-                    "Display function names as well as file and line number information.",
-                ),
+                .help("Display function names as well as file and line number information."),
         )
         .arg(Arg::with_name("addr").multiple(true).index(1))
         .after_help(POSTSCRIPT)
