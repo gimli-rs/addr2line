@@ -21,11 +21,11 @@
 //! is specified with the -e option. The default is the file a.out.
 #![deny(missing_docs)]
 
+extern crate fallible_iterator;
 extern crate gimli;
 extern crate memmap;
 extern crate object;
 extern crate owning_ref;
-extern crate fallible_iterator;
 
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
@@ -175,7 +175,7 @@ impl Options {
     }
 
     /// Finish configuration and build a `BufferMapping`.
-    pub fn build_from_buffer<'input>(self, buffer: &'input [u8]) -> Result<BufferMapping<'input>> {
+    pub fn build_from_buffer(self, buffer: &[u8]) -> Result<BufferMapping> {
         BufferMapping::new_inner(buffer, self)
     }
 }
@@ -232,14 +232,14 @@ impl Mapping {
 
     fn new_inner(file_path: &path::Path, opts: Options) -> Result<Mapping> {
         let file = memmap::Mmap::open_path(file_path, memmap::Protection::Read)
-            .map_err(|e| ErrorKind::BadPath(e))?;
+            .map_err(ErrorKind::BadPath)?;
 
         OwningHandle::try_new(Box::new(file), |mmap| -> Result<_> {
             let mmap: &memmap::Mmap = unsafe { &*mmap };
             let bytes = unsafe { mmap.as_slice() };
             EndianDebugInfo::new(bytes, opts)
                 .chain_err(|| "failed to analyze debug information")
-                .map(|di| Box::new(di))
+                .map(Box::new)
         }).map(|di| Mapping { inner: di })
     }
 
@@ -366,11 +366,9 @@ where
             let row = row.unwrap();
             let header = unit.lines.program_rows.header();
 
-            let file = header
-                .file(row.file_index)
-                .ok_or_else(|| {
-                    ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
-                })?;
+            let file = header.file(row.file_index).ok_or_else(|| {
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
+            })?;
 
             let mut path = path::PathBuf::new();
             if let Some(directory) = file.directory(header) {
@@ -518,7 +516,6 @@ where
         header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
         opts: Options,
     ) -> Result<Option<Unit<'input, Endian>>> {
-
         // We first want to parse out the compilation unit, and then any contained subprograms.
         let abbrev = header
             .abbreviations(debug_abbrev)
@@ -618,7 +615,6 @@ where
             .next_dfs()
             .chain_err(|| "tree below compilation unit yielded invalid entry")?
         {
-
             // We only care about functions
             match entry.tag() {
                 gimli::DW_TAG_inlined_subroutine | gimli::DW_TAG_subprogram => (),
@@ -646,14 +642,13 @@ where
             // exhibit the same behavior, but it is something we should aim to eventually work
             // around. Hence: TODO
 
-            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev)
-                .chain_err(|| {
-                    format!(
-                        "failed to resolve name for subroutine at <{:x}><{:x}>",
-                        header.offset().0,
-                        entry.offset().0
-                    )
-                })?;
+            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev).chain_err(|| {
+                format!(
+                    "failed to resolve name for subroutine at <{:x}><{:x}>",
+                    header.offset().0,
+                    entry.offset().0
+                )
+            })?;
 
             if let Some(name) = maybe_name {
                 unit.programs.push(Program {
@@ -673,7 +668,6 @@ where
         debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
         abbrev: &gimli::Abbreviations,
     ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
-
         // For naming, we prefer the linked name, if available
         if let Some(name) = entry
             .attr(gimli::DW_AT_linkage_name)
@@ -734,11 +728,9 @@ where
             .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
         {
             let mut entries = header.entries_at_offset(abbrev, offset)?;
-            let (_, entry) = entries
-                .next_dfs()?
-                .ok_or_else(|| {
-                    ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
-                })?;
+            let (_, entry) = entries.next_dfs()?.ok_or_else(|| {
+                ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
+            })?;
             return Ok(Some(entry.clone()));
         }
 
@@ -756,12 +748,10 @@ where
         {
             return Ok(range);
         }
-        if let Some(range) = Self::parse_contiguous_range(entry)?
-            .map(|range| vec![range])
-        {
+        if let Some(range) = Self::parse_contiguous_range(entry)?.map(|range| vec![range]) {
             return Ok(range);
         }
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     // This must be checked before `parse_contiguous_range`.
@@ -821,9 +811,7 @@ where
         }
 
         if low_pc > high_pc {
-            return Err(
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeInverted).into(),
-            );
+            return Err(ErrorKind::InvalidDebugSymbols(DebugInfoError::RangeInverted).into());
         }
 
         Ok(Some(gimli::Range {
@@ -850,8 +838,7 @@ where
 {
     ranges: Vec<gimli::Range>,
     name: gimli::EndianBuf<'input, Endian>,
-    #[allow(dead_code)]
-    inlined: bool,
+    #[allow(dead_code)] inlined: bool,
 }
 
 impl<'input, Endian> Program<'input, Endian>
@@ -888,8 +875,7 @@ where
         comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
         comp_name: Option<gimli::EndianBuf<'input, Endian>>,
     ) -> Result<Self> {
-        let program = debug_line
-            .program(line_offset, address_size, comp_dir, comp_name)?;
+        let program = debug_line.program(line_offset, address_size, comp_dir, comp_name)?;
         Ok(Lines {
             program_rows: program.rows(),
             sequences: Vec::new(),
