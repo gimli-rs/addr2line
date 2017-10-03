@@ -3,6 +3,8 @@ extern crate libc;
 
 use libc::c_int;
 
+use gimli::{UnwindSection, UnwindTable, UnwindTableRow, EhFrame, BaseAddresses, UninitializedUnwindContext, Pointer, Reader, CieOrFde, DwEhPe, EndianBuf, NativeEndian, CfaRule, RegisterRule};
+
 mod registers;
 mod find_cfi;
 mod range;
@@ -24,21 +26,26 @@ struct DwarfEhFrameHdr {
 
 type PersonalityRoutine = extern "C" fn(version: c_int, actions: c_int, class: u64, object: *mut _Unwind_Exception, context: *mut _Unwind_Context) -> _Unwind_Reason_Code;
 
-use gimli::UnwindSection;
+struct UnwindInfo<R: Reader> {
+    row: UnwindTableRow<R>,
+    personality: Option<Pointer>,
+    lsda: Option<Pointer>,
+    initial_address: u64,
+}
 
-fn unwind_info_for_address<'bases, R: gimli::Reader>(sel: &gimli::EhFrame<R>,
-                                              bases: &'bases gimli::BaseAddresses,
-                                              ctx: gimli::UninitializedUnwindContext<gimli::EhFrame<R>, R>,
+fn unwind_info_for_address<'bases, R: Reader>(sel: &EhFrame<R>,
+                                              bases: &'bases BaseAddresses,
+                                              ctx: UninitializedUnwindContext<EhFrame<R>, R>,
                                               address: u64)
-                                              -> gimli::Result<(gimli::UnwindTableRow<R>, Option<gimli::Pointer>, Option<gimli::Pointer>, u64)> {
+                                              -> gimli::Result<UnwindInfo<R>> {
 
     let mut target_fde = None;
 
     let mut entries = sel.entries(bases);
     while let Some(entry) = entries.next()? {
         match entry {
-            gimli::CieOrFde::Cie(_) => continue,
-            gimli::CieOrFde::Fde(partial) => {
+            CieOrFde::Cie(_) => continue,
+            CieOrFde::Fde(partial) => {
                 let fde = partial.parse(|offset| sel.cie_from_offset(bases, offset))?;
                 //println!("{} fde {:x} - {:x}", i, fde.initial_address(), fde.len());
                 if fde.contains(address) {
@@ -54,7 +61,7 @@ fn unwind_info_for_address<'bases, R: gimli::Reader>(sel: &gimli::EhFrame<R>,
         let mut ctx = ctx.initialize(fde.cie()).unwrap();
         
         {
-            let mut table = gimli::UnwindTable::new(&mut ctx, &fde);
+            let mut table = UnwindTable::new(&mut ctx, &fde);
             while let Some(row) = table.next_row()? {
                 if row.contains(address) {
                     result_row = Some(row.clone());
@@ -64,17 +71,22 @@ fn unwind_info_for_address<'bases, R: gimli::Reader>(sel: &gimli::EhFrame<R>,
         }
         
         if let Some(row) = result_row {
-            return Ok((row, fde.personality(), fde.lsda(), fde.initial_address()));
+            return Ok(UnwindInfo {
+                row,
+                personality: fde.personality(),
+                lsda: fde.lsda(),
+                initial_address: fde.initial_address(),
+            });
         }
     }
     
     Err(gimli::Error::NoUnwindInfoForAddress)
 }
 
-unsafe fn deref_ptr(ptr: gimli::Pointer) -> u64 {
+unsafe fn deref_ptr(ptr: Pointer) -> u64 {
     match ptr {
-        gimli::Pointer::Direct(x) => x,
-        gimli::Pointer::Indirect(x) => *(x as *const u64),
+        Pointer::Direct(x) => x,
+        Pointer::Indirect(x) => *(x as *const u64),
     }
 }
 
@@ -82,20 +94,20 @@ unsafe fn do_laundry(cfi: &Vec<EhRef>, stack: u64, saved_regs: &SavedRegs, excep
     //let (cfi_addr, cfi_sz) = cfi.clone().unwrap();
 
     let cfi: Vec<_> = cfi.iter().map(|er| {
-        let bases = gimli::BaseAddresses::default()
+        let bases = BaseAddresses::default()
             .set_cfi(er.cfi.start);
         let eh_frame_hdr: &'static [u8] = std::slice::from_raw_parts(er.cfi.start as *const u8, er.cfi.len() as usize);
         let efh = &*(er.cfi.start as *const DwarfEhFrameHdr);
         assert_eq!(efh.version, 1);
-        let fpe = gimli::DwEhPe(efh.eh_frame_ptr_enc);
+        let fpe = DwEhPe(efh.eh_frame_ptr_enc);
         println!("fpe {} {}", fpe.format(), fpe.application());
-        let mut rest = gimli::EndianBuf::new(&eh_frame_hdr[4..], gimli::NativeEndian);
-        let cfi_addr = deref_ptr(gimli::parse_encoded_pointer(fpe, &bases, 64, &gimli::EndianBuf::new(eh_frame_hdr, gimli::NativeEndian), &mut rest).unwrap());
+        let mut rest = EndianBuf::new(&eh_frame_hdr[4..], NativeEndian);
+        let cfi_addr = deref_ptr(gimli::parse_encoded_pointer(fpe, &bases, 64, &EndianBuf::new(eh_frame_hdr, NativeEndian), &mut rest).unwrap());
         let cfi_sz = 0x10000000; // FIXME HACK
         
         let eh_frame: &'static [u8] = std::slice::from_raw_parts(cfi_addr as *const u8, cfi_sz as usize);
         println!("cfi at {:p} sz {:x}", cfi_addr as *const u8, cfi_sz);
-        let eh_frame = gimli::EhFrame::new(eh_frame, gimli::LittleEndian);
+        let eh_frame = EhFrame::new(eh_frame, NativeEndian);
         
         let bases = bases.set_cfi(cfi_addr);
 
@@ -121,12 +133,12 @@ unsafe fn do_laundry(cfi: &Vec<EhRef>, stack: u64, saved_regs: &SavedRegs, excep
 
         let &(_, ref eh_frame, ref bases) = cfi.iter().filter(|x| x.0.text.contains(caller)).next().unwrap();
 
-        match unwind_info_for_address(&eh_frame, &bases, gimli::UninitializedUnwindContext::new(), caller) {
-            Ok((row, personality, lsda, initial_address)) => {
+        match unwind_info_for_address(&eh_frame, &bases, UninitializedUnwindContext::new(), caller) {
+            Ok(UnwindInfo { row, personality, lsda, initial_address }) => {
                 //Ok((row, _)) => {
                 println!("ok: {:?} (0x{:x} - 0x{:x})", row.cfa(), row.start_address(), row.end_address());
                 let cfa = match *row.cfa() {
-                    gimli::CfaRule::RegisterAndOffset { register, offset } =>
+                    CfaRule::RegisterAndOffset { register, offset } =>
                         registers[register].unwrap().wrapping_add(offset as u64),
                     _ => unimplemented!(),
                 };
@@ -157,14 +169,14 @@ unsafe fn do_laundry(cfi: &Vec<EhRef>, stack: u64, saved_regs: &SavedRegs, excep
                     println!("rule {} {:?}", reg, rule);
                     assert!(reg != 7); // stack = cfa
                     newregs[reg] = match *rule {
-                        gimli::RegisterRule::Undefined => unreachable!(), // registers[reg],
-                        gimli::RegisterRule::SameValue => Some(registers[reg].unwrap()), // not sure why this exists
-                        gimli::RegisterRule::Register(r) => registers[r],
-                        gimli::RegisterRule::Offset(n) => Some(*((cfa.wrapping_add(n as u64)) as *const u64)),
-                        gimli::RegisterRule::ValOffset(n) => Some(cfa.wrapping_add(n as u64)),
-                        gimli::RegisterRule::Expression(_) => unimplemented!(),
-                        gimli::RegisterRule::ValExpression(_) => unimplemented!(),
-                        gimli::RegisterRule::Architectural => unreachable!(),
+                        RegisterRule::Undefined => unreachable!(), // registers[reg],
+                        RegisterRule::SameValue => Some(registers[reg].unwrap()), // not sure why this exists
+                        RegisterRule::Register(r) => registers[r],
+                        RegisterRule::Offset(n) => Some(*((cfa.wrapping_add(n as u64)) as *const u64)),
+                        RegisterRule::ValOffset(n) => Some(cfa.wrapping_add(n as u64)),
+                        RegisterRule::Expression(_) => unimplemented!(),
+                        RegisterRule::ValExpression(_) => unimplemented!(),
+                        RegisterRule::Architectural => unreachable!(),
                     };
                 }
                 newregs[7] = Some(cfa);
