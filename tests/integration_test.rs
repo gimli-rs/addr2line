@@ -2,15 +2,14 @@ extern crate addr2line;
 extern crate itertools;
 
 use std::env;
-use std::path;
+use std::path::{self, PathBuf};
 use std::process;
 use std::io::prelude::*;
 use itertools::Itertools;
 
-#[test]
-fn identity_map() {
-    let target = env::current_exe().unwrap();
-    let mut debug = target.clone();
+fn self_path() -> (PathBuf, PathBuf) {
+    let path = env::current_exe().unwrap();
+    let mut debug = path.clone();
 
     // On macOS, symbols are kept in a separate .dSYM file
     if cfg!(target_os = "macos") {
@@ -22,6 +21,43 @@ fn identity_map() {
         debug.push(fname);
     }
 
+    (path, debug)
+}
+
+fn release_fixture_path() -> (PathBuf, PathBuf) {
+    let mut path = PathBuf::new();
+    if let Ok(dir) = env::var("CARGO_MANIFEST_DIR") {
+        path.push(dir);
+    }
+    path.push("fixtures");
+    path.push("addr2line-release");
+    let debug = path.clone();
+    (path, debug)
+}
+
+#[test]
+fn self_identity_map() {
+    identity_map(self_path())
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn self_with_functions() {
+    with_functions(self_path())
+}
+
+#[test]
+fn release_fixture_identity_map() {
+    identity_map(release_fixture_path())
+}
+
+#[test]
+#[cfg(not(target_os = "macos"))]
+fn release_fixture_with_functions() {
+    with_functions(release_fixture_path())
+}
+
+fn identity_map((target, debug): (PathBuf, PathBuf)) {
     // Parse the debug symbols using "our" addr2line
     let mut ours = addr2line::Mapping::new(&debug).unwrap();
 
@@ -87,13 +123,9 @@ fn identity_map() {
     );
 }
 
-#[test]
 #[cfg(not(target_os = "macos"))]
-fn with_functions() {
+fn with_functions((target, debug): (PathBuf, PathBuf)) {
     // Ignored on macOS since atos doesn't support -f
-
-    let target = env::current_exe().unwrap();
-    let debug = target.clone();
 
     // Parse the debug symbols using "our" addr2line
     let mut ours = addr2line::Options::default()
