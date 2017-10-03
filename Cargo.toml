@@ -1,0 +1,16 @@
+[package]
+name = "kardel"
+version = "0.1.0"
+authors = ["main() <main@ehvag.de>"]
+
+[dependencies]
+gimli = { path = "../dbgc/gimli" }
+libc = "0.2"
+goblin = "0.0"
+backtrace = "0.3"
+
+[build-dependencies]
+gcc = "0.3"
+
+#[profile.release]
+#debug = true
