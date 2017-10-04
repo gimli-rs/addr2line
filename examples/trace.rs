@@ -1,6 +1,7 @@
 extern crate unwind;
 extern crate fallible_iterator;
 extern crate backtrace;
+extern crate env_logger;
 
 use fallible_iterator::FallibleIterator;
 use unwind::{Unwinder, DwarfUnwinder};
@@ -19,6 +20,8 @@ fn foo() {
 }
 
 fn main() {
+    env_logger::init().unwrap();
+
     foo();
     println!("down");
 }

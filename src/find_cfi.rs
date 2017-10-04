@@ -56,10 +56,8 @@ extern "C" fn callback(info: *const DlPhdrInfo, size: usize, data: *mut c_void) 
     assert!(size >= mem::size_of::<DlPhdrInfo>());
 
     unsafe {
-        println!("addr 0x{:x}", (*info).addr);
-
         let name = CStr::from_ptr((*info).name);
-        println!("{:?} has {}", name, (*info).phnum);
+        trace!("{:?} at 0x{:x} with {} segments", name, (*info).addr, (*info).phnum);
 
         let phdr = slice::from_raw_parts((*info).phdr, (*info).phnum as usize);
 
@@ -81,6 +79,6 @@ extern "C" fn callback(info: *const DlPhdrInfo, size: usize, data: *mut c_void) 
 pub fn find_cfi_sections() -> Vec<EhRef> {
     let mut cfi: Vec<EhRef> = Vec::new();
     unsafe { dl_iterate_phdr(callback, &mut cfi as *mut _ as *mut c_void) };
-    println!("{:?}", cfi);
+    trace!("CFI sections: {:?}", cfi);
     cfi
 }

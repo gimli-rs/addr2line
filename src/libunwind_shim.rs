@@ -62,7 +62,7 @@ pub unsafe extern "C" fn _Unwind_Resume(exception: *mut _Unwind_Exception) -> ! 
 #[no_mangle]
 pub unsafe extern "C" fn _Unwind_DeleteException(exception: *mut _Unwind_Exception) {
     ((*exception).exception_cleanup)(_Unwind_Reason_Code::_URC_FOREIGN_EXCEPTION_CAUGHT, exception);
-    println!("exception deleted.");
+    trace!("exception deleted.");
 }
 
 #[no_mangle]
@@ -128,9 +128,8 @@ unsafe fn unwind_tracer(mut frames: &mut ::StackFrames, exception: *mut _Unwind_
     }
 
     while let Some(frame) = frames.next().unwrap() {
-        // FIXME the whole phase1/2 shenanigans
         if let Some(personality) = frame.personality {
-            println!("HAS PERSONALITY");
+            trace!("HAS PERSONALITY");
             let personality: PersonalityRoutine = ::std::mem::transmute(personality);
 
             let mut ctx = _Unwind_Context {
@@ -142,6 +141,7 @@ unsafe fn unwind_tracer(mut frames: &mut ::StackFrames, exception: *mut _Unwind_
 
             (*exception).private_contptr = frames.registers()[DwarfRegister::SP];
 
+            // ABI specifies that phase 1 is optional, so we just run phase 2 (CLEANUP_PHASE)
             match personality(1, _Unwind_Action::_UA_CLEANUP_PHASE as c_int, (*exception).exception_class,
                               exception, &mut ctx) {
                 _Unwind_Reason_Code::_URC_CONTINUE_UNWIND => (),

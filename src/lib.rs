@@ -1,6 +1,7 @@
 extern crate gimli;
 extern crate libc;
 extern crate fallible_iterator;
+#[macro_use] extern crate log;
 
 use gimli::{UnwindSection, UnwindTable, UnwindTableRow, EhFrame, BaseAddresses, UninitializedUnwindContext, Pointer, Reader, CieOrFde, EndianBuf, NativeEndian, CfaRule, RegisterRule, EhFrameHdr, ParsedEhFrameHdr};
 use fallible_iterator::FallibleIterator;
@@ -59,7 +60,7 @@ impl Default for DwarfUnwinder {
                 let cfi_sz = 0x10000000; // FIXME HACK
 
                 let eh_frame: &'static [u8] = std::slice::from_raw_parts(cfi_addr as *const u8, cfi_sz as usize);
-                println!("cfi at {:p} sz {:x}", cfi_addr as *const u8, cfi_sz);
+                trace!("cfi at {:p} sz {:x}", cfi_addr as *const u8, cfi_sz);
                 let eh_frame = EhFrame::new(eh_frame, NativeEndian);
 
                 let bases = bases.set_cfi(cfi_addr).set_data(er.cfi.start);
@@ -120,7 +121,7 @@ fn unwind_info_for_address<'bases>(eh_frame_hdr: &ParsedEhFrameHdr<StaticReader>
 
 
     if let Some(fde) = target_fde {
-        println!("fde {:x} - {:x}", fde.initial_address(), fde.len());
+        trace!("fde {:x} - {:x}", fde.initial_address(), fde.len());
         assert!(fde.contains(address));
         let mut result_row = None;
         let mut ctx = ctx.initialize(fde.cie()).unwrap();
@@ -174,7 +175,7 @@ impl<'a> FallibleIterator for StackFrames<'a> {
             let mut newregs = registers.clone();
             newregs[DwarfRegister::IP] = None;
             for &(reg, ref rule) in row.registers() {
-                println!("rule {} {:?}", reg, rule);
+                trace!("rule {} {:?}", reg, rule);
                 assert!(reg != 7); // stack = cfa
                 newregs[reg] = match *rule {
                     RegisterRule::Undefined => unreachable!(), // registers[reg],
@@ -190,13 +191,13 @@ impl<'a> FallibleIterator for StackFrames<'a> {
             newregs[7] = Some(cfa);
 
             *registers = newregs;
-            println!("registers:{:?}", registers);
+            trace!("registers:{:?}", registers);
         }
 
 
         if let Some(mut caller) = registers[DwarfRegister::IP] {
             caller -= 1; // THIS IS NECESSARY
-            println!("caller is 0x{:x}", caller);
+            debug!("caller is 0x{:x}", caller);
 
             let &ObjectRecord { ref eh_frame, ref bases, ref eh_frame_hdr, .. } = self.unwinder.cfi.iter().filter(|x| x.er.text.contains(caller)).next().ok_or(gimli::Error::NoUnwindInfoForAddress)?;
 
@@ -204,13 +205,13 @@ impl<'a> FallibleIterator for StackFrames<'a> {
             let UnwindInfo { row, personality, lsda, initial_address, ctx } = unwind_info_for_address(eh_frame_hdr, eh_frame, &bases, ctx, caller)?;
             self.unwinder.ctx = Some(ctx);
 
-            println!("ok: {:?} (0x{:x} - 0x{:x})", row.cfa(), row.start_address(), row.end_address());
+            trace!("ok: {:?} (0x{:x} - 0x{:x})", row.cfa(), row.start_address(), row.end_address());
             let cfa = match *row.cfa() {
                 CfaRule::RegisterAndOffset { register, offset } =>
                     registers[register].unwrap().wrapping_add(offset as u64),
                 _ => unimplemented!(),
             };
-            println!("cfa is 0x{:x}", cfa);
+            trace!("cfa is 0x{:x}", cfa);
 
             self.state = Some((row, cfa));
 

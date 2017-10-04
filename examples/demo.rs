@@ -1,4 +1,5 @@
 extern crate unwind;
+extern crate env_logger;
 
 struct Bomb(String);
 
@@ -18,6 +19,8 @@ fn foo() {
 }
 
 fn main() {
+    env_logger::init().unwrap();
+
     foo();
     println!("down");
 }
