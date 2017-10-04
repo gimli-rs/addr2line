@@ -36,11 +36,13 @@ fn release_fixture_path() -> (PathBuf, PathBuf) {
 }
 
 #[test]
+#[ignore] // FIXME: hangs sometimes
 fn self_identity_map() {
     identity_map(self_path())
 }
 
 #[test]
+#[ignore] // FIXME: hangs a lot
 #[cfg(not(target_os = "macos"))]
 fn self_with_functions() {
     with_functions(self_path())
