@@ -1,9 +1,9 @@
+use super::{UnwindPayload, StackFrames};
 use registers::{Registers, DwarfRegister};
-use libunwind_shim::_Unwind_Exception;
-use find_cfi::find_cfi_sections;
 
+#[allow(improper_ctypes)] // trampoline just forwards the ptr
 extern "C" {
-    pub fn unwind_trampoline(exception: *mut _Unwind_Exception);
+    pub fn unwind_trampoline(payload: *mut UnwindPayload);
     fn unwind_lander(regs: *const LandingRegisters);
 }
 
@@ -39,9 +39,27 @@ pub struct SavedRegs {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn unwind_recorder(exception: *mut _Unwind_Exception, stack: u64, saved_regs: *mut SavedRegs) {
-    let cfi = find_cfi_sections();
-    ::do_laundry(&cfi, stack, &*saved_regs, exception);
+pub unsafe extern "C" fn unwind_recorder(payload: *mut UnwindPayload, stack: u64, saved_regs: *mut SavedRegs) {
+    let payload = &mut *payload;
+    let saved_regs = &*saved_regs;
+
+    let mut registers = Registers::default();
+    registers[DwarfRegister::Rbx] = Some(saved_regs.rbx);
+    registers[DwarfRegister::Rbp] = Some(saved_regs.rbp);
+    registers[DwarfRegister::SP] = Some(stack + 8);
+    registers[DwarfRegister::R12] = Some(saved_regs.r12);
+    registers[DwarfRegister::R13] = Some(saved_regs.r13);
+    registers[DwarfRegister::R14] = Some(saved_regs.r14);
+    registers[DwarfRegister::R15] = Some(saved_regs.r15);
+    registers[DwarfRegister::IP] = Some(*(stack as *const u64));
+
+    let mut frames = StackFrames {
+        unwinder: payload.unwinder,
+        registers,
+        state: None,
+    };
+
+    (payload.tracer)(&mut frames);
 }
 
 pub unsafe fn land(regs: &Registers) {
