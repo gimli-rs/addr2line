@@ -5,6 +5,8 @@ use std::env;
 use std::path::{self, PathBuf};
 use std::process;
 use std::io::prelude::*;
+use std::io::BufReader;
+use std::thread;
 use itertools::Itertools;
 
 fn self_path() -> (PathBuf, PathBuf) {
@@ -36,13 +38,11 @@ fn release_fixture_path() -> (PathBuf, PathBuf) {
 }
 
 #[test]
-#[ignore] // FIXME: hangs sometimes
 fn self_identity_map() {
     identity_map(self_path())
 }
 
 #[test]
-#[ignore] // FIXME: hangs a lot
 #[cfg(not(target_os = "macos"))]
 fn self_with_functions() {
     with_functions(self_path())
@@ -60,26 +60,23 @@ fn release_fixture_with_functions() {
 }
 
 fn identity_map((target, debug): (PathBuf, PathBuf)) {
+    // Find some addresses to test using nm
+    let mappings = get_test_addresses(target.as_path());
+
     // Parse the debug symbols using "our" addr2line
     let mut ours = addr2line::Mapping::new(&debug).unwrap();
 
     // Spin up the "real" addr2line
-    let mut theirs = spawn_oracle(target.as_path(), &[]);
-
-    // Find some addresses to test using nm (we'll later filter to just text section symbols)
-    let mut theirs_in = theirs.stdin.take().unwrap();
-    let mappings = get_test_addresses(target.as_path(), &mut theirs_in);
-    drop(theirs_in);
+    let theirs = spawn_oracle(target.as_path(), &[], mappings.clone());
+    let mut theirs = BufReader::new(theirs).lines();
 
     // Go through addresses one by one, and check that we get the same answer as addr2line does.
-    use std::io::BufReader;
-    let mut theirs_out = BufReader::new(theirs.stdout.take().unwrap()).lines();
     let mut all = 0;
     let mut excusable = 0;
     let mut got = 0;
     for addr in mappings {
         // Read the oracle ouput
-        let oracle = theirs_out.next().unwrap().unwrap();
+        let oracle = theirs.next().unwrap().unwrap();
         let oracle = canonicalize_oracle_output(&*oracle);
 
         // Does our answer match?
@@ -129,6 +126,9 @@ fn identity_map((target, debug): (PathBuf, PathBuf)) {
 fn with_functions((target, debug): (PathBuf, PathBuf)) {
     // Ignored on macOS since atos doesn't support -f
 
+    // Find some addresses to test using nm
+    let mappings = get_test_addresses(target.as_path());
+
     // Parse the debug symbols using "our" addr2line
     let mut ours = addr2line::Options::default()
         .with_functions()
@@ -136,24 +136,18 @@ fn with_functions((target, debug): (PathBuf, PathBuf)) {
         .unwrap();
 
     // Spin up the "real" addr2line
-    let mut theirs = spawn_oracle(target.as_path(), &["-f"]);
-
-    // Find some addresses to test using nm (we'll later filter to just text section symbols)
-    let mut theirs_in = theirs.stdin.take().unwrap();
-    let mappings = get_test_addresses(target.as_path(), &mut theirs_in);
-    drop(theirs_in);
+    let theirs = spawn_oracle(target.as_path(), &["-f"], mappings.clone());
+    let mut theirs = BufReader::new(theirs).lines();
 
     // Go through addresses one by one, and check that we get the same answer as addr2line does.
-    use std::io::BufReader;
-    let mut theirs_out = BufReader::new(theirs.stdout.take().unwrap()).lines();
     let mut all = 0;
     let mut excusable = 0;
     let mut func_hits = 0;
     let mut got = 0;
     for addr in mappings {
         // Read the oracle ouput
-        let function = theirs_out.next().unwrap().unwrap();
-        let oracle = theirs_out.next().unwrap().unwrap();
+        let function = theirs.next().unwrap().unwrap();
+        let oracle = theirs.next().unwrap().unwrap();
         let oracle = canonicalize_oracle_output(&*oracle);
 
         // Does our answer match?
@@ -203,7 +197,7 @@ fn with_functions((target, debug): (PathBuf, PathBuf)) {
 }
 
 /// Spawns the oracle version of addr2line on this platform for the given executable.
-fn spawn_oracle(target: &path::Path, args: &[&str]) -> process::Child {
+fn spawn_oracle(target: &path::Path, args: &[&str], addresses: Vec<u64>) -> process::ChildStdout {
     let (theirs, exe) = if cfg!(target_os = "macos") {
         // We have to use atos on macOS
         ("atos", "-o")
@@ -212,19 +206,25 @@ fn spawn_oracle(target: &path::Path, args: &[&str]) -> process::Child {
         ("addr2line", "-e")
     };
 
-    process::Command::new(theirs)
+    let mut theirs = process::Command::new(theirs)
         .arg(exe)
         .arg(target)
         .args(args)
         .stdin(process::Stdio::piped())
         .stdout(process::Stdio::piped())
         .spawn()
-        .expect("failed to spawn their addr2line")
+        .expect("failed to spawn their addr2line");
+    let mut theirs_in = theirs.stdin.take().unwrap();
+    let theirs_out = theirs.stdout.take().unwrap();
+    thread::spawn(move || for address in &addresses {
+        write!(theirs_in, "0x{:x}\n", address).unwrap();
+    });
+
+    theirs_out
 }
 
 /// Obtain a list of addresses contained within the text section of the `target` executable.
-/// Addresses are written to the given `oracle` in the same order as they are yielded.
-fn get_test_addresses(target: &path::Path, oracle: &mut Write) -> Vec<u64> {
+fn get_test_addresses(target: &path::Path) -> Vec<u64> {
     // Find some addresses to test using nm (we'll later filter to just text section symbols)
     let names = process::Command::new("/usr/bin/nm")
         .arg(target)
@@ -250,12 +250,7 @@ fn get_test_addresses(target: &path::Path, oracle: &mut Write) -> Vec<u64> {
             }
         })
         .step(5)
-        .map(|addr| {
-            oracle.write_all(b"0x").unwrap();
-            oracle.write_all(addr.as_bytes()).unwrap();
-            oracle.write_all(b"\n").unwrap();
-            u64::from_str_radix(addr, 16).unwrap()
-        })
+        .map(|addr| u64::from_str_radix(addr, 16).unwrap())
         .collect()
 }
 
