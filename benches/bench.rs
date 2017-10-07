@@ -1,5 +1,4 @@
 #![feature(test)]
-
 // FIXME: `get_test_addresses` doesn't work on macos.
 #![cfg(not(target_os = "macos"))]
 
