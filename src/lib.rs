@@ -333,7 +333,7 @@ where
                 &debug_ranges,
                 &debug_line,
                 &debug_str,
-                &header,
+                header,
                 opts,
             );
             let unit = unit.chain_err(|| "encountered invalid compilation unit")?;
@@ -358,31 +358,37 @@ where
                 continue;
             }
 
-            unit.lines.read_sequences();
-            let row = unit.lines.locate(addr);
-            if row.is_none() {
-                continue;
-            }
-            let row = row.unwrap();
-            let header = unit.lines.program_rows.header();
-
-            let file = header.file(row.file_index).ok_or_else(|| {
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
-            })?;
-
-            let mut path = path::PathBuf::new();
-            if let Some(directory) = file.directory(header) {
-                let directory = directory.to_string_lossy();
-                if !directory.starts_with('/') {
-                    if let Some(comp_dir) = unit.comp_dir() {
-                        path.push(&*comp_dir.to_string_lossy());
-                    }
+            let mut path;
+            let line;
+            {
+                unit.lines.read_sequences();
+                let row = unit.lines.locate(addr);
+                if row.is_none() {
+                    continue;
                 }
-                path.push(&*directory);
-            }
-            path.push(&*file.path_name().to_string_lossy());
+                let row = row.unwrap();
+                let header = unit.lines.program_rows.header();
 
-            let line = row.line;
+                let file = header.file(row.file_index).ok_or_else(|| {
+                    ErrorKind::InvalidDebugSymbols(DebugInfoError::InvalidDebugLineTarget)
+                })?;
+
+                path = path::PathBuf::new();
+                if let Some(directory) = file.directory(header) {
+                    let directory = directory.to_string_lossy();
+                    if !directory.starts_with('/') {
+                        if let Some(comp_dir) = unit.comp_dir() {
+                            path.push(&*comp_dir.to_string_lossy());
+                        }
+                    }
+                    path.push(&*directory);
+                }
+                path.push(&*file.path_name().to_string_lossy());
+
+                line = row.line;
+            }
+
+            unit.read_programs()?;
             if unit.programs.is_empty() {
                 return Ok(Some((path, line, None)));
             }
@@ -497,9 +503,15 @@ struct Unit<'input, Endian>
 where
     Endian: gimli::Endianity,
 {
+    debug_ranges: gimli::DebugRanges<gimli::EndianBuf<'input, Endian>>,
+    debug_str: gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
+    header: gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
+    abbrev: gimli::Abbreviations,
+    base_address: u64,
     range: Option<gimli::Range>,
     lines: Lines<'input, Endian>,
     comp_dir: Option<gimli::EndianBuf<'input, Endian>>,
+    read_programs: bool,
     programs: Vec<Program<'input, Endian>>,
     language: Option<gimli::DwLang>,
 }
@@ -510,21 +522,27 @@ where
 {
     fn parse(
         debug_abbrev: &gimli::DebugAbbrev<gimli::EndianBuf<Endian>>,
-        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
+        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<'input, Endian>>,
         debug_line: &gimli::DebugLine<gimli::EndianBuf<'input, Endian>>,
         debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
-        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
+        header: gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
         opts: Options,
     ) -> Result<Option<Unit<'input, Endian>>> {
-        // We first want to parse out the compilation unit, and then any contained subprograms.
+        let mut low_pc = None;
+        let mut entry_pc = None;
+        let mut high_pc = None;
+        let mut size = None;
+        let mut line_offset = None;
+        let mut comp_dir = None;
+        let mut comp_name = None;
+        let mut language = None;
+
         let abbrev = header
             .abbreviations(debug_abbrev)
             .chain_err(|| "compilation unit refers to non-existing abbreviations")?;
 
-        let mut entries = header.entries(&abbrev);
-        let base_address;
-        let mut unit = {
-            // Scoped so that we can continue using entries for the loop below
+        {
+            let mut entries = header.entries(&abbrev);
             let (_, entry) = entries
                 .next_dfs()
                 .chain_err(|| "compilation unit is broken")?
@@ -538,14 +556,6 @@ where
                 );
             }
 
-            let mut low_pc = None;
-            let mut entry_pc = None;
-            let mut high_pc = None;
-            let mut size = None;
-            let mut line_offset = None;
-            let mut comp_dir = None;
-            let mut comp_name = None;
-            let mut language = None;
             let mut attrs = entry.attrs();
             while let Some(attr) = attrs
                 .next()
@@ -586,46 +596,54 @@ where
                     _ => {}
                 }
             }
-
-            base_address = if let Some(low_pc) = low_pc {
-                low_pc
-            } else if let Some(entry_pc) = entry_pc {
-                entry_pc
-            } else {
-                0
-            };
-
-            // Where does our compilation unit live?
-            let range = Self::parse_contiguous_range(low_pc, high_pc, size)
-                .chain_err(|| "compilation unit has invalid low_pc and/or high_pc")?;
-
-            let line_offset = match line_offset {
-                Some(line_offset) => line_offset,
-                None => return Ok(None),
-            };
-
-            let lines = Lines::new(
-                debug_line,
-                line_offset,
-                header.address_size(),
-                comp_dir,
-                comp_name,
-            )?;
-
-            Unit {
-                range: range,
-                lines: lines,
-                comp_dir,
-                programs: vec![],
-                language: language,
-            }
-        };
-
-        // Do we also need to extract function information?
-        if !opts.with_functions {
-            return Ok(Some(unit));
         }
 
+        let base_address = if let Some(low_pc) = low_pc {
+            low_pc
+        } else if let Some(entry_pc) = entry_pc {
+            entry_pc
+        } else {
+            0
+        };
+
+        // Where does our compilation unit live?
+        let range = Self::parse_contiguous_range(low_pc, high_pc, size)
+            .chain_err(|| "compilation unit has invalid low_pc and/or high_pc")?;
+
+        let line_offset = match line_offset {
+            Some(line_offset) => line_offset,
+            None => return Ok(None),
+        };
+
+        let lines = Lines::new(
+            debug_line,
+            line_offset,
+            header.address_size(),
+            comp_dir,
+            comp_name,
+        )?;
+
+        Ok(Some(Unit {
+            debug_ranges: *debug_ranges,
+            debug_str: *debug_str,
+            header,
+            abbrev,
+            base_address,
+            range,
+            lines,
+            comp_dir,
+            read_programs: !opts.with_functions,
+            programs: vec![],
+            language,
+        }))
+    }
+
+    fn read_programs(&mut self) -> Result<()> {
+        if self.read_programs {
+            return Ok(());
+        }
+        let mut programs = Vec::new();
+        let mut entries = self.header.entries(&self.abbrev);
         while let Some((_, entry)) = entries
             .next_dfs()
             .chain_err(|| "tree below compilation unit yielded invalid entry")?
@@ -636,28 +654,19 @@ where
                 _ => continue,
             }
 
-            unit.parse_program(
-                entry,
-                header,
-                debug_ranges,
-                debug_str,
-                &abbrev,
-                base_address,
-            )?;
+            if let Some(program) = self.parse_program(entry)? {
+                programs.push(program);
+            }
         }
-
-        Ok(Some(unit))
+        self.programs = programs;
+        self.read_programs = true;
+        Ok(())
     }
 
     fn parse_program<'a, 'b>(
-        &mut self,
+        &self,
         entry: &gimli::DebuggingInformationEntry<'a, 'b, gimli::EndianBuf<'input, Endian>>,
-        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
-        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
-        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
-        abbrev: &gimli::Abbreviations,
-        base_address: u64,
-    ) -> Result<()> {
+    ) -> Result<Option<Program<'input, Endian>>> {
         let mut name = None;
         let mut abstract_origin = None;
         let mut specification = None;
@@ -675,10 +684,12 @@ where
             match attr.name() {
                 // For naming, we prefer the linked name, if available
                 gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    name = attr.string_value(debug_str);
+                    name = attr.string_value(&self.debug_str);
                 }
                 gimli::DW_AT_name => if name.is_none() {
-                    name = attr.string_value(debug_str);
+                    // Linked name is not available, so fall back to just plain old name,
+                    // if that's available.
+                    name = attr.string_value(&self.debug_str);
                 },
                 gimli::DW_AT_abstract_origin => {
                     abstract_origin = Some(attr.value());
@@ -705,74 +716,58 @@ where
 
         // Where does this function live?
         let ranges = if let Some(offset) = range_offset {
-            Self::parse_noncontiguous_ranges(
-                offset,
-                debug_ranges,
-                header.address_size(),
-                base_address,
-            )?
+            self.parse_noncontiguous_ranges(offset)?
         } else {
             Self::parse_contiguous_range(low_pc, high_pc, size)?
                 .into_iter()
                 .collect()
         };
         if ranges.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        let maybe_name = Self::resolve_name(
-            name,
-            &abstract_origin,
-            &specification,
-            header,
-            debug_str,
-            &abbrev,
-        ).chain_err(|| {
-            format!(
-                "failed to resolve name for subroutine at <{:x}><{:x}>",
-                header.offset().0,
-                entry.offset().0
-            )
-        })?;
+        let maybe_name = self.resolve_name(name, &abstract_origin, &specification)
+            .chain_err(|| {
+                format!(
+                    "failed to resolve name for subroutine at <{:x}><{:x}>",
+                    self.header.offset().0,
+                    entry.offset().0
+                )
+            })?;
 
         if let Some(name) = maybe_name {
-            self.programs.push(Program {
+            Ok(Some(Program {
                 ranges: ranges,
                 inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
                 name: name,
-            });
+            }))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     fn resolve_name(
+        &self,
         name: Option<gimli::EndianBuf<'input, Endian>>,
         abstract_origin: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
         specification: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
-        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
-        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
-        abbrev: &gimli::Abbreviations,
     ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
-        // Linked name is not available, so fall back to just plain old name, if that's available.
         if let Some(name) = name {
             return Ok(Some(name));
         }
 
         // If we don't have the link name, check if this function refers to another
         if let &Some(ref abstract_origin) = abstract_origin {
-            if let Some(name) =
-                Self::resolve_indirect_name(abstract_origin, header, debug_str, abbrev)
-                    .chain_err(|| "invalid subprogram abstract origin")?
+            if let Some(name) = self.resolve_indirect_name(abstract_origin)
+                .chain_err(|| "invalid subprogram abstract origin")?
             {
                 return Ok(Some(name));
             }
         }
 
         if let &Some(ref specification) = specification {
-            if let Some(name) =
-                Self::resolve_indirect_name(specification, header, debug_str, abbrev)
-                    .chain_err(|| "invalid subprogram specification origin")?
+            if let Some(name) = self.resolve_indirect_name(specification)
+                .chain_err(|| "invalid subprogram specification origin")?
             {
                 return Ok(Some(name));
             }
@@ -782,13 +777,13 @@ where
     }
 
     fn resolve_indirect_name(
+        &self,
         attr: &gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>,
-        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
-        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
-        abbrev: &gimli::Abbreviations,
     ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
         let mut entries = match attr {
-            &gimli::AttributeValue::UnitRef(offset) => header.entries_at_offset(abbrev, offset)?,
+            &gimli::AttributeValue::UnitRef(offset) => {
+                self.header.entries_at_offset(&self.abbrev, offset)?
+            }
             // FIXME: handle AttributeValue::DebugInfoRef
             _ => return Ok(None),
         };
@@ -809,12 +804,12 @@ where
             match attr.name() {
                 // For naming, we prefer the linked name, if available
                 gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    if let Some(name) = attr.string_value(debug_str) {
+                    if let Some(name) = attr.string_value(&self.debug_str) {
                         return Ok(Some(name));
                     }
                 }
                 gimli::DW_AT_name => {
-                    name = attr.string_value(debug_str);
+                    name = attr.string_value(&self.debug_str);
                 }
                 gimli::DW_AT_abstract_origin => {
                     abstract_origin = Some(attr.value());
@@ -825,25 +820,16 @@ where
                 _ => {}
             }
         }
-        Self::resolve_name(
-            name,
-            &abstract_origin,
-            &specification,
-            header,
-            debug_str,
-            abbrev,
-        )
+        self.resolve_name(name, &abstract_origin, &specification)
     }
 
     // This must be checked before `parse_contiguous_range`.
     fn parse_noncontiguous_ranges(
+        &self,
         offset: gimli::DebugRangesOffset,
-        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
-        address_size: u8,
-        base_address: u64,
     ) -> Result<Vec<gimli::Range>> {
-        let ranges = debug_ranges
-            .ranges(offset, address_size, base_address)
+        let ranges = self.debug_ranges
+            .ranges(offset, self.header.address_size(), self.base_address)
             .chain_err(|| "range offsets are not valid")?;
         let ranges = ranges.collect().chain_err(|| "range could not be parsed")?;
         Ok(ranges)
