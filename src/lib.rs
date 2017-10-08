@@ -538,55 +538,70 @@ where
                 );
             }
 
-            base_address = match entry.attr_value(gimli::DW_AT_low_pc) {
-                Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-                Err(e) => {
-                    return Err(Error::from(ErrorKind::Gimli(e)))
-                        .chain_err(|| "invalid low_pc attribute")
-                }
-                _ => match entry.attr_value(gimli::DW_AT_entry_pc) {
-                    Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-                    Err(e) => {
-                        return Err(Error::from(ErrorKind::Gimli(e)))
-                            .chain_err(|| "invalid entry_pc attribute")
+            let mut low_pc = None;
+            let mut entry_pc = None;
+            let mut high_pc = None;
+            let mut size = None;
+            let mut line_offset = None;
+            let mut comp_dir = None;
+            let mut comp_name = None;
+            let mut language = None;
+            let mut attrs = entry.attrs();
+            while let Some(attr) = attrs
+                .next()
+                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+                .chain_err(|| "invalid unit attribute")?
+            {
+                match attr.name() {
+                    gimli::DW_AT_low_pc => if let gimli::AttributeValue::Addr(value) = attr.value()
+                    {
+                        low_pc = Some(value);
+                    },
+                    gimli::DW_AT_entry_pc => {
+                        if let gimli::AttributeValue::Addr(value) = attr.value() {
+                            entry_pc = Some(value);
+                        }
                     }
-                    _ => 0,
-                },
+                    gimli::DW_AT_high_pc => match attr.value() {
+                        gimli::AttributeValue::Addr(value) => high_pc = Some(value),
+                        gimli::AttributeValue::Udata(value) => size = Some(value),
+                        _ => {}
+                    },
+                    gimli::DW_AT_stmt_list => {
+                        if let gimli::AttributeValue::DebugLineRef(value) = attr.value() {
+                            line_offset = Some(value);
+                        }
+                    }
+                    gimli::DW_AT_comp_dir => if let Some(value) = attr.string_value(debug_str) {
+                        comp_dir = Some(value);
+                    },
+                    gimli::DW_AT_name => if let Some(value) = attr.string_value(debug_str) {
+                        comp_name = Some(value);
+                    },
+                    gimli::DW_AT_language => if opts.with_demangling {
+                        if let gimli::AttributeValue::Language(value) = attr.value() {
+                            language = Some(value);
+                        }
+                    },
+                    _ => {}
+                }
+            }
+
+            base_address = if let Some(low_pc) = low_pc {
+                low_pc
+            } else if let Some(entry_pc) = entry_pc {
+                entry_pc
+            } else {
+                0
             };
 
             // Where does our compilation unit live?
-            let range = Self::parse_contiguous_range(entry)
+            let range = Self::parse_contiguous_range(low_pc, high_pc, size)
                 .chain_err(|| "compilation unit has invalid low_pc and/or high_pc")?;
 
-            // Extract source file and line information about the compilation unit
-            let line_offset = match entry.attr_value(gimli::DW_AT_stmt_list) {
-                Ok(Some(gimli::AttributeValue::DebugLineRef(offset))) => offset,
-                Err(e) => {
-                    return Err(Error::from(ErrorKind::Gimli(e)))
-                        .chain_err(|| "invalid compilation unit statement list")
-                }
-                _ => return Ok(None),
-            };
-            let comp_dir = entry
-                .attr(gimli::DW_AT_comp_dir)
-                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-                .chain_err(|| "invalid compilation unit directory")?
-                .and_then(|attr| attr.string_value(debug_str));
-            let comp_name = entry
-                .attr(gimli::DW_AT_name)
-                .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-                .chain_err(|| "invalid compilation unit name")?
-                .and_then(|attr| attr.string_value(debug_str));
-            let language = if opts.with_demangling {
-                entry
-                    .attr(gimli::DW_AT_language)
-                    .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
-                    .and_then(|attr| match attr.value() {
-                        gimli::AttributeValue::Language(lang) => Some(lang),
-                        _ => None,
-                    })
-            } else {
-                None
+            let line_offset = match line_offset {
+                Some(line_offset) => line_offset,
+                None => return Ok(None),
             };
 
             let lines = Lines::new(
@@ -621,182 +636,235 @@ where
                 _ => continue,
             }
 
-            // Where does this function live?
-            let ranges = Self::get_ranges(entry, debug_ranges, header.address_size(), base_address)
-                .chain_err(|| "subroutine has invalid ranges")?;
-            if ranges.is_empty() {
-                continue;
-            }
-
-            // When resolving an address, the code first looks for which compilation units have
-            // ranges that cover the address in question, and then only search within those. This
-            // relies on the assumption that all program ranges within a compilation unit are fully
-            // contained within compilation unit's range. That is
-            //
-            //   ∀r ∈ cu.ranges (cu.begin <= r <= cu.end)
-            //
-            // It turns out that this is not true: https://github.com/gimli-rs/addr2line/issues/30.
-            // In such programs, we will fail to resolve addresses located in units whose range
-            // fall outside the range of the containing compilation unit. This is not a hard error,
-            // since we can still generally resolve addresses, and tools like binutils' addr2line
-            // exhibit the same behavior, but it is something we should aim to eventually work
-            // around. Hence: TODO
-
-            let maybe_name = Self::resolve_name(entry, header, debug_str, &abbrev).chain_err(|| {
-                format!(
-                    "failed to resolve name for subroutine at <{:x}><{:x}>",
-                    header.offset().0,
-                    entry.offset().0
-                )
-            })?;
-
-            if let Some(name) = maybe_name {
-                unit.programs.push(Program {
-                    ranges: ranges,
-                    inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
-                    name: name,
-                });
-            }
+            unit.parse_program(
+                entry,
+                header,
+                debug_ranges,
+                debug_str,
+                &abbrev,
+                base_address,
+            )?;
         }
 
         Ok(Some(unit))
     }
 
-    fn resolve_name<'a, 'b>(
+    fn parse_program<'a, 'b>(
+        &mut self,
         entry: &gimli::DebuggingInformationEntry<'a, 'b, gimli::EndianBuf<'input, Endian>>,
+        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
+        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
+        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
+        abbrev: &gimli::Abbreviations,
+        base_address: u64,
+    ) -> Result<()> {
+        let mut name = None;
+        let mut abstract_origin = None;
+        let mut specification = None;
+        let mut low_pc = None;
+        let mut high_pc = None;
+        let mut size = None;
+        let mut range_offset = None;
+
+        let mut attrs = entry.attrs();
+        while let Some(attr) = attrs
+            .next()
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram attribute")?
+        {
+            match attr.name() {
+                // For naming, we prefer the linked name, if available
+                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                    name = attr.string_value(debug_str);
+                }
+                gimli::DW_AT_name => if name.is_none() {
+                    name = attr.string_value(debug_str);
+                },
+                gimli::DW_AT_abstract_origin => {
+                    abstract_origin = Some(attr.value());
+                }
+                gimli::DW_AT_specification => {
+                    specification = Some(attr.value());
+                }
+                gimli::DW_AT_low_pc => if let gimli::AttributeValue::Addr(value) = attr.value() {
+                    low_pc = Some(value);
+                },
+                gimli::DW_AT_high_pc => match attr.value() {
+                    gimli::AttributeValue::Addr(value) => high_pc = Some(value),
+                    gimli::AttributeValue::Udata(value) => size = Some(value),
+                    _ => {}
+                },
+                gimli::DW_AT_ranges => {
+                    if let gimli::AttributeValue::DebugRangesRef(value) = attr.value() {
+                        range_offset = Some(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Where does this function live?
+        let ranges = if let Some(offset) = range_offset {
+            Self::parse_noncontiguous_ranges(
+                offset,
+                debug_ranges,
+                header.address_size(),
+                base_address,
+            )?
+        } else {
+            Self::parse_contiguous_range(low_pc, high_pc, size)?
+                .into_iter()
+                .collect()
+        };
+        if ranges.is_empty() {
+            return Ok(());
+        }
+
+        let maybe_name = Self::resolve_name(
+            name,
+            &abstract_origin,
+            &specification,
+            header,
+            debug_str,
+            &abbrev,
+        ).chain_err(|| {
+            format!(
+                "failed to resolve name for subroutine at <{:x}><{:x}>",
+                header.offset().0,
+                entry.offset().0
+            )
+        })?;
+
+        if let Some(name) = maybe_name {
+            self.programs.push(Program {
+                ranges: ranges,
+                inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
+                name: name,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn resolve_name(
+        name: Option<gimli::EndianBuf<'input, Endian>>,
+        abstract_origin: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
+        specification: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
         header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
         debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
         abbrev: &gimli::Abbreviations,
     ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
-        // For naming, we prefer the linked name, if available
-        if let Some(name) = entry
-            .attr(gimli::DW_AT_linkage_name)
-            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-            .chain_err(|| "invalid subprogram linkage name")?
-            .and_then(|attr| attr.string_value(debug_str))
-        {
-            return Ok(Some(name));
-        }
-        if let Some(name) = entry
-            .attr(gimli::DW_AT_MIPS_linkage_name)
-            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-            .chain_err(|| "invalid subprogram linkage name")?
-            .and_then(|attr| attr.string_value(debug_str))
-        {
-            return Ok(Some(name));
-        }
-
         // Linked name is not available, so fall back to just plain old name, if that's available.
-        if let Some(name) = entry
-            .attr(gimli::DW_AT_name)
-            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-            .chain_err(|| "invalid subprogram name")?
-            .and_then(|attr| attr.string_value(debug_str))
-        {
+        if let Some(name) = name {
             return Ok(Some(name));
         }
 
         // If we don't have the link name, check if this function refers to another
-        if let Some(abstract_origin) =
-            Self::get_entry(entry, header, abbrev, gimli::DW_AT_abstract_origin)
-                .chain_err(|| "invalid subprogram abstract origin")?
-        {
-            let name = Self::resolve_name(&abstract_origin, header, debug_str, abbrev)
-                .chain_err(|| "abstract origin does not resolve to a name")?;
-            return Ok(name);
+        if let &Some(ref abstract_origin) = abstract_origin {
+            if let Some(name) =
+                Self::resolve_indirect_name(abstract_origin, header, debug_str, abbrev)
+                    .chain_err(|| "invalid subprogram abstract origin")?
+            {
+                return Ok(Some(name));
+            }
         }
-        if let Some(specification) =
-            Self::get_entry(entry, header, abbrev, gimli::DW_AT_specification)
-                .chain_err(|| "invalid subprogram specification")?
-        {
-            let name = Self::resolve_name(&specification, header, debug_str, abbrev)
-                .chain_err(|| "specification does not resolve to a name")?;
-            return Ok(name);
+
+        if let &Some(ref specification) = specification {
+            if let Some(name) =
+                Self::resolve_indirect_name(specification, header, debug_str, abbrev)
+                    .chain_err(|| "invalid subprogram specification origin")?
+            {
+                return Ok(Some(name));
+            }
         }
 
         Ok(None)
     }
 
-    fn get_entry<'a>(
-        entry: &gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>,
-        header: &'a gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
-        abbrev: &'a gimli::Abbreviations,
-        attr: gimli::DwAt,
-    ) -> Result<Option<gimli::DebuggingInformationEntry<'a, 'a, gimli::EndianBuf<'input, Endian>>>> {
-        if let Some(gimli::AttributeValue::UnitRef(offset)) = entry
-            .attr_value(attr)
-            .map_err(|e| Error::from(ErrorKind::Gimli(e)))?
-        {
-            let mut entries = header.entries_at_offset(abbrev, offset)?;
-            let (_, entry) = entries.next_dfs()?.ok_or_else(|| {
-                ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
-            })?;
-            return Ok(Some(entry.clone()));
-        }
+    fn resolve_indirect_name(
+        attr: &gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>,
+        header: &gimli::CompilationUnitHeader<gimli::EndianBuf<'input, Endian>>,
+        debug_str: &gimli::DebugStr<gimli::EndianBuf<'input, Endian>>,
+        abbrev: &gimli::Abbreviations,
+    ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
+        let mut entries = match attr {
+            &gimli::AttributeValue::UnitRef(offset) => header.entries_at_offset(abbrev, offset)?,
+            // FIXME: handle AttributeValue::DebugInfoRef
+            _ => return Ok(None),
+        };
+        let (_, entry) = entries.next_dfs()?.ok_or_else(|| {
+            ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
+        })?;
 
-        Ok(None)
-    }
+        let mut name = None;
+        let mut abstract_origin = None;
+        let mut specification = None;
 
-    fn get_ranges(
-        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
-        debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
-        address_size: u8,
-        base_address: u64,
-    ) -> Result<Vec<gimli::Range>> {
-        if let Some(range) =
-            Self::parse_noncontiguous_ranges(entry, debug_ranges, address_size, base_address)?
+        let mut attrs = entry.attrs();
+        while let Some(attr) = attrs
+            .next()
+            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
+            .chain_err(|| "invalid subprogram attribute")?
         {
-            return Ok(range);
+            match attr.name() {
+                // For naming, we prefer the linked name, if available
+                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                    if let Some(name) = attr.string_value(debug_str) {
+                        return Ok(Some(name));
+                    }
+                }
+                gimli::DW_AT_name => {
+                    name = attr.string_value(debug_str);
+                }
+                gimli::DW_AT_abstract_origin => {
+                    abstract_origin = Some(attr.value());
+                }
+                gimli::DW_AT_specification => {
+                    specification = Some(attr.value());
+                }
+                _ => {}
+            }
         }
-        if let Some(range) = Self::parse_contiguous_range(entry)?.map(|range| vec![range]) {
-            return Ok(range);
-        }
-        Ok(vec![])
+        Self::resolve_name(
+            name,
+            &abstract_origin,
+            &specification,
+            header,
+            debug_str,
+            abbrev,
+        )
     }
 
     // This must be checked before `parse_contiguous_range`.
     fn parse_noncontiguous_ranges(
-        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
+        offset: gimli::DebugRangesOffset,
         debug_ranges: &gimli::DebugRanges<gimli::EndianBuf<Endian>>,
         address_size: u8,
         base_address: u64,
-    ) -> Result<Option<Vec<gimli::Range>>> {
-        let offset = match entry.attr_value(gimli::DW_AT_ranges) {
-            Ok(Some(gimli::AttributeValue::DebugRangesRef(offset))) => offset,
-            Err(e) => {
-                return Err(Error::from(ErrorKind::Gimli(e)))
-                    .chain_err(|| "invalid ranges attribute")
-            }
-            _ => return Ok(None),
-        };
-
+    ) -> Result<Vec<gimli::Range>> {
         let ranges = debug_ranges
             .ranges(offset, address_size, base_address)
             .chain_err(|| "range offsets are not valid")?;
         let ranges = ranges.collect().chain_err(|| "range could not be parsed")?;
-        Ok(Some(ranges))
+        Ok(ranges)
     }
 
     fn parse_contiguous_range(
-        entry: &gimli::DebuggingInformationEntry<gimli::EndianBuf<Endian>>,
+        low_pc: Option<u64>,
+        high_pc: Option<u64>,
+        size: Option<u64>,
     ) -> Result<Option<gimli::Range>> {
-        let low_pc = match entry.attr_value(gimli::DW_AT_low_pc) {
-            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-            Err(e) => {
-                return Err(Error::from(ErrorKind::Gimli(e)))
-                    .chain_err(|| "invalid low_pc attribute")
-            }
-            _ => return Ok(None),
+        let low_pc = match low_pc {
+            Some(low_pc) => low_pc,
+            None => return Ok(None),
         };
 
-        let high_pc = match entry.attr_value(gimli::DW_AT_high_pc) {
-            Ok(Some(gimli::AttributeValue::Addr(addr))) => addr,
-            Ok(Some(gimli::AttributeValue::Udata(size))) => low_pc.wrapping_add(size),
-            Err(e) => {
-                return Err(Error::from(ErrorKind::Gimli(e)))
-                    .chain_err(|| "invalid high_pc attribute")
-            }
-            _ => return Ok(None),
+        let high_pc = match high_pc {
+            Some(high_pc) => high_pc,
+            None => match size {
+                Some(size) => low_pc.wrapping_add(size),
+                None => return Ok(None),
+            },
         };
 
         if low_pc == 0 {
