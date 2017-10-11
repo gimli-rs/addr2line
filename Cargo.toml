@@ -1,0 +1,11 @@
+[package]
+name = "hardliner"
+version = "0.1.0"
+authors = ["main() <main@ehvag.de>"]
+
+[dependencies]
+gimli = { path = "../gimli" }
+fallible-iterator = "0.1"
+memmap = "0.5"
+object = "0.4"
+intervaltree = "0.1"
