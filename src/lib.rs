@@ -667,14 +667,45 @@ where
         &self,
         entry: &gimli::DebuggingInformationEntry<'a, 'b, gimli::EndianBuf<'input, Endian>>,
     ) -> Result<Option<Program<'input, Endian>>> {
-        let mut name = None;
+        let program = self.parse_program_attributes(entry).chain_err(|| {
+            format!(
+                "failed to parse attributes for subroutine at <{:x}><{:x}>",
+                self.header.offset().0,
+                entry.offset().0
+            )
+        })?;
+
+        let name = match program.name {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+
+        // Where does this function live?
+        let ranges = if let Some(offset) = program.ranges {
+            self.parse_noncontiguous_ranges(offset)?
+        } else {
+            Self::parse_contiguous_range(program.low_pc, program.high_pc, program.size)?
+                .into_iter()
+                .collect()
+        };
+        if ranges.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(Program {
+            ranges,
+            inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
+            name,
+        }))
+    }
+
+    fn parse_program_attributes<'a, 'b>(
+        &self,
+        entry: &gimli::DebuggingInformationEntry<'a, 'b, gimli::EndianBuf<'input, Endian>>,
+    ) -> Result<ProgramAttributes<'input, Endian>> {
+        let mut program = ProgramAttributes::default();
         let mut abstract_origin = None;
         let mut specification = None;
-        let mut low_pc = None;
-        let mut high_pc = None;
-        let mut size = None;
-        let mut range_offset = None;
-
         let mut attrs = entry.attrs();
         while let Some(attr) = attrs
             .next()
@@ -684,12 +715,11 @@ where
             match attr.name() {
                 // For naming, we prefer the linked name, if available
                 gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    name = attr.string_value(&self.debug_str);
+                    program.name = attr.string_value(&self.debug_str);
                 }
-                gimli::DW_AT_name => if name.is_none() {
-                    // Linked name is not available, so fall back to just plain old name,
-                    // if that's available.
-                    name = attr.string_value(&self.debug_str);
+                gimli::DW_AT_name => if program.name.is_none() {
+                    // Linked name is not set yet, so fall back to just plain old name.
+                    program.name = attr.string_value(&self.debug_str);
                 },
                 gimli::DW_AT_abstract_origin => {
                     abstract_origin = Some(attr.value());
@@ -698,65 +728,35 @@ where
                     specification = Some(attr.value());
                 }
                 gimli::DW_AT_low_pc => if let gimli::AttributeValue::Addr(value) = attr.value() {
-                    low_pc = Some(value);
+                    program.low_pc = Some(value);
                 },
                 gimli::DW_AT_high_pc => match attr.value() {
-                    gimli::AttributeValue::Addr(value) => high_pc = Some(value),
-                    gimli::AttributeValue::Udata(value) => size = Some(value),
+                    gimli::AttributeValue::Addr(value) => program.high_pc = Some(value),
+                    gimli::AttributeValue::Udata(value) => program.size = Some(value),
                     _ => {}
                 },
                 gimli::DW_AT_ranges => {
                     if let gimli::AttributeValue::DebugRangesRef(value) = attr.value() {
-                        range_offset = Some(value);
+                        program.ranges = Some(value);
                     }
                 }
                 _ => {}
             }
         }
 
-        // Where does this function live?
-        let ranges = if let Some(offset) = range_offset {
-            self.parse_noncontiguous_ranges(offset)?
-        } else {
-            Self::parse_contiguous_range(low_pc, high_pc, size)?
-                .into_iter()
-                .collect()
-        };
-        if ranges.is_empty() {
-            return Ok(None);
+        if program.name.is_none() {
+            // If we don't have the link name, check if this function refers to another
+            program.name = self.resolve_any_indirect_name(&abstract_origin, &specification)?;
         }
 
-        let maybe_name = self.resolve_name(name, &abstract_origin, &specification)
-            .chain_err(|| {
-                format!(
-                    "failed to resolve name for subroutine at <{:x}><{:x}>",
-                    self.header.offset().0,
-                    entry.offset().0
-                )
-            })?;
-
-        if let Some(name) = maybe_name {
-            Ok(Some(Program {
-                ranges: ranges,
-                inlined: entry.tag() == gimli::DW_TAG_inlined_subroutine,
-                name: name,
-            }))
-        } else {
-            Ok(None)
-        }
+        Ok(program)
     }
 
-    fn resolve_name(
+    fn resolve_any_indirect_name(
         &self,
-        name: Option<gimli::EndianBuf<'input, Endian>>,
         abstract_origin: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
         specification: &Option<gimli::AttributeValue<gimli::EndianBuf<'input, Endian>>>,
     ) -> Result<Option<gimli::EndianBuf<'input, Endian>>> {
-        if let Some(name) = name {
-            return Ok(Some(name));
-        }
-
-        // If we don't have the link name, check if this function refers to another
         if let &Some(ref abstract_origin) = abstract_origin {
             if let Some(name) = self.resolve_indirect_name(abstract_origin)
                 .chain_err(|| "invalid subprogram abstract origin")?
@@ -790,37 +790,8 @@ where
         let (_, entry) = entries.next_dfs()?.ok_or_else(|| {
             ErrorKind::InvalidDebugSymbols(DebugInfoError::DanglingEntryOffset)
         })?;
-
-        let mut name = None;
-        let mut abstract_origin = None;
-        let mut specification = None;
-
-        let mut attrs = entry.attrs();
-        while let Some(attr) = attrs
-            .next()
-            .map_err(|e| Error::from(ErrorKind::Gimli(e)))
-            .chain_err(|| "invalid subprogram attribute")?
-        {
-            match attr.name() {
-                // For naming, we prefer the linked name, if available
-                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    if let Some(name) = attr.string_value(&self.debug_str) {
-                        return Ok(Some(name));
-                    }
-                }
-                gimli::DW_AT_name => {
-                    name = attr.string_value(&self.debug_str);
-                }
-                gimli::DW_AT_abstract_origin => {
-                    abstract_origin = Some(attr.value());
-                }
-                gimli::DW_AT_specification => {
-                    specification = Some(attr.value());
-                }
-                _ => {}
-            }
-        }
-        self.resolve_name(name, &abstract_origin, &specification)
+        let program = self.parse_program_attributes(entry)?;
+        Ok(program.name)
     }
 
     // This must be checked before `parse_contiguous_range`.
@@ -884,6 +855,18 @@ where
     fn comp_dir(&self) -> Option<gimli::EndianBuf<'input, Endian>> {
         self.comp_dir
     }
+}
+
+#[derive(Default)]
+struct ProgramAttributes<'input, Endian>
+where
+    Endian: gimli::Endianity,
+{
+    name: Option<gimli::EndianBuf<'input, Endian>>,
+    low_pc: Option<u64>,
+    high_pc: Option<u64>,
+    size: Option<u64>,
+    ranges: Option<gimli::DebugRangesOffset>,
 }
 
 struct Program<'input, Endian>
