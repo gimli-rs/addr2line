@@ -17,28 +17,23 @@ rust:
 addons:
   apt:
     packages:
-    - libcurl4-openssl-dev
-    - libelf-dev
-    - libdw-dev
-    - binutils-dev
-
-before_script:
-- pip install -v 'travis-cargo<0.2' --user
-- if [[ -e ~/Library/Python/2.7/bin ]]; then export PATH=~/Library/Python/2.7/bin:$PATH; fi
-- if [[ -e ~/.local/bin ]]; then export PATH=~/.local/bin:$PATH; fi
+    - libssl-dev
 
 script:
--  travis-cargo build -- --no-default-features
--  travis-cargo build -- --no-default-features --features "cpp_demangle"
--  travis-cargo build -- --no-default-features --features "rustc-demangle"
--  travis-cargo build
--  if [[ "$TRAVIS_OS_NAME" != "osx" ]]; then travis-cargo test; fi
--  travis-cargo bench
+- cargo clean
+- cargo build --no-default-features
+- cargo build --no-default-features --features "cpp_demangle"
+- cargo build --no-default-features --features "rustc-demangle"
+- cargo build
+- if [[ "$TRAVIS_OS_NAME" != "osx" ]]; then
+    cargo test;
+  fi
+- if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
+    cargo bench;
+  fi
 
 after_success:
-- if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then travis-cargo coveralls --no-sudo --verify; fi
-- if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "nightly" ]]; then KCOV=./kcov/build/src/kcov ./coverage; fi
-
-env:
-  global:
-  - TRAVIS_CARGO_NIGHTLY_FEATURE=nightly
+- if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_RUST_VERSION" == "stable" ]]; then
+    bash <(curl https://raw.githubusercontent.com/xd009642/tarpaulin/master/travis-install.sh);
+    cargo tarpaulin --no-count --ciserver travis-ci --coveralls $TRAVIS_JOB_ID;
+  fi
