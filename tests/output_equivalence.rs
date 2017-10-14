@@ -37,7 +37,7 @@ fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[Str
     let mut cmd = Command::new(exe);
     cmd.env("LC_ALL", "C"); // GNU addr2line is localized, we aren't
     cmd.env("RUST_BACKTRACE", "1"); // if a child crashes, we want to know why
-    cmd.arg("-C"); // fixme hack
+
     if let Some(flags) = flags {
         cmd.arg(flags);
     }
@@ -71,7 +71,7 @@ fn test_flags() {
     // test no flags
     run_test(None);
 
-    let flags = "aipsf";
+    let flags = "aipsfC";
     // test every subset of those flags by mapping flags to bits
     // and iterating through the n-bit number
     for bits in 1 .. (1 << flags.len()) {

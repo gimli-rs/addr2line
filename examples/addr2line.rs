@@ -89,7 +89,9 @@ fn main() {
         .arg(Arg::with_name("demangle")
              .short("C")
              .long("demangle")
-             .help("FIXME HACK"))
+             .help("Demangle function names. \
+                    Specifying a specific demangling style (like GNU addr2line) \
+                    is not supported. (TODO)"))
         .arg(Arg::with_name("addrs")
              .takes_value(true)
              .multiple(true)
@@ -101,6 +103,7 @@ fn main() {
     let pretty = matches.is_present("pretty");
     let print_addrs = matches.is_present("addresses");
     let basenames = matches.is_present("basenames");
+    let demangle = matches.is_present("demangle");
     let path = matches.value_of("exe").unwrap();
 
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
@@ -141,7 +144,11 @@ fn main() {
 
                     if do_functions {
                         if let Some(func) = frame.function {
-                            print!("{}", func);
+                            if demangle {
+                                print!("{}", func);
+                            } else {
+                                print!("{}", func.raw_name());
+                            }
                         } else {
                             print!("??");
                         }
