@@ -9,3 +9,9 @@ fallible-iterator = "0.1"
 memmap = "0.5"
 object = "0.4"
 intervaltree = "0.1"
+rustc-demangle = { version = "0.1", optional = true }
+cpp_demangle = { version = "0.2", optional = true }
+clap = "2"
+
+[features]
+default = ["rustc-demangle", "cpp_demangle"]

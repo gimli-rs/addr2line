@@ -1,142 +1,172 @@
+extern crate hardliner;
 extern crate memmap;
 extern crate object;
-extern crate intervaltree;
-extern crate fallible_iterator;
 extern crate gimli;
+extern crate clap;
 
-use intervaltree::IntervalTree;
+use std::path::Path;
+use std::io::{BufRead, Lines, StdinLock};
+use std::borrow::Cow;
+use hardliner::{Context, FullContext, Location};
+use clap::{App, Arg, Values};
 
-struct Func {
-    unit_off: gimli::DebugInfoOffset,
-    entry_off: gimli::UnitOffset,
-    depth: isize,
+fn parse_uint_from_hex_string(string: &str) -> u64 {
+    if string.len() > 2 && string.starts_with("0x") {
+        u64::from_str_radix(&string[2..], 16).expect("Failed to parse address")
+    } else {
+        u64::from_str_radix(string, 16).expect("Failed to parse address")
+    }
+}
+
+enum VarCon<R: gimli::Reader> {
+    Light(Context<R>),
+    Full(FullContext<R>),
+}
+
+enum Addrs<'a> {
+    Args(Values<'a>),
+    Stdin(Lines<StdinLock<'a>>),
+}
+
+impl<'a> Iterator for Addrs<'a> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<u64> {
+        let text = match *self {
+            Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
+            Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
+        };
+        text.as_ref().map(Cow::as_ref).map(parse_uint_from_hex_string)
+    }
+}
+
+fn print_loc(loc: &Option<Location>, basenames: bool) {
+    if let &Some(ref loc) = loc {
+        let path = if basenames {
+            Path::new(loc.file.file_name().unwrap())
+        } else {
+            &loc.file
+        };
+        println!("{}:{}", path.display(), loc.line.unwrap_or(0));
+        if let Some(col) = loc.column {
+            print!(",{}", col);
+        }
+    } else {
+        println!("??:0");
+    }
 }
 
 fn main() {
-    //let path = std::env::args().skip(1).next().unwrap();
+    let matches = App::new("hardliner")
+        .version("0.1")
+        .about("A fast addr2line clone")
+        .arg(Arg::with_name("exe")
+             .short("e")
+             .long("exe")
+             .value_name("filename")
+             .help("Specify the name of the executable for which addresses should be translated.")
+             .required(true))
+        .arg(Arg::with_name("functions")
+             .short("f")
+             .long("functions")
+             .help("Display function names as well as file and line number information."))
+        .arg(Arg::with_name("pretty")
+             .short("p")
+             .long("pretty-print")
+             .help("Make the output more human friendly: each location are printed on one line."))
+        .arg(Arg::with_name("inlines")
+             .short("i")
+             .long("inlines")
+             .help("If the address belongs to a function that was inlined, the source information for all enclosing scopes back to the first non-inlined function will also be printed."))
+        .arg(Arg::with_name("addresses")
+             .short("a")
+             .long("addresses")
+             .help("Display the address before the function name, file and line number information."))
+        .arg(Arg::with_name("basenames")
+             .short("s")
+             .long("basenames")
+             .help("Display only the base of each file name."))
+        .arg(Arg::with_name("addrs")
+             .takes_value(true)
+             .multiple(true)
+             .help("Addresses to use instead of reading from stdin."))
+        .get_matches();
+
+    let do_functions = matches.is_present("functions");
+    let do_inlines = matches.is_present("inlines");
+    let pretty = matches.is_present("pretty");
+    let print_addrs = matches.is_present("addresses");
+    let basenames = matches.is_present("basenames");
+    let path = matches.value_of("exe").unwrap();
 
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
     let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
-    let endian = if file.is_little_endian() {
-        gimli::RunTimeEndian::Little
+
+    let ctx = Context::new(file);
+
+    let ctx = if do_functions || do_inlines {
+        VarCon::Full(ctx.parse_functions())
     } else {
-        gimli::RunTimeEndian::Big
+        VarCon::Light(ctx)
     };
 
-    fn load_section<'input, 'file, S, Endian>(file: &'file object::File<'input>, endian: Endian) -> S
-        where S: gimli::Section<gimli::EndianBuf<'input, Endian>>, Endian: gimli::Endianity, 'file: 'input,
-    {
-        let data = file.get_section(S::section_name()).unwrap_or(&[]);
-        S::from(gimli::EndianBuf::new(data, endian))
-    }
+    let stdin = std::io::stdin();
+    let addrs = matches.values_of("addrs").map(Addrs::Args).unwrap_or(Addrs::Stdin(stdin.lock().lines()));
 
-    let debug_abbrev: &gimli::DebugAbbrev<_> = &load_section(file, endian);
-    let debug_aranges: &gimli::DebugAranges<_> = &load_section(file, endian);
-    let debug_info: &gimli::DebugInfo<_> = &load_section(file, endian);
-    let debug_line: &gimli::DebugLine<_> = &load_section(file, endian);
-    let debug_loc: &gimli::DebugLoc<_> = &load_section(file, endian);
-    let debug_pubnames: &gimli::DebugPubNames<_> = &load_section(file, endian);
-    let debug_pubtypes: &gimli::DebugPubTypes<_> = &load_section(file, endian);
-    let debug_ranges: &gimli::DebugRanges<_> = &load_section(file, endian);
-    let debug_str: &gimli::DebugStr<_> = &load_section(file, endian);
-    let debug_types: &gimli::DebugTypes<_> = &load_section(file, endian);
-
-    let mut results = Vec::new();
-    let mut units = debug_info.units();
-    while let Some(dw_unit) = units.next().unwrap() {
-        let abbrevs = dw_unit.abbreviations(debug_abbrev).unwrap();
-
-        let mut depth = 0;
-        let mut res_ranges = Vec::new();
-        let mut cursor = dw_unit.entries(&abbrevs);
-        while let Some((d, entry)) = cursor.next_dfs().unwrap() {
-            depth += d;
-            match entry.tag() {
-                gimli::DW_TAG_compile_unit => {
-                    // DW_AT_stmt_list
-                    // DW_AT_low_pc ?
-                    // DW_AT_comp_dir
-                }
-                gimli::DW_TAG_namespace => (), // TODO
-                gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                    //let name = str_attr(entry, gimli::DW_AT_linkage_name).unwrap().to_string_lossy();
-                    //println!("sub {}", name);
-
-                    res_ranges.clear();
-                    match entry.attr_value(gimli::DW_AT_ranges).unwrap() {
-                        None => {
-                            let low_pc = match entry.attr_value(gimli::DW_AT_low_pc).unwrap() {
-                                Some(gimli::AttributeValue::Addr(low_pc)) => low_pc,
-                                None => {
-                                    // neither ranges nor low_pc => inline-only function
-                                    continue;
-                                }
-                                _ => unreachable!(),
-                            };
-                            let high_pc = match entry.attr_value(gimli::DW_AT_high_pc).unwrap().unwrap() {
-                                gimli::AttributeValue::Addr(high_pc) => high_pc,
-                                gimli::AttributeValue::Udata(x) => low_pc + x,
-                                _ => unreachable!(),
-                            };
-                            res_ranges.push(gimli::Range { begin: low_pc, end: high_pc });
-                        },
-                        Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
-                            let mut ranges = debug_ranges.ranges(rr, dw_unit.address_size(), 0 /* fixme unit base addr */).unwrap();
-                            while let Some(range) = ranges.next().unwrap() {
-                                res_ranges.push(range);
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-
-                    for range in &res_ranges {
-                        //results.push((range.begin .. range.end, name.clone()));
-                        results.push((range.begin .. range.end, Func {
-                            unit_off: dw_unit.offset(),
-                            entry_off: entry.offset(),
-                            depth,
-                        }));
-                    }
-                }
-                _ => (),
+    for probe in addrs {
+        if print_addrs {
+            print!("0x{:016x}", probe);
+            if pretty {
+                print!(": ");
+            } else {
+                println!();
             }
         }
-    }
 
-    let tree: IntervalTree<_, _> = results.into_iter().collect();
+        match ctx {
+            VarCon::Light(ref ctx) => {
+                let loc = ctx.find_location(probe);
+                print_loc(&loc, basenames);
+            }
+            VarCon::Full(ref ctx) => {
+                let mut printed_anything = false;
+                for (i, frame) in ctx.query(probe).enumerate() {
+                    if pretty && i != 0 {
+                        print!(" (inlined by) ");
+                    }
 
-    let probes = &[0x84ee, 0x8643, 0x7095, 0x1e05c, 0x6ca7, 0x6f57, 0x5722b];
-    for &probe in probes {
-        let mut res: Vec<_> = tree.query_point(probe).collect();
-        res.sort_by_key(|x| -x.depth);
-        for &Func { unit_off, entry_off, .. } in res {
-            let dw_unit = debug_info.header_from_offset(unit_off).unwrap();
-            let abbrevs = dw_unit.abbreviations(debug_abbrev).unwrap();
-            let mut cursor = dw_unit.entries_at_offset(&abbrevs, entry_off).unwrap();
+                    if do_functions {
+                        if let Some(func) = frame.function {
+                            print!("{}", func);
+                        } else {
+                            print!("??");
+                        }
 
-            let str_attr = |entry: &gimli::DebuggingInformationEntry<_>, name| {
-                match entry.attr(name).unwrap() {
-                    Some(x) => Some(x),
-                    None => {
-                        match entry.attr_value(gimli::DW_AT_abstract_origin).unwrap() {
-                            Some(gimli::AttributeValue::UnitRef(offset)) => {
-                                let mut tcursor = dw_unit.entries_at_offset(&abbrevs, offset).unwrap();
-                                let (_, entry) = tcursor.next_dfs().unwrap().unwrap();
-
-                                entry.attr(name).unwrap()
-                            }
-                            None => None,
-                            x => panic!("wat {:?}", x),
+                        if pretty {
+                            print!(" at ");
+                        } else {
+                            println!();
                         }
                     }
-                }.map(|x| x.string_value(debug_str).unwrap())
-            };
 
-            let (_, entry) = cursor.next_dfs().unwrap().unwrap();
-            let name = str_attr(entry, gimli::DW_AT_linkage_name).unwrap().to_string_lossy();
-            println!("aka {}", name);
+                    print_loc(&frame.location, basenames);
+
+                    printed_anything = true;
+
+                    if !do_inlines {
+                        break;
+                    }
+                }
+
+                if !printed_anything {
+                    if pretty {
+                        println!("?? ??:0");
+                    } else {
+                        println!("??");
+                        println!("??:0");
+                    }
+                }
+            }
         }
-        println!();
-        //println!("{:?}", tree.query_point(probe));
     }
 }
