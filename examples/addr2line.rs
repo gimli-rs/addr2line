@@ -86,6 +86,10 @@ fn main() {
              .short("s")
              .long("basenames")
              .help("Display only the base of each file name."))
+        .arg(Arg::with_name("demangle")
+             .short("C")
+             .long("demangle")
+             .help("FIXME HACK"))
         .arg(Arg::with_name("addrs")
              .takes_value(true)
              .multiple(true)
@@ -159,12 +163,16 @@ fn main() {
                 }
 
                 if !printed_anything {
-                    if pretty {
-                        println!("?? ??:0");
-                    } else {
-                        println!("??");
-                        println!("??:0");
+                    if do_functions {
+                        print!("??");
+                        if pretty {
+                            print!(" ");
+                        } else {
+                            println!();
+                        }
                     }
+
+                    println!("??:0");
                 }
             }
         }

@@ -3,6 +3,9 @@ name = "hardliner"
 version = "0.1.0"
 authors = ["main() <main@ehvag.de>"]
 
+[profile.release]
+debug = true
+
 [dependencies]
 gimli = { path = "../gimli" }
 fallible-iterator = "0.1"
@@ -12,6 +15,10 @@ intervaltree = "0.1"
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.2", optional = true }
 clap = "2"
+
+[dev-dependencies]
+backtrace = "0.3"
+findshlibs = "0.3"
 
 [features]
 default = ["rustc-demangle", "cpp_demangle"]
