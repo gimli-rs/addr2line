@@ -10,7 +10,7 @@ debug = true
 gimli = { path = "../gimli" }
 fallible-iterator = "0.1"
 object = "0.4"
-intervaltree = "0.1"
+intervaltree = "0.2"
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.2", optional = true }
 

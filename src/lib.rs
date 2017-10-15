@@ -367,7 +367,7 @@ impl<R: gimli::Reader> Context<R> {
 impl<R: gimli::Reader> FullContext<R> {
     pub fn query<'a>(&self, probe: u64) -> IterFrames<R> {
         let ctx = &self.light;
-        let mut res: Vec<_> = self.funcs.query_point(probe).collect();
+        let mut res: Vec<_> = self.funcs.query_point(probe).map(|x| &x.value).collect();
         res.sort_by_key(|x| -x.depth);
 
         let loc = match res.get(0) {
