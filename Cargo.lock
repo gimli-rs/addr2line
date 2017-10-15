@@ -12,6 +12,7 @@ dependencies = [
  "memmap 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "object 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-demangle 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "smallvec 0.4.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

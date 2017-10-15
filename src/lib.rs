@@ -2,6 +2,7 @@ extern crate object;
 extern crate intervaltree;
 extern crate fallible_iterator;
 extern crate gimli;
+extern crate smallvec;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
 #[cfg(feature = "cpp_demangle")]
@@ -14,6 +15,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::u64;
 
 use intervaltree::IntervalTree;
+use smallvec::SmallVec;
 
 struct Func<T> {
     unit_id: usize,
@@ -233,7 +235,7 @@ struct DebugSections<R: gimli::Reader> {
 pub struct IterFrames<'ctx, R: gimli::Reader + 'ctx> {
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx DebugSections<R>,
-    funcs: std::vec::IntoIter<&'ctx Func<R::Offset>>,
+    funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
     next: Option<Location>,
 }
 
@@ -367,7 +369,7 @@ impl<R: gimli::Reader> Context<R> {
 impl<R: gimli::Reader> FullContext<R> {
     pub fn query<'a>(&self, probe: u64) -> IterFrames<R> {
         let ctx = &self.light;
-        let mut res: Vec<_> = self.funcs.query_point(probe).map(|x| &x.value).collect();
+        let mut res: SmallVec<[_; 16]> = self.funcs.query_point(probe).map(|x| &x.value).collect();
         res.sort_by_key(|x| -x.depth);
 
         let loc = match res.get(0) {
