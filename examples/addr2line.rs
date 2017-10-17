@@ -3,12 +3,16 @@ extern crate memmap;
 extern crate object;
 extern crate gimli;
 extern crate clap;
+extern crate fallible_iterator;
 
 use std::path::Path;
 use std::io::{BufRead, Lines, StdinLock};
 use std::borrow::Cow;
-use hardliner::{Context, FullContext, Location};
+
 use clap::{App, Arg, Values};
+use fallible_iterator::FallibleIterator;
+
+use hardliner::{Context, FullContext, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> u64 {
     if string.len() > 2 && string.starts_with("0x") {
@@ -110,10 +114,10 @@ fn main() {
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
     let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
 
-    let ctx = Context::new(file);
+    let ctx = Context::new(file).unwrap();
 
     let ctx = if do_functions || do_inlines {
-        VarCon::Full(ctx.parse_functions())
+        VarCon::Full(ctx.parse_functions().unwrap())
     } else {
         VarCon::Light(ctx)
     };
@@ -133,12 +137,13 @@ fn main() {
 
         match ctx {
             VarCon::Light(ref ctx) => {
-                let loc = ctx.find_location(probe);
+                let loc = ctx.find_location(probe).unwrap();
                 print_loc(&loc, basenames);
             }
             VarCon::Full(ref ctx) => {
                 let mut printed_anything = false;
-                for (i, frame) in ctx.query(probe).enumerate() {
+                let mut frames = ctx.query(probe).unwrap().enumerate();
+                while let Some((i, frame)) = frames.next().unwrap() {
                     if pretty && i != 0 {
                         print!(" (inlined by) ");
                     }
@@ -148,7 +153,7 @@ fn main() {
                             if demangle {
                                 print!("{}", func);
                             } else {
-                                print!("{}", func.raw_name());
+                                print!("{}", func.raw_name().unwrap());
                             }
                         } else {
                             print!("??");
