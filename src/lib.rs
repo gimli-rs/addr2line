@@ -61,6 +61,31 @@ pub struct FullContext<R: gimli::Reader> {
     light: Context<R>,
 }
 
+fn read_ranges<R: gimli::Reader>(entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
+                                 debug_ranges: &gimli::DebugRanges<R>,
+                                 addr_size: u8, base_addr: u64) -> Option<WrapRangeIter<R>> {
+    Some(match entry.attr_value(gimli::DW_AT_ranges).unwrap() {
+        None => {
+            let low_pc = match entry.attr_value(gimli::DW_AT_low_pc).unwrap() {
+                Some(gimli::AttributeValue::Addr(low_pc)) => low_pc,
+                None => return None, // neither ranges nor low_pc => None
+                _ => unreachable!(),
+            };
+            let high_pc = match entry.attr_value(gimli::DW_AT_high_pc).unwrap().unwrap() {
+                gimli::AttributeValue::Addr(high_pc) => high_pc,
+                gimli::AttributeValue::Udata(x) => low_pc + x,
+                _ => unreachable!(),
+            };
+            WrapRangeIter::Synthetic(Some(gimli::Range { begin: low_pc, end: high_pc }))
+        },
+        Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
+            let ranges = debug_ranges.ranges(rr, addr_size, base_addr).unwrap();
+            WrapRangeIter::Real(ranges)
+        }
+        _ => unreachable!(),
+    })
+}
+
 impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
     pub fn new(file: &'a object::File) -> Self {
         let endian = if file.is_little_endian() {
@@ -110,31 +135,13 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     Some(gimli::AttributeValue::Language(lang)) => lang,
                     _ => unreachable!(),
                 };
-                match unit.attr_value(gimli::DW_AT_ranges).unwrap() {
-                    Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
-                        let mut ranges = debug_ranges.ranges(rr, dw_unit.address_size(), base_addr).unwrap();
-                        while let Some(range) = ranges.next().unwrap() {
-                            if range.begin == range.end { continue; }
+                if let Some(mut ranges) = read_ranges(unit, &debug_ranges, dw_unit.address_size(), base_addr) {
+                    while let Some(range) = ranges.next().unwrap() {
+                        if range.begin == range.end { continue; }
 
-                            unit_ranges.push((range, unit_id));
-                        }
+                        unit_ranges.push((range, unit_id));
                     }
-                    None => {
-                        // lowpc + highpc
-                        let low_pc = match unit.attr_value(gimli::DW_AT_low_pc).unwrap() {
-                            Some(gimli::AttributeValue::Addr(low_pc)) => low_pc,
-                            _ => unreachable!(),
-                        };
-                        let high_pc = match unit.attr_value(gimli::DW_AT_high_pc).unwrap() {
-                            Some(gimli::AttributeValue::Addr(high_pc)) => high_pc,
-                            Some(gimli::AttributeValue::Udata(x)) => low_pc + x,
-                            _ => unreachable!(),
-                        };
-                        unit_ranges.push((gimli::Range { begin: low_pc, end: high_pc }, unit_id));
-                    }
-                    _ => unreachable!(),
-                };
-
+                }
 
                 let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn).unwrap();
                 let (lnp, mut sequences) = ilnp.sequences().unwrap();
@@ -181,36 +188,18 @@ impl<R: gimli::Reader> Context<R> {
                 depth += d;
                 match entry.tag() {
                     gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                        let mut ranges = match entry.attr_value(gimli::DW_AT_ranges).unwrap() {
-                            None => {
-                                let low_pc = match entry.attr_value(gimli::DW_AT_low_pc).unwrap() {
-                                    Some(gimli::AttributeValue::Addr(low_pc)) => low_pc,
-                                    None => {
-                                        // neither ranges nor low_pc => inline-only function
-                                        continue;
-                                    }
-                                    _ => unreachable!(),
-                                };
-                                let high_pc = match entry.attr_value(gimli::DW_AT_high_pc).unwrap().unwrap() {
-                                    gimli::AttributeValue::Addr(high_pc) => high_pc,
-                                    gimli::AttributeValue::Udata(x) => low_pc + x,
-                                    _ => unreachable!(),
-                                };
-                                WrapRangeIter::Synthetic(Some(gimli::Range { begin: low_pc, end: high_pc }))
-                            },
-                            Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
-                                let ranges = self.sections.debug_ranges.ranges(rr, dw_unit.address_size(), unit.inner.base_addr).unwrap();
-                                WrapRangeIter::Real(ranges)
+                        // may be an inline-only function and thus not have any ranges
+                        if let Some(mut ranges) = read_ranges(entry,
+                                                              &self.sections.debug_ranges,
+                                                              dw_unit.address_size(),
+                                                              unit.inner.base_addr) {
+                            while let Some(range) = ranges.next().unwrap() {
+                                results.push((range.begin .. range.end, Func {
+                                    unit_id,
+                                    entry_off: entry.offset(),
+                                    depth,
+                                }));
                             }
-                            _ => unreachable!(),
-                        };
-
-                        while let Some(range) = ranges.next().unwrap() {
-                            results.push((range.begin .. range.end, Func {
-                                unit_id,
-                                entry_off: entry.offset(),
-                                depth,
-                            }));
                         }
                     }
                     _ => (),
