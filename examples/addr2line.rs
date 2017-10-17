@@ -42,10 +42,11 @@ impl<'a> Iterator for Addrs<'a> {
 
 fn print_loc(loc: &Option<Location>, basenames: bool) {
     if let &Some(ref loc) = loc {
+        let file = loc.file.as_ref().unwrap();
         let path = if basenames {
-            Path::new(loc.file.file_name().unwrap())
+            Path::new(file.file_name().unwrap())
         } else {
-            &loc.file
+            file
         };
         println!("{}:{}", path.display(), loc.line.unwrap_or(0));
         if let Some(col) = loc.column {

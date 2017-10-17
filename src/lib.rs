@@ -116,7 +116,6 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             let abbrevs = dw_unit.abbreviations(&debug_abbrev).unwrap();
 
             let inner = {
-
                 let mut cursor = dw_unit.entries(&abbrevs);
 
                 let (_, unit) = cursor.next_dfs().unwrap().unwrap();
@@ -288,7 +287,7 @@ impl<R: gimli::Reader> FallibleIterator for WrapRangeIter<R> {
 }
 
 pub struct Location {
-    pub file: PathBuf,
+    pub file: Option<PathBuf>,
     pub line: Option<u64>,
     pub column: Option<u64>,
 }
@@ -348,7 +347,7 @@ impl<R: gimli::Reader> Context<R> {
         }
 
         Some(Location {
-            file: render_file(uunit.lnp.header(), file.unwrap(), &uunit.comp_dir).unwrap(),
+            file: file.map(|file| render_file(uunit.lnp.header(), file, &uunit.comp_dir).unwrap()),
             line: line,
             column: col,
         })
@@ -423,17 +422,15 @@ impl<'ctx, R: gimli::Reader + 'ctx> Iterator for IterFrames<'ctx, R> {
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file).unwrap() {
-                Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    unit.inner.lnp.header().file(fi).unwrap()
-                }
-                _ => unreachable!(),
+                Some(gimli::AttributeValue::FileIndex(fi)) => unit.inner.lnp.header().file(fi),
+                _ => None,
             };
 
             let line = entry.attr(gimli::DW_AT_call_line).unwrap().and_then(|x| x.udata_value());
             let column = entry.attr(gimli::DW_AT_call_column).unwrap().and_then(|x| x.udata_value());
 
             self.next = Some(Location {
-                file: render_file(unit.inner.lnp.header(), file, &unit.inner.comp_dir).unwrap(),
+                file: file.map(|file| render_file(unit.inner.lnp.header(), file, &unit.inner.comp_dir).unwrap()),
                 line,
                 column,
             });
