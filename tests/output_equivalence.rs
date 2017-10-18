@@ -1,5 +1,6 @@
 extern crate backtrace;
 extern crate findshlibs;
+extern crate test;
 
 use std::env;
 use std::process::Command;
@@ -8,6 +9,7 @@ use std::ffi::OsStr;
 
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, TargetSharedLibrary, SharedLibrary};
+use test::{TestDescAndFn, TestDesc, TestFn, TestName, ShouldPanic};
 
 fn make_trace() -> Vec<String> {
     fn foo() -> Backtrace {
@@ -42,9 +44,9 @@ fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[Str
         cmd.arg(flags);
     }
     cmd.arg("--exe").arg(me).args(trace);
-    println!("running {:?}", cmd);
+
     let output = cmd.output().unwrap();
-    println!("{:?}", output);
+
     assert!(output.status.success());
     output.stdout
 }
@@ -66,23 +68,34 @@ fn run_test(flags: Option<&str>) {
     assert_eq!(theirs, ours);
 }
 
-#[test]
-fn test_flags() {
-    // test no flags
-    run_test(None);
+static FLAGS: &'static str = "aipsfC";
 
-    let flags = "aipsfC";
-    // test every subset of those flags by mapping flags to bits
-    // and iterating through the n-bit number
-    for bits in 1 .. (1 << flags.len()) {
-        let mut param = String::new();
-        param.push('-');
-        for (i, flag) in flags.chars().enumerate() {
-            if (bits & (1 << i)) != 0 {
-                param.push(flag);
+fn make_tests() -> Vec<TestDescAndFn> {
+    (0 .. (1 << FLAGS.len())).map(|bits| {
+        if bits == 0 {
+            None
+        } else {
+            let mut param = String::new();
+            param.push('-');
+            for (i, flag) in FLAGS.chars().enumerate() {
+                if (bits & (1 << i)) != 0 {
+                    param.push(flag);
+                }
             }
+            Some(param)
         }
+    }).map(|param| TestDescAndFn {
+        desc: TestDesc {
+            name: TestName::DynTestName(format!("addr2line {}", param.as_ref().map_or("", String::as_str))),
+            ignore: false,
+            should_panic: ShouldPanic::No,
+            allow_fail: false,
+        },
+        testfn: TestFn::DynTestFn(Box::new(move || run_test(param.as_ref().map(String::as_str)))),
+    }).collect()
+}
 
-        run_test(Some(&param));
-    }
+fn main() {
+    let args: Vec<_> = env::args().collect();
+    test::test_main(&args, make_tests());
 }
