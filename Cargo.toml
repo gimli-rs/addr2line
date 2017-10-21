@@ -1,17 +1,13 @@
-[package]
-name = "unwind"
-version = "0.1.0"
-authors = ["main() <main@ehvag.de>"]
+[profile.release]
+debug = true
 
-[dependencies]
-gimli = { path = "../gimli" }
-libc = "0.2"
-fallible-iterator = "0.1"
-log = "0.3"
+[profile.bench]
+debug = true
 
-[build-dependencies]
-gcc = "0.3"
+[workspace]
+members = ["hardliner", "unwind"]
 
-[dev-dependencies]
-backtrace = "0.3"
-env_logger = "0.4"
+#[patch.crates-io]
+#gimli = { git = 'https://github.com/main--/gimli.git?branch=unwind-patches' }
+[replace]
+"gimli:0.14.0" = { git = 'https://github.com/main--/gimli.git', branch = 'unwind-patches' }

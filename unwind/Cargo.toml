@@ -1,0 +1,17 @@
+[package]
+name = "unwind"
+version = "0.1.0"
+authors = ["main() <main@ehvag.de>"]
+
+[dependencies]
+gimli = "0.14"
+libc = "0.2"
+fallible-iterator = "0.1"
+log = "0.3"
+
+[build-dependencies]
+gcc = "0.3"
+
+[dev-dependencies]
+backtrace = "0.3"
+env_logger = "0.4"
