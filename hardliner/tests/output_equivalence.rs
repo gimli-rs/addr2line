@@ -32,7 +32,7 @@ fn make_trace() -> Vec<String> {
     let addrfix = - base_addr.unwrap();
 
     let trace = foo();
-    trace.frames().iter().map(|x| format!("{:p}", (x.ip() as *const u8).wrapping_offset(addrfix))).collect()
+    trace.frames().iter().take(5).map(|x| format!("{:p}", (x.ip() as *const u8).wrapping_offset(addrfix))).collect()
 }
 
 fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[String]) -> Vec<u8> {
