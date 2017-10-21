@@ -101,53 +101,59 @@ struct UnwindInfo<R: Reader> {
     ctx: UninitializedUnwindContext<EhFrame<StaticReader>, StaticReader>,
 }
 
-fn unwind_info_for_address<'bases>(eh_frame_hdr: &ParsedEhFrameHdr<StaticReader>,
-                                   sel: &EhFrame<StaticReader>,
-                                   bases: &'bases BaseAddresses,
-                                   ctx: UninitializedUnwindContext<EhFrame<StaticReader>, StaticReader>,
-                                   address: u64)
-                                   -> gimli::Result<UnwindInfo<StaticReader>> {
-    let fdeptr = eh_frame_hdr.table().unwrap().lookup(address, bases).unwrap();
-    let fdeptr = match fdeptr {
-        Pointer::Direct(x) => x,
-        _ => unreachable!(),
-    };
+impl ObjectRecord {
+    fn unwind_info_for_address(&self,
+                               ctx: UninitializedUnwindContext<EhFrame<StaticReader>, StaticReader>,
+                               address: u64) -> gimli::Result<UnwindInfo<StaticReader>> {
+        let &ObjectRecord {
+            ref eh_frame_hdr,
+            eh_frame: ref sel,
+            ref bases,
+            ..
+        } = self;
 
-    let entry = gimli::parse_cfi_entry(bases, *sel, &mut EndianBuf::new(unsafe { std::slice::from_raw_parts(fdeptr as *const u8, 0x1000000) }, NativeEndian)).unwrap().unwrap();
-    let target_fde = match entry {
-        CieOrFde::Fde(fde) => Some(fde.parse(|offset| sel.cie_from_offset(bases, offset))?),
-        CieOrFde::Cie(_) => unimplemented!(), // return error here probably
-    };
+        let fdeptr = eh_frame_hdr.table().unwrap().lookup(address, bases).unwrap();
+        let fdeptr = match fdeptr {
+            Pointer::Direct(x) => x,
+            _ => unreachable!(),
+        };
+
+        let entry = gimli::parse_cfi_entry(bases, *sel, &mut EndianBuf::new(unsafe { std::slice::from_raw_parts(fdeptr as *const u8, 0x1000000) }, NativeEndian)).unwrap().unwrap();
+        let target_fde = match entry {
+            CieOrFde::Fde(fde) => Some(fde.parse(|offset| sel.cie_from_offset(bases, offset))?),
+            CieOrFde::Cie(_) => unimplemented!(), // return error here probably
+        };
 
 
-    if let Some(fde) = target_fde {
-        trace!("fde {:x} - {:x}", fde.initial_address(), fde.len());
-        assert!(fde.contains(address));
-        let mut result_row = None;
-        let mut ctx = ctx.initialize(fde.cie()).unwrap();
+        if let Some(fde) = target_fde {
+            trace!("fde {:x} - {:x}", fde.initial_address(), fde.len());
+            assert!(fde.contains(address));
+            let mut result_row = None;
+            let mut ctx = ctx.initialize(fde.cie()).unwrap();
 
-        {
-            let mut table = UnwindTable::new(&mut ctx, &fde);
-            while let Some(row) = table.next_row()? {
-                if row.contains(address) {
-                    result_row = Some(row.clone());
-                    break;
+            {
+                let mut table = UnwindTable::new(&mut ctx, &fde);
+                while let Some(row) = table.next_row()? {
+                    if row.contains(address) {
+                        result_row = Some(row.clone());
+                        break;
+                    }
                 }
+            }
+
+            if let Some(row) = result_row {
+                return Ok(UnwindInfo {
+                    row,
+                    ctx: ctx.reset(),
+                    personality: fde.personality(),
+                    lsda: fde.lsda(),
+                    initial_address: fde.initial_address(),
+                });
             }
         }
 
-        if let Some(row) = result_row {
-            return Ok(UnwindInfo {
-                row,
-                ctx: ctx.reset(),
-                personality: fde.personality(),
-                lsda: fde.lsda(),
-                initial_address: fde.initial_address(),
-            });
-        }
+        Err(gimli::Error::NoUnwindInfoForAddress)
     }
-
-    Err(gimli::Error::NoUnwindInfoForAddress)
 }
 
 unsafe fn deref_ptr(ptr: Pointer) -> u64 {
@@ -199,10 +205,10 @@ impl<'a> FallibleIterator for StackFrames<'a> {
             caller -= 1; // THIS IS NECESSARY
             debug!("caller is 0x{:x}", caller);
 
-            let &ObjectRecord { ref eh_frame, ref bases, ref eh_frame_hdr, .. } = self.unwinder.cfi.iter().filter(|x| x.er.text.contains(caller)).next().ok_or(gimli::Error::NoUnwindInfoForAddress)?;
+            let rec = self.unwinder.cfi.iter().filter(|x| x.er.text.contains(caller)).next().ok_or(gimli::Error::NoUnwindInfoForAddress)?;
 
-            let ctx = self.unwinder.ctx.take().unwrap_or(UninitializedUnwindContext::new());
-            let UnwindInfo { row, personality, lsda, initial_address, ctx } = unwind_info_for_address(eh_frame_hdr, eh_frame, &bases, ctx, caller)?;
+            let ctx = self.unwinder.ctx.take().unwrap_or_else(UninitializedUnwindContext::new);
+            let UnwindInfo { row, personality, lsda, initial_address, ctx } = rec.unwind_info_for_address(ctx, caller)?;
             self.unwinder.ctx = Some(ctx);
 
             trace!("ok: {:?} (0x{:x} - 0x{:x})", row.cfa(), row.start_address(), row.end_address());
