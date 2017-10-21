@@ -26,6 +26,7 @@ pub struct StackFrame {
     personality: Option<u64>,
     lsda: Option<u64>,
     initial_address: u64,
+    pub object_base: u64, // FIXME hack, remove this
 }
 
 pub trait Unwinder: Default {
@@ -222,6 +223,7 @@ impl<'a> FallibleIterator for StackFrames<'a> {
             self.state = Some((row, cfa));
 
             Ok(Some(StackFrame {
+                object_base: rec.er.obj_base,
                 personality: personality.map(|x| unsafe { deref_ptr(x) }),
                 lsda: lsda.map(|x| unsafe { deref_ptr(x) }),
                 initial_address,

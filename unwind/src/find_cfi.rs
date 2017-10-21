@@ -47,6 +47,7 @@ extern "C" {
 
 #[derive(Debug)]
 pub struct EhRef {
+    pub obj_base: u64,
     pub text: AddrRange,
     pub cfi: AddrRange,
 }
@@ -66,6 +67,7 @@ extern "C" fn callback(info: *const DlPhdrInfo, size: usize, data: *mut c_void) 
                 let start_addr = (*info).addr + text.vaddr;
                 let cfi_start = (*info).addr + eh_frame.vaddr;
                 (*data).push(EhRef {
+                    obj_base: (*info).addr,
                     text: AddrRange { start: start_addr, end: start_addr + text.memsz },
                     cfi: AddrRange { start: cfi_start, end: cfi_start + eh_frame.memsz },
                 });
