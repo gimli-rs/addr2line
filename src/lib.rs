@@ -108,14 +108,6 @@ mod errors {
             /// provided executable.
                 ;
         }
-
-        errors {
-            /// A necessary debug section is missing from the provided executable.
-            MissingDebugSection(s: &'static str) {
-                description("missing debug section")
-                display("missing debug section: '.{}'", s)
-            }
-        }
     }
 }
 pub use errors::*;
@@ -311,14 +303,11 @@ where
         opts: Options,
         endian: Endian,
     ) -> Result<DebugInfo<'input, Endian>> {
-        let debug_info = file.get_section(".debug_info")
-            .ok_or(ErrorKind::MissingDebugSection("debug_info"))?;
+        let debug_info = file.get_section(".debug_info").unwrap_or(&[]);
         let debug_info = gimli::DebugInfo::new(debug_info, endian);
-        let debug_abbrev = file.get_section(".debug_abbrev")
-            .ok_or(ErrorKind::MissingDebugSection("debug_abbrev"))?;
+        let debug_abbrev = file.get_section(".debug_abbrev").unwrap_or(&[]);
         let debug_abbrev = gimli::DebugAbbrev::new(debug_abbrev, endian);
-        let debug_line = file.get_section(".debug_line")
-            .ok_or(ErrorKind::MissingDebugSection("debug_line"))?;
+        let debug_line = file.get_section(".debug_line").unwrap_or(&[]);
         let debug_line = gimli::DebugLine::new(debug_line, endian);
         let debug_ranges = file.get_section(".debug_ranges").unwrap_or(&[]);
         let debug_ranges = gimli::DebugRanges::new(debug_ranges, endian);
