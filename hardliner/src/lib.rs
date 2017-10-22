@@ -25,7 +25,7 @@ struct Func<T> {
 }
 
 struct ResUnit<R: gimli::Reader> {
-    offset: gimli::DebugInfoOffset<R::Offset>,
+    dw_unit: gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: gimli::Abbreviations,
     inner: UnitInner<R>,
 }
@@ -157,7 +157,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             };
 
             res_units.push(ResUnit {
-                offset: dw_unit.offset(),
+                dw_unit,
                 abbrevs,
                 inner,
             });
@@ -172,7 +172,6 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             units: res_units,
             unit_ranges,
             sections: DebugSections {
-                debug_info,
                 debug_str,
                 debug_ranges,
             }
@@ -187,7 +186,7 @@ impl<R: gimli::Reader> Context<R> {
         for (unit_id, unit) in self.units.iter().enumerate() {
             let mut depth = 0;
 
-            let dw_unit = self.sections.debug_info.header_from_offset(unit.offset)?;
+            let dw_unit = &unit.dw_unit;
             let abbrevs = &unit.abbrevs;
 
             let mut cursor = dw_unit.entries(&abbrevs);
@@ -226,7 +225,6 @@ impl<R: gimli::Reader> Context<R> {
 }
 
 struct DebugSections<R: gimli::Reader> {
-    debug_info: gimli::DebugInfo<R>,
     debug_str: gimli::DebugStr<R>,
     debug_ranges: gimli::DebugRanges<R>,
 }
@@ -401,6 +399,7 @@ fn str_attr<'abbrev, 'unit, R: gimli::Reader>(entry: &gimli::DebuggingInformatio
                 Some(gimli::AttributeValue::UnitRef(offset)) => {
                     let mut tcursor = dw_unit.entries_at_offset(&abbrevs, offset)?;
                     match tcursor.next_dfs()? {
+                        // FIXME: evil dwarf can send us into an infinite loop here
                         Some((_, entry)) => str_attr(entry, dw_unit, abbrevs, sections, name)?,
                         None => None,
                     }
@@ -426,13 +425,10 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         };
 
         let unit = &self.units[func.unit_id];
-        let dw_unit = self.sections.debug_info.header_from_offset(unit.offset)?;
-        let abbrevs = &unit.abbrevs;
 
-        let mut cursor = dw_unit.entries_at_offset(abbrevs, func.entry_off)?;
+        let mut cursor = unit.dw_unit.entries_at_offset(&unit.abbrevs, func.entry_off)?;
         let (_, entry) = cursor.next_dfs()?.expect("DIE we read a while ago is no longer readable??");
-
-        let name = str_attr(entry, &dw_unit, abbrevs, self.sections, gimli::DW_AT_linkage_name)?;
+        let name = str_attr(entry, &unit.dw_unit, &unit.abbrevs, self.sections, gimli::DW_AT_linkage_name)?;
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
