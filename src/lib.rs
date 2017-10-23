@@ -40,7 +40,6 @@ use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
 use object::SymbolKind;
 
-use std::cmp;
 use std::fmt;
 use std::path;
 use std::error;
@@ -562,7 +561,7 @@ fn parse_symbols<'input>(file: &object::File<'input>) -> Vec<Symbol<'input>> {
         match symbol.kind() {
             SymbolKind::Unknown | SymbolKind::Text | SymbolKind::Data => {}
             SymbolKind::File => {
-                if symbol.name().len() == 0 {
+                if symbol.name().is_empty() {
                     filename = None;
                 } else {
                     filename = Some(symbol.name());
@@ -571,7 +570,7 @@ fn parse_symbols<'input>(file: &object::File<'input>) -> Vec<Symbol<'input>> {
             }
             SymbolKind::Section | SymbolKind::Common | SymbolKind::Tls => continue,
         }
-        if symbol.is_undefined() || symbol.name().len() == 0 || symbol.size() == 0 {
+        if symbol.is_undefined() || symbol.name().is_empty() || symbol.size() == 0 {
             continue;
         }
         symbols.push(Symbol {
@@ -582,22 +581,8 @@ fn parse_symbols<'input>(file: &object::File<'input>) -> Vec<Symbol<'input>> {
         });
     }
 
-    symbols.sort_by(|a, b| {
-        let ord = a.begin.cmp(&b.begin);
-        if ord != cmp::Ordering::Equal {
-            return ord;
-        }
-        a.end.cmp(&b.end)
-    });
-
-    let mut prev_end = 0;
-    for symbol in &mut symbols {
-        if symbol.begin < prev_end {
-            symbol.begin = prev_end;
-        }
-        prev_end = symbol.end;
-    }
-
+    // Sort so we can binary search.
+    symbols.sort_by_key(|x| x.begin);
     symbols
 }
 
