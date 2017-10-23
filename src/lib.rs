@@ -504,8 +504,12 @@ where
                 let file = symbol
                     .file
                     .map(|file| path::PathBuf::from(&*String::from_utf8_lossy(file)));
-                let name = demangle_any_symbol(symbol.name)
-                    .or_else(|| Some(String::from_utf8_lossy(symbol.name)));
+                let name = if self.opts.with_demangling {
+                    demangle_any_symbol(symbol.name)
+                } else {
+                    None
+                };
+                let name = name.or_else(|| Some(String::from_utf8_lossy(symbol.name)));
                 return Ok(Some((file, None, name)));
             }
         }
