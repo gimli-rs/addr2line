@@ -68,7 +68,7 @@ fn get_matches() -> clap::ArgMatches<'static> {
 
 #[cfg(any(feature = "rustc-demangle", feature = "cpp_demangle"))]
 fn get_options(matches: &clap::ArgMatches) -> addr2line::Options {
-    let mut opts = addr2line::Options::default();
+    let mut opts = addr2line::Options::default().with_symbol_table();
 
     if matches.is_present("functions") {
         opts = opts.with_functions();
@@ -82,7 +82,7 @@ fn get_options(matches: &clap::ArgMatches) -> addr2line::Options {
 
 #[cfg(not(any(feature = "rustc-demangle", feature = "cpp_demangle")))]
 fn get_options(matches: &clap::ArgMatches) -> addr2line::Options {
-    let mut opts = addr2line::Options::default();
+    let mut opts = addr2line::Options::default().with_symbol_table();
 
     if matches.is_present("functions") {
         opts = opts.with_functions();
@@ -119,16 +119,18 @@ fn main() {
         // TODO: we may want to print an error here. GNU binutils addr2line doesn't though...
         let loc = debug.locate(addr).unwrap_or(None);
         if let Some((file, lineno, func)) = loc {
+            use std::borrow::Cow;
             if show_funcs {
-                use std::borrow::Cow;
                 println!("{}", func.unwrap_or(Cow::Borrowed("??")));
             }
             println!(
                 "{}:{}",
-                file.to_string_lossy(),
+                file.as_ref()
+                    .map(|f| f.to_string_lossy())
+                    .unwrap_or(Cow::Borrowed("??")),
                 lineno
-                    .map(|n| format!("{}", n))
-                    .unwrap_or_else(|| "?".to_owned())
+                    .map(|n| Cow::Owned(format!("{}", n)))
+                    .unwrap_or(Cow::Borrowed("?"))
             );
         } else {
             if show_funcs {

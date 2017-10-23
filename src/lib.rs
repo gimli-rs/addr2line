@@ -38,6 +38,7 @@ extern crate error_chain;
 
 use owning_ref::OwningHandle;
 use fallible_iterator::FallibleIterator;
+use object::SymbolKind;
 
 use std::fmt;
 use std::path;
@@ -143,6 +144,7 @@ pub use errors::*;
 #[derive(Clone, Copy, Default)]
 pub struct Options {
     with_functions: bool,
+    with_symbol_table: bool,
     with_demangling: bool,
 }
 
@@ -152,6 +154,14 @@ impl Options {
     /// address appears in. This comes at some parsing and lookup cost.
     pub fn with_functions(mut self) -> Self {
         self.with_functions = true;
+        self
+    }
+
+    /// Make the `Mapping` fallback to using the symbol table if there
+    /// is no debug information for an address. This comes at some parsing
+    /// and lookup cost.
+    pub fn with_symbol_table(mut self) -> Self {
+        self.with_symbol_table = true;
         self
     }
 
@@ -215,6 +225,7 @@ where
     Endian: gimli::Endianity,
 {
     units: Vec<Unit<'input, Endian>>,
+    symbols: Vec<Symbol<'input>>,
     opts: Options,
 }
 
@@ -250,7 +261,7 @@ impl Mapping {
     pub fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<str>>)>> {
+    ) -> Result<Option<(Option<path::PathBuf>, Option<u64>, Option<Cow<str>>)>> {
         self.inner.locate(addr)
     }
 }
@@ -272,7 +283,7 @@ impl<'input> BufferMapping<'input> {
     pub fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
+    ) -> Result<Option<(Option<path::PathBuf>, Option<u64>, Option<Cow<'input, str>>)>> {
         self.0.locate(addr)
     }
 }
@@ -294,7 +305,7 @@ impl<'input> EndianDebugInfo<'input> {
     fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
+    ) -> Result<Option<(Option<path::PathBuf>, Option<u64>, Option<Cow<'input, str>>)>> {
         match *self {
             EndianDebugInfo::LEInfo(ref mut dbg) => dbg.locate(addr),
             EndianDebugInfo::BEInfo(ref mut dbg) => dbg.locate(addr),
@@ -342,16 +353,23 @@ where
             }
         }
 
+        let symbols = if opts.with_symbol_table {
+            parse_symbols(file)
+        } else {
+            Vec::new()
+        };
+
         Ok(DebugInfo {
-            units: units,
-            opts: opts,
+            units,
+            symbols,
+            opts,
         })
     }
 
     pub fn locate(
         &mut self,
         addr: u64,
-    ) -> Result<Option<(path::PathBuf, Option<u64>, Option<Cow<'input, str>>)>> {
+    ) -> Result<Option<(Option<path::PathBuf>, Option<u64>, Option<Cow<'input, str>>)>> {
         // First, find the compilation unit for the given address
         for unit in &mut self.units {
             if !unit.maybe_contains_address(addr) {
@@ -390,7 +408,7 @@ where
 
             unit.read_programs()?;
             if unit.programs.is_empty() {
-                return Ok(Some((path, line, None)));
+                return Ok(Some((Some(path), line, None)));
             }
 
             // The unit also has programs, so let's look for the function wrapping this address.
@@ -462,41 +480,110 @@ where
                     Some(gimli::DW_LANG_C_plus_plus_03) |
                     Some(gimli::DW_LANG_C_plus_plus_11) => demangle_cpp_symbol(u.0.name.buf()),
                     Some(gimli::DW_LANG_Rust) => demangle_rust_symbol(u.0.name.buf()),
-                    _ => u.0.name.to_string_lossy(),
-                }
+                    _ => None,
+                }.unwrap_or_else(|| u.0.name.to_string_lossy())
             });
 
-            return Ok(Some((path, line, func)));
+            return Ok(Some((Some(path), line, func)));
         }
+
+        // Didn't find in debuginfo, so check symbol table.
+        let idx = self.symbols
+            .binary_search_by(|symbol| if addr < symbol.begin {
+                std::cmp::Ordering::Greater
+            } else if addr < symbol.end {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Less
+            })
+            .ok();
+        if let Some(idx) = idx {
+            let symbol = &self.symbols[idx];
+            if symbol.file.is_some() || self.opts.with_functions {
+                let file = symbol
+                    .file
+                    .map(|file| path::PathBuf::from(&*String::from_utf8_lossy(file)));
+                let name = if self.opts.with_demangling {
+                    demangle_any_symbol(symbol.name)
+                } else {
+                    None
+                };
+                let name = name.or_else(|| Some(String::from_utf8_lossy(symbol.name)));
+                return Ok(Some((file, None, name)));
+            }
+        }
+
         Ok(None)
     }
 }
 
+/// Demangle a symbol when we don't know which language it is.
+fn demangle_any_symbol(mangled: &[u8]) -> Option<Cow<str>> {
+    demangle_cpp_symbol(mangled).or_else(|| demangle_rust_symbol(mangled))
+}
+
 #[cfg(feature = "cpp_demangle")]
-fn demangle_cpp_symbol(mangled: &[u8]) -> Cow<str> {
-    if let Ok(sym) = cpp_demangle::Symbol::new(mangled) {
-        Cow::from(format!("{}", sym))
-    } else {
-        String::from_utf8_lossy(mangled)
-    }
+fn demangle_cpp_symbol(mangled: &[u8]) -> Option<Cow<str>> {
+    cpp_demangle::Symbol::new(mangled)
+        .ok()
+        .map(|sym| Cow::from(format!("{}", sym)))
 }
 
 #[cfg(not(feature = "cpp_demangle"))]
-fn demangle_cpp_symbol(mangled: &[u8]) -> Cow<str> {
-    String::from_utf8_lossy(mangled)
+fn demangle_cpp_symbol(mangled: &[u8]) -> Option<Cow<str>> {
+    None
 }
 
 #[cfg(feature = "rustc-demangle")]
-fn demangle_rust_symbol(mangled: &[u8]) -> Cow<str> {
-    Cow::from(format!(
+fn demangle_rust_symbol(mangled: &[u8]) -> Option<Cow<str>> {
+    Some(Cow::from(format!(
         "{}",
         rustc_demangle::demangle(String::from_utf8_lossy(mangled).as_ref())
-    ))
+    )))
 }
 
 #[cfg(not(feature = "rustc-demangle"))]
-fn demangle_rust_symbol(mangled: &[u8]) -> Cow<str> {
-    String::from_utf8_lossy(mangled)
+fn demangle_rust_symbol(mangled: &[u8]) -> Option<Cow<str>> {
+    None
+}
+
+struct Symbol<'input> {
+    name: &'input [u8],
+    file: Option<&'input [u8]>,
+    begin: u64,
+    end: u64,
+}
+
+fn parse_symbols<'input>(file: &object::File<'input>) -> Vec<Symbol<'input>> {
+    let mut symbols = Vec::new();
+    let mut filename = None;
+    for symbol in file.get_symbols() {
+        match symbol.kind() {
+            SymbolKind::Unknown | SymbolKind::Text | SymbolKind::Data => {}
+            SymbolKind::File => {
+                if symbol.name().is_empty() {
+                    filename = None;
+                } else {
+                    filename = Some(symbol.name());
+                }
+                continue;
+            }
+            SymbolKind::Section | SymbolKind::Common | SymbolKind::Tls => continue,
+        }
+        if symbol.is_undefined() || symbol.name().is_empty() || symbol.size() == 0 {
+            continue;
+        }
+        symbols.push(Symbol {
+            name: symbol.name(),
+            file: filename,
+            begin: symbol.address(),
+            end: symbol.address() + symbol.size(),
+        });
+    }
+
+    // Sort so we can binary search.
+    symbols.sort_by_key(|x| x.begin);
+    symbols
 }
 
 struct Unit<'input, Endian>
