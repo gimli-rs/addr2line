@@ -44,8 +44,8 @@ dirname=$(perl -e 'use Cwd "abs_path";print abs_path(shift)' "$(dirname "$0")")
 		commit=$(git rev-parse HEAD)
 		fn="target/release/addr2line-$commit"
 		if [[ ! -e "$fn" ]]; then
-			cargo build --release
-			cp target/release/addr2line "$fn"
+			cargo build --release --example addr2line
+			cp target/release/examples/addr2line "$fn"
 		fi
 		if [[ "$ref" != "$commit" ]]; then
 			ln -sfn "addr2line-$commit" target/release/addr2line-"$ref"
