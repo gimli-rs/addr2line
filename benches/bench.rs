@@ -79,8 +79,10 @@ fn locate_default(b: &mut test::Bencher) {
         test::black_box(addr2line.locate(*addr)).ok();
     }
 
-    b.iter(|| for addr in &addresses {
-        test::black_box(addr2line.locate(*addr)).ok();
+    b.iter(|| {
+        for addr in &addresses {
+            test::black_box(addr2line.locate(*addr)).ok();
+        }
     });
 }
 
@@ -96,8 +98,10 @@ fn locate_with_functions(b: &mut test::Bencher) {
         test::black_box(addr2line.locate(*addr).ok());
     }
 
-    b.iter(|| for addr in &addresses {
-        test::black_box(addr2line.locate(*addr).ok());
+    b.iter(|| {
+        for addr in &addresses {
+            test::black_box(addr2line.locate(*addr).ok());
+        }
     });
 }
 
