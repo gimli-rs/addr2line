@@ -47,7 +47,7 @@ impl<'a> Iterator for Addrs<'a> {
 }
 
 fn print_loc(loc: &Option<Location>, basenames: bool) {
-    if let &Some(ref loc) = loc {
+    if let Some(ref loc) = *loc {
         let file = loc.file.as_ref().unwrap();
         let path = if basenames {
             Path::new(file.file_name().unwrap())
@@ -148,7 +148,7 @@ fn main() {
     let addrs = matches
         .values_of("addrs")
         .map(Addrs::Args)
-        .unwrap_or(Addrs::Stdin(stdin.lock().lines()));
+        .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
 
     for probe in addrs {
         if print_addrs {

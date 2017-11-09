@@ -42,7 +42,7 @@ static REFERENCE: &'static [&'static str] = &[
 
 #[inline(never)]
 fn test_frame_3() {
-    DwarfUnwinder::default().trace(|mut frames| {
+    DwarfUnwinder::default().trace(|frames| {
         let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
         let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
         let ctx = Context::new(file).unwrap().parse_functions().unwrap();

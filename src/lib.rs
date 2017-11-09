@@ -43,7 +43,7 @@ fn render_file<R: gimli::Reader>(
     ffile: &gimli::FileEntry<R>,
     dcd: &Option<R>,
 ) -> Result<PathBuf, gimli::Error> {
-    let mut path = if let &Some(ref dcd) = dcd {
+    let mut path = if let Some(ref dcd) = *dcd {
         PathBuf::from(dcd.to_string_lossy()?.as_ref())
     } else {
         PathBuf::new()
@@ -215,7 +215,7 @@ impl<R: gimli::Reader> Context<R> {
             let dw_unit = &unit.dw_unit;
             let abbrevs = &unit.abbrevs;
 
-            let mut cursor = dw_unit.entries(&abbrevs);
+            let mut cursor = dw_unit.entries(abbrevs);
             while let Some((d, entry)) = cursor.next_dfs()? {
                 depth += d;
                 match entry.tag() {
@@ -304,7 +304,7 @@ impl<R: gimli::Reader> Display for FunctionName<R> {
         let name = self.demangle()
             .unwrap()
             .map(Cow::from)
-            .unwrap_or(self.raw_name().unwrap());
+            .unwrap_or_else(|| self.raw_name().unwrap());
         write!(fmt, "{}", name)
     }
 }
@@ -373,7 +373,7 @@ impl<R: gimli::Reader> Context<R> {
             Err(_) => return Ok(None),
         };
         let ln = &uunit.sequences[idx];
-        let mut sm = cp.resume_from(&ln);
+        let mut sm = cp.resume_from(ln);
         let mut file = None;
         let mut line = None;
         let mut column = None;
@@ -400,7 +400,7 @@ impl<R: gimli::Reader> Context<R> {
 }
 
 impl<R: gimli::Reader> FullContext<R> {
-    pub fn query<'a>(&self, probe: u64) -> Result<IterFrames<R>, Error> {
+    pub fn query(&self, probe: u64) -> Result<IterFrames<R>, Error> {
         let ctx = &self.light;
         let mut res: SmallVec<[_; 16]> = self.funcs.query_point(probe).map(|x| &x.value).collect();
         res.sort_by_key(|x| -x.depth);
@@ -436,7 +436,7 @@ fn str_attr<'abbrev, 'unit, R: gimli::Reader>(
         None => {
             match entry.attr_value(gimli::DW_AT_abstract_origin)? {
                 Some(gimli::AttributeValue::UnitRef(offset)) => {
-                    let mut tcursor = dw_unit.entries_at_offset(&abbrevs, offset)?;
+                    let mut tcursor = dw_unit.entries_at_offset(abbrevs, offset)?;
                     match tcursor.next_dfs()? {
                         // FIXME: evil dwarf can send us into an infinite loop here
                         Some((_, entry)) => str_attr(entry, dw_unit, abbrevs, sections, name)?,
