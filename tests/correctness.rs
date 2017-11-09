@@ -1,15 +1,18 @@
 extern crate addr2line;
-extern crate unwind;
-extern crate object;
-extern crate memmap;
 extern crate fallible_iterator;
+extern crate memmap;
+extern crate object;
+extern crate unwind;
 
 use fallible_iterator::FallibleIterator;
-use unwind::{Unwinder, DwarfUnwinder};
+use unwind::{DwarfUnwinder, Unwinder};
 use addr2line::Context;
 
+// ugly hack :(
 #[inline(never)]
-fn no_tailcall_please() { print!("") } // ugly hack :(
+fn no_tailcall_please() {
+    print!("")
+}
 
 #[test]
 fn correctness() {
@@ -18,22 +21,28 @@ fn correctness() {
 }
 
 #[inline(never)]
-fn test_frame_1() { test_frame_2(); no_tailcall_please(); }
+fn test_frame_1() {
+    test_frame_2();
+    no_tailcall_please();
+}
 
 #[inline(never)]
-fn test_frame_2() { test_frame_3(); no_tailcall_please(); }
+fn test_frame_2() {
+    test_frame_3();
+    no_tailcall_please();
+}
 
 static REFERENCE: &'static [&'static str] = &[
     "_ZN6unwind8{{impl}}14trace<closure>E",
     "_ZN11correctness12test_frame_3E",
     "_ZN11correctness12test_frame_2E",
     "_ZN11correctness12test_frame_1E",
-    "_ZN11correctness11correctnessE"
+    "_ZN11correctness11correctnessE",
 ];
 
 #[inline(never)]
 fn test_frame_3() {
-    DwarfUnwinder::default().trace(|mut frames| {
+    DwarfUnwinder::default().trace(|frames| {
         let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
         let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
         let ctx = Context::new(file).unwrap().parse_functions().unwrap();
@@ -45,7 +54,7 @@ fn test_frame_3() {
                 trace.push(frame.function.unwrap().raw_name().unwrap().into_owned());
             }
         }
-        
+
         assert_eq!(&trace[..REFERENCE.len()], REFERENCE);
     });
     no_tailcall_please();

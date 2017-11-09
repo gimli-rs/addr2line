@@ -3,6 +3,8 @@
 #![cfg(not(target_os = "macos"))]
 
 extern crate addr2line;
+extern crate memmap;
+extern crate object;
 extern crate test;
 
 use std::env;
@@ -19,7 +21,14 @@ fn release_fixture_path() -> PathBuf {
     path
 }
 
+fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
+    let map = memmap::Mmap::open_path(target, memmap::Protection::Read).unwrap();
+    let file = object::File::parse(unsafe { map.as_slice() }).unwrap();
+    f(&file)
+}
+
 /// Obtain a list of addresses contained within the text section of the `target` executable.
+// TODO: use object crate instead of nm
 fn get_test_addresses(target: &path::Path) -> Vec<u64> {
     let names = process::Command::new("/usr/bin/nm")
         .arg("-S")
@@ -44,90 +53,103 @@ fn get_test_addresses(target: &path::Path) -> Vec<u64> {
     addresses
 }
 
-// Bench `Mapping::new_inner`.
-//
-// Does not call `Mapping::locate`, so no locations will be loaded.
 #[bench]
-fn build_default(b: &mut test::Bencher) {
+fn context_new_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
-    b.iter(|| {
-        addr2line::Options::default().build(&target).unwrap();
+    with_file(&target, |file| {
+        b.iter(|| {
+            addr2line::Context::new(file).unwrap();
+        });
     });
 }
 
 #[bench]
-fn build_with_functions(b: &mut test::Bencher) {
+fn context_new_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
-    b.iter(|| {
-        addr2line::Options::default()
-            .with_functions()
-            .build(&target)
-            .unwrap();
-    });
-}
-
-// Bench `Mapping::locate`.
-#[bench]
-fn locate_default(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
-    let mut addr2line = addr2line::Options::default().build(&target).unwrap();
-    // Ensure nothing is lazily loaded.
-    for addr in &addresses {
-        test::black_box(addr2line.locate(*addr)).ok();
-    }
-
-    b.iter(|| for addr in &addresses {
-        test::black_box(addr2line.locate(*addr)).ok();
+    with_file(&target, |file| {
+        b.iter(|| {
+            addr2line::Context::new(file)
+                .unwrap()
+                .parse_functions()
+                .unwrap();
+        });
     });
 }
 
 #[bench]
-fn locate_with_functions(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
-    let mut addr2line = addr2line::Options::default()
-        .with_functions()
-        .build(&target)
-        .unwrap();
-    for addr in &addresses {
-        test::black_box(addr2line.locate(*addr).ok());
-    }
-
-    b.iter(|| for addr in &addresses {
-        test::black_box(addr2line.locate(*addr).ok());
-    });
-}
-
-// Bench `Mapping::new_inner`. Also calls `Mapping::locate` so that
-// some (but not all) lazily loaded locations are loaded.
-#[bench]
-fn build_and_locate_default(b: &mut test::Bencher) {
+fn context_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
     let addresses = get_test_addresses(target.as_path());
 
-    b.iter(|| {
-        let mut addr2line = addr2line::Options::default().build(&target).unwrap();
-        for addr in addresses.iter().take(100) {
-            test::black_box(addr2line.locate(*addr).ok());
+    with_file(&target, |file| {
+        let ctx = addr2line::Context::new(file).unwrap();
+        // Ensure nothing is lazily loaded.
+        for addr in &addresses {
+            test::black_box(ctx.find_location(*addr)).ok();
         }
+
+        b.iter(|| {
+            for addr in &addresses {
+                test::black_box(ctx.find_location(*addr)).ok();
+            }
+        });
     });
 }
 
 #[bench]
-fn build_and_locate_with_functions(b: &mut test::Bencher) {
+fn context_query_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
     let addresses = get_test_addresses(target.as_path());
 
-    b.iter(|| {
-        let mut addr2line = addr2line::Options::default()
-            .with_functions()
-            .build(&target)
+    with_file(&target, |file| {
+        let ctx = addr2line::Context::new(file)
+            .unwrap()
+            .parse_functions()
             .unwrap();
-        for addr in addresses.iter().take(100) {
-            test::black_box(addr2line.locate(*addr)).ok();
+        // Ensure nothing is lazily loaded.
+        for addr in &addresses {
+            test::black_box(ctx.query(*addr)).ok();
         }
+
+        b.iter(|| {
+            for addr in &addresses {
+                test::black_box(ctx.query(*addr)).ok();
+            }
+        });
+    });
+}
+
+#[bench]
+fn context_new_and_query_location(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+    let addresses = get_test_addresses(target.as_path());
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let ctx = addr2line::Context::new(file).unwrap();
+            for addr in addresses.iter().take(100) {
+                test::black_box(ctx.find_location(*addr)).ok();
+            }
+        });
+    });
+}
+
+#[bench]
+fn context_new_and_query_with_functions(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+    let addresses = get_test_addresses(target.as_path());
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let ctx = addr2line::Context::new(file)
+                .unwrap()
+                .parse_functions()
+                .unwrap();
+            for addr in addresses.iter().take(100) {
+                test::black_box(ctx.query(*addr)).ok();
+            }
+        });
     });
 }

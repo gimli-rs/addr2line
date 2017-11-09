@@ -1,9 +1,9 @@
 extern crate addr2line;
-extern crate memmap;
-extern crate object;
-extern crate gimli;
 extern crate clap;
 extern crate fallible_iterator;
+extern crate gimli;
+extern crate memmap;
+extern crate object;
 
 use std::path::Path;
 use std::io::{BufRead, Lines, StdinLock};
@@ -40,12 +40,14 @@ impl<'a> Iterator for Addrs<'a> {
             Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
             Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
         };
-        text.as_ref().map(Cow::as_ref).map(parse_uint_from_hex_string)
+        text.as_ref()
+            .map(Cow::as_ref)
+            .map(parse_uint_from_hex_string)
     }
 }
 
 fn print_loc(loc: &Option<Location>, basenames: bool) {
-    if let &Some(ref loc) = loc {
+    if let Some(ref loc) = *loc {
         let file = loc.file.as_ref().unwrap();
         let path = if basenames {
             Path::new(file.file_name().unwrap())
@@ -65,42 +67,62 @@ fn main() {
     let matches = App::new("hardliner")
         .version("0.1")
         .about("A fast addr2line clone")
-        .arg(Arg::with_name("exe")
-             .short("e")
-             .long("exe")
-             .value_name("filename")
-             .help("Specify the name of the executable for which addresses should be translated.")
-             .required(true))
-        .arg(Arg::with_name("functions")
-             .short("f")
-             .long("functions")
-             .help("Display function names as well as file and line number information."))
-        .arg(Arg::with_name("pretty")
-             .short("p")
-             .long("pretty-print")
-             .help("Make the output more human friendly: each location are printed on one line."))
-        .arg(Arg::with_name("inlines")
-             .short("i")
-             .long("inlines")
-             .help("If the address belongs to a function that was inlined, the source information for all enclosing scopes back to the first non-inlined function will also be printed."))
-        .arg(Arg::with_name("addresses")
-             .short("a")
-             .long("addresses")
-             .help("Display the address before the function name, file and line number information."))
-        .arg(Arg::with_name("basenames")
-             .short("s")
-             .long("basenames")
-             .help("Display only the base of each file name."))
-        .arg(Arg::with_name("demangle")
-             .short("C")
-             .long("demangle")
-             .help("Demangle function names. \
-                    Specifying a specific demangling style (like GNU addr2line) \
-                    is not supported. (TODO)"))
-        .arg(Arg::with_name("addrs")
-             .takes_value(true)
-             .multiple(true)
-             .help("Addresses to use instead of reading from stdin."))
+        .arg(
+            Arg::with_name("exe")
+                .short("e")
+                .long("exe")
+                .value_name("filename")
+                .help(
+                    "Specify the name of the executable for which addresses should be translated.",
+                )
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("functions")
+                .short("f")
+                .long("functions")
+                .help("Display function names as well as file and line number information."),
+        )
+        .arg(
+            Arg::with_name("pretty")
+                .short("p")
+                .long("pretty-print")
+                .help(
+                    "Make the output more human friendly: each location are printed on \
+                     one line.",
+                ),
+        )
+        .arg(Arg::with_name("inlines").short("i").long("inlines").help(
+            "If the address belongs to a function that was inlined, the source \
+             information for all enclosing scopes back to the first non-inlined \
+             function will also be printed.",
+        ))
+        .arg(
+            Arg::with_name("addresses")
+                .short("a")
+                .long("addresses")
+                .help(
+                    "Display the address before the function name, file and line \
+                     number information.",
+                ),
+        )
+        .arg(
+            Arg::with_name("basenames")
+                .short("s")
+                .long("basenames")
+                .help("Display only the base of each file name."),
+        )
+        .arg(Arg::with_name("demangle").short("C").long("demangle").help(
+            "Demangle function names. \
+             Specifying a specific demangling style (like GNU addr2line) \
+             is not supported. (TODO)",
+        ))
+        .arg(
+            Arg::with_name("addrs")
+                .takes_value(true)
+                .multiple(true)
+                .help("Addresses to use instead of reading from stdin."),
+        )
         .get_matches();
 
     let do_functions = matches.is_present("functions");
@@ -123,7 +145,10 @@ fn main() {
     };
 
     let stdin = std::io::stdin();
-    let addrs = matches.values_of("addrs").map(Addrs::Args).unwrap_or(Addrs::Stdin(stdin.lock().lines()));
+    let addrs = matches
+        .values_of("addrs")
+        .map(Addrs::Args)
+        .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
 
     for probe in addrs {
         if print_addrs {

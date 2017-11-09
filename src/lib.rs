@@ -1,12 +1,12 @@
-extern crate object;
-extern crate intervaltree;
-extern crate fallible_iterator;
-extern crate gimli;
-extern crate smallvec;
-#[cfg(feature = "rustc-demangle")]
-extern crate rustc_demangle;
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
+extern crate fallible_iterator;
+extern crate gimli;
+extern crate intervaltree;
+extern crate object;
+#[cfg(feature = "rustc-demangle")]
+extern crate rustc_demangle;
+extern crate smallvec;
 
 use std::path::PathBuf;
 use std::cmp::Ordering;
@@ -15,7 +15,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
-use intervaltree::{IntervalTree, Element};
+use intervaltree::{Element, IntervalTree};
 use smallvec::SmallVec;
 
 struct Func<T> {
@@ -38,10 +38,12 @@ struct UnitInner<R: gimli::Reader> {
     base_addr: u64,
 }
 
-fn render_file<R: gimli::Reader>(header: &gimli::LineNumberProgramHeader<R>,
-                                 ffile: &gimli::FileEntry<R>,
-                                 dcd: &Option<R>) -> Result<PathBuf, gimli::Error> {
-    let mut path = if let &Some(ref dcd) = dcd {
+fn render_file<R: gimli::Reader>(
+    header: &gimli::LineNumberProgramHeader<R>,
+    ffile: &gimli::FileEntry<R>,
+    dcd: &Option<R>,
+) -> Result<PathBuf, gimli::Error> {
+    let mut path = if let Some(ref dcd) = *dcd {
         PathBuf::from(dcd.to_string_lossy()?.as_ref())
     } else {
         PathBuf::new()
@@ -67,9 +69,12 @@ pub struct FullContext<R: gimli::Reader> {
     light: Context<R>,
 }
 
-fn read_ranges<R: gimli::Reader>(entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
-                                 debug_ranges: &gimli::DebugRanges<R>,
-                                 addr_size: u8, base_addr: u64) -> Result<Option<WrapRangeIter<R>>, Error> {
+fn read_ranges<R: gimli::Reader>(
+    entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
+    debug_ranges: &gimli::DebugRanges<R>,
+    addr_size: u8,
+    base_addr: u64,
+) -> Result<Option<WrapRangeIter<R>>, Error> {
     Ok(Some(match entry.attr_value(gimli::DW_AT_ranges)? {
         None => {
             let low_pc = match entry.attr_value(gimli::DW_AT_low_pc)? {
@@ -81,8 +86,11 @@ fn read_ranges<R: gimli::Reader>(entry: &gimli::DebuggingInformationEntry<R, R::
                 Some(gimli::AttributeValue::Udata(x)) => low_pc + x,
                 _ => return Ok(None), // only low_pc, no high_pc? wtf is this? TODO: perhaps return error
             };
-            WrapRangeIter::Synthetic(Some(gimli::Range { begin: low_pc, end: high_pc }))
-        },
+            WrapRangeIter::Synthetic(Some(gimli::Range {
+                begin: low_pc,
+                end: high_pc,
+            }))
+        }
         Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
             let ranges = debug_ranges.ranges(rr, addr_size, base_addr)?;
             WrapRangeIter::Real(ranges)
@@ -99,8 +107,14 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'file, S, Endian>(file: &'file object::File<'input>, endian: Endian) -> S
-            where S: gimli::Section<gimli::EndianBuf<'input, Endian>>, Endian: gimli::Endianity, 'file: 'input,
+        fn load_section<'input, 'file, S, Endian>(
+            file: &'file object::File<'input>,
+            endian: Endian,
+        ) -> S
+        where
+            S: gimli::Section<gimli::EndianBuf<'input, Endian>>,
+            Endian: gimli::Endianity,
+            'file: 'input,
         {
             let data = file.get_section(S::section_name()).unwrap_or(&[]);
             S::from(gimli::EndianBuf::new(data, endian))
@@ -132,8 +146,10 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     Some(gimli::AttributeValue::DebugLineRef(dlr)) => dlr,
                     _ => unreachable!(),
                 };
-                let dcd = unit.attr(gimli::DW_AT_comp_dir)?.and_then(|x| x.string_value(&debug_str));
-                let dcn = unit.attr(gimli::DW_AT_name)?.and_then(|x| x.string_value(&debug_str));
+                let dcd = unit.attr(gimli::DW_AT_comp_dir)?
+                    .and_then(|x| x.string_value(&debug_str));
+                let dcn = unit.attr(gimli::DW_AT_name)?
+                    .and_then(|x| x.string_value(&debug_str));
                 let base_addr = match unit.attr_value(gimli::DW_AT_low_pc)? {
                     Some(gimli::AttributeValue::Addr(addr)) => addr,
                     _ => continue, // no base addr? HOW???
@@ -142,9 +158,13 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     Some(gimli::AttributeValue::Language(lang)) => lang,
                     _ => continue, // no language? HOW??? (TODO: this is not strictly mandatory for us)
                 };
-                if let Some(mut ranges) = read_ranges(unit, &debug_ranges, dw_unit.address_size(), base_addr)? {
+                if let Some(mut ranges) =
+                    read_ranges(unit, &debug_ranges, dw_unit.address_size(), base_addr)?
+                {
                     while let Some(range) = ranges.next()? {
-                        if range.begin == range.end { continue; }
+                        if range.begin == range.end {
+                            continue;
+                        }
 
                         unit_ranges.push((range, unit_id));
                     }
@@ -153,7 +173,13 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                 let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
                 let (lnp, mut sequences) = ilnp.sequences()?;
                 sequences.sort_by_key(|x| x.start);
-                UnitInner { lnp, sequences, comp_dir: dcd, lang, base_addr }
+                UnitInner {
+                    lnp,
+                    sequences,
+                    comp_dir: dcd,
+                    lang,
+                    base_addr,
+                }
             };
 
             res_units.push(ResUnit {
@@ -174,7 +200,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             sections: DebugSections {
                 debug_str,
                 debug_ranges,
-            }
+            },
         })
     }
 }
@@ -189,24 +215,26 @@ impl<R: gimli::Reader> Context<R> {
             let dw_unit = &unit.dw_unit;
             let abbrevs = &unit.abbrevs;
 
-            let mut cursor = dw_unit.entries(&abbrevs);
+            let mut cursor = dw_unit.entries(abbrevs);
             while let Some((d, entry)) = cursor.next_dfs()? {
                 depth += d;
                 match entry.tag() {
                     gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
                         // may be an inline-only function and thus not have any ranges
-                        if let Some(mut ranges) = read_ranges(entry,
-                                                              &self.sections.debug_ranges,
-                                                              dw_unit.address_size(),
-                                                              unit.inner.base_addr)? {
+                        if let Some(mut ranges) = read_ranges(
+                            entry,
+                            &self.sections.debug_ranges,
+                            dw_unit.address_size(),
+                            unit.inner.base_addr,
+                        )? {
                             while let Some(range) = ranges.next()? {
                                 results.push(Element {
-                                    range: range.begin .. range.end,
+                                    range: range.begin..range.end,
                                     value: Func {
                                         unit_id,
                                         entry_off: entry.offset(),
                                         depth,
-                                    }
+                                    },
                                 });
                             }
                         }
@@ -256,14 +284,16 @@ impl<R: gimli::Reader> FunctionName<R> {
         Ok(match self.language {
             #[cfg(feature = "rustc-demangle")]
             gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name.as_ref())
-                .ok().as_ref().map(ToString::to_string),
+                .ok()
+                .as_ref()
+                .map(ToString::to_string),
             #[cfg(feature = "cpp_demangle")]
-            gimli::DW_LANG_C_plus_plus
-                | gimli::DW_LANG_C_plus_plus_03
-                | gimli::DW_LANG_C_plus_plus_11
-                | gimli::DW_LANG_C_plus_plus_14 =>
-                cpp_demangle::Symbol::new(name.as_ref()).ok()
-                    .and_then(|x| x.demangle(&Default::default()).ok()),
+            gimli::DW_LANG_C_plus_plus |
+            gimli::DW_LANG_C_plus_plus_03 |
+            gimli::DW_LANG_C_plus_plus_11 |
+            gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name.as_ref())
+                .ok()
+                .and_then(|x| x.demangle(&Default::default()).ok()),
             _ => None,
         })
     }
@@ -271,7 +301,10 @@ impl<R: gimli::Reader> FunctionName<R> {
 
 impl<R: gimli::Reader> Display for FunctionName<R> {
     fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
-        let name = self.demangle().unwrap().map(Cow::from).unwrap_or(self.raw_name().unwrap());
+        let name = self.demangle()
+            .unwrap()
+            .map(Cow::from)
+            .unwrap_or_else(|| self.raw_name().unwrap());
         write!(fmt, "{}", name)
     }
 }
@@ -320,7 +353,11 @@ impl<R: gimli::Reader> Context<R> {
         self.find_location_inner(probe, &self.units[unit_id].inner)
     }
 
-    fn find_location_inner(&self, probe: u64, uunit: &UnitInner<R>) -> Result<Option<Location>, Error> {
+    fn find_location_inner(
+        &self,
+        probe: u64,
+        uunit: &UnitInner<R>,
+    ) -> Result<Option<Location>, Error> {
         let cp = &uunit.lnp;
         let idx = uunit.sequences.binary_search_by(|ln| {
             if probe < ln.start {
@@ -336,7 +373,7 @@ impl<R: gimli::Reader> Context<R> {
             Err(_) => return Ok(None),
         };
         let ln = &uunit.sequences[idx];
-        let mut sm = cp.resume_from(&ln);
+        let mut sm = cp.resume_from(ln);
         let mut file = None;
         let mut line = None;
         let mut column = None;
@@ -363,7 +400,7 @@ impl<R: gimli::Reader> Context<R> {
 }
 
 impl<R: gimli::Reader> FullContext<R> {
-    pub fn query<'a>(&self, probe: u64) -> Result<IterFrames<R>, Error> {
+    pub fn query(&self, probe: u64) -> Result<IterFrames<R>, Error> {
         let ctx = &self.light;
         let mut res: SmallVec<[_; 16]> = self.funcs.query_point(probe).map(|x| &x.value).collect();
         res.sort_by_key(|x| -x.depth);
@@ -387,17 +424,19 @@ impl<R: gimli::Reader> FullContext<R> {
 
 type Error = gimli::Error;
 
-fn str_attr<'abbrev, 'unit, R: gimli::Reader>(entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
-                                              dw_unit: &gimli::CompilationUnitHeader<R, R::Offset>,
-                                              abbrevs: &gimli::Abbreviations,
-                                              sections: &DebugSections<R>,
-                                              name: gimli::DwAt) -> Result<Option<R>, Error> {
+fn str_attr<'abbrev, 'unit, R: gimli::Reader>(
+    entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
+    dw_unit: &gimli::CompilationUnitHeader<R, R::Offset>,
+    abbrevs: &gimli::Abbreviations,
+    sections: &DebugSections<R>,
+    name: gimli::DwAt,
+) -> Result<Option<R>, Error> {
     Ok(match entry.attr(name)? {
         Some(x) => x.string_value(&sections.debug_str),
         None => {
             match entry.attr_value(gimli::DW_AT_abstract_origin)? {
                 Some(gimli::AttributeValue::UnitRef(offset)) => {
-                    let mut tcursor = dw_unit.entries_at_offset(&abbrevs, offset)?;
+                    let mut tcursor = dw_unit.entries_at_offset(abbrevs, offset)?;
                     match tcursor.next_dfs()? {
                         // FIXME: evil dwarf can send us into an infinite loop here
                         Some((_, entry)) => str_attr(entry, dw_unit, abbrevs, sections, name)?,
@@ -418,17 +457,28 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         let (loc, func) = match (self.next.take(), self.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
-            (Some(loc), None) => return Ok(Some(Frame {
-                function: None,
-                location: Some(loc),
-            })),
+            (Some(loc), None) => {
+                return Ok(Some(Frame {
+                    function: None,
+                    location: Some(loc),
+                }))
+            }
         };
 
         let unit = &self.units[func.unit_id];
 
-        let mut cursor = unit.dw_unit.entries_at_offset(&unit.abbrevs, func.entry_off)?;
-        let (_, entry) = cursor.next_dfs()?.expect("DIE we read a while ago is no longer readable??");
-        let name = str_attr(entry, &unit.dw_unit, &unit.abbrevs, self.sections, gimli::DW_AT_linkage_name)?;
+        let mut cursor = unit.dw_unit
+            .entries_at_offset(&unit.abbrevs, func.entry_off)?;
+        let (_, entry) = cursor
+            .next_dfs()?
+            .expect("DIE we read a while ago is no longer readable??");
+        let name = str_attr(
+            entry,
+            &unit.dw_unit,
+            &unit.abbrevs,
+            self.sections,
+            gimli::DW_AT_linkage_name,
+        )?;
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
@@ -442,17 +492,23 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
                 _ => None,
             };
 
-            let line = entry.attr(gimli::DW_AT_call_line)?.and_then(|x| x.udata_value());
-            let column = entry.attr(gimli::DW_AT_call_column)?.and_then(|x| x.udata_value());
+            let line = entry
+                .attr(gimli::DW_AT_call_line)?
+                .and_then(|x| x.udata_value());
+            let column = entry
+                .attr(gimli::DW_AT_call_column)?
+                .and_then(|x| x.udata_value());
 
             self.next = Some(Location { file, line, column });
         }
 
 
         Ok(Some(Frame {
-            function: name.map(|name| FunctionName {
-                name,
-                language: unit.inner.lang,
+            function: name.map(|name| {
+                FunctionName {
+                    name,
+                    language: unit.inner.lang,
+                }
             }),
             location: loc,
         }))
