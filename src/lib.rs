@@ -508,7 +508,8 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
 
             let line = entry
                 .attr(gimli::DW_AT_call_line)?
-                .and_then(|x| x.udata_value());
+                .and_then(|x| x.udata_value())
+                .and_then(|x| if x == 0 { None } else { Some(x) });
             let column = entry
                 .attr(gimli::DW_AT_call_column)?
                 .and_then(|x| x.udata_value());

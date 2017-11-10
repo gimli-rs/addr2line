@@ -46,7 +46,7 @@ impl<'a> Iterator for Addrs<'a> {
     }
 }
 
-fn print_loc(loc: &Option<Location>, basenames: bool) {
+fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
     if let Some(ref loc) = *loc {
         let file = loc.file.as_ref().unwrap();
         let path = if basenames {
@@ -54,10 +54,17 @@ fn print_loc(loc: &Option<Location>, basenames: bool) {
         } else {
             file
         };
-        println!("{}:{}", path.display(), loc.line.unwrap_or(0));
-        if let Some(col) = loc.column {
-            print!(",{}", col);
+        print!("{}:", path.display());
+        if llvm {
+            print!("{}:{}", loc.line.unwrap_or(0), loc.column.unwrap_or(0));
+        } else if let Some(line) = loc.line {
+            print!("{}", line);
+        } else {
+            print!("?");
         }
+        println!();
+    } else if llvm {
+        println!("??:0:0");
     } else {
         println!("??:0");
     }
@@ -118,6 +125,11 @@ fn main() {
              is not supported. (TODO)",
         ))
         .arg(
+            Arg::with_name("llvm")
+                .long("llvm")
+                .help("Display output in the same format as llvm-symbolizer."),
+        )
+        .arg(
             Arg::with_name("addrs")
                 .takes_value(true)
                 .multiple(true)
@@ -131,6 +143,7 @@ fn main() {
     let print_addrs = matches.is_present("addresses");
     let basenames = matches.is_present("basenames");
     let demangle = matches.is_present("demangle");
+    let llvm = matches.is_present("llvm");
     let path = matches.value_of("exe").unwrap();
 
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
@@ -152,7 +165,11 @@ fn main() {
 
     for probe in addrs {
         if print_addrs {
-            print!("0x{:016x}", probe);
+            if llvm {
+                print!("0x{:x}", probe);
+            } else {
+                print!("0x{:016x}", probe);
+            }
             if pretty {
                 print!(": ");
             } else {
@@ -163,7 +180,7 @@ fn main() {
         match ctx {
             VarCon::Light(ref ctx) => {
                 let loc = ctx.find_location(probe).unwrap();
-                print_loc(&loc, basenames);
+                print_loc(&loc, basenames, llvm);
             }
             VarCon::Full(ref ctx) => {
                 let mut printed_anything = false;
@@ -191,7 +208,7 @@ fn main() {
                         }
                     }
 
-                    print_loc(&frame.location, basenames);
+                    print_loc(&frame.location, basenames, llvm);
 
                     printed_anything = true;
 
@@ -210,9 +227,17 @@ fn main() {
                         }
                     }
 
-                    println!("??:0");
+                    if llvm {
+                        println!("??:0:0");
+                    } else {
+                        println!("??:0");
+                    }
                 }
             }
+        }
+
+        if llvm {
+            println!();
         }
     }
 }
