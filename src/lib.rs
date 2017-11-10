@@ -424,30 +424,50 @@ impl<R: gimli::Reader> FullContext<R> {
 
 type Error = gimli::Error;
 
-fn str_attr<'abbrev, 'unit, R: gimli::Reader>(
+fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
     entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
     dw_unit: &gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: &gimli::Abbreviations,
     sections: &DebugSections<R>,
-    name: gimli::DwAt,
 ) -> Result<Option<R>, Error> {
-    Ok(match entry.attr(name)? {
-        Some(x) => x.string_value(&sections.debug_str),
-        None => {
-            match entry.attr_value(gimli::DW_AT_abstract_origin)? {
-                Some(gimli::AttributeValue::UnitRef(offset)) => {
-                    let mut tcursor = dw_unit.entries_at_offset(abbrevs, offset)?;
-                    match tcursor.next_dfs()? {
-                        // FIXME: evil dwarf can send us into an infinite loop here
-                        Some((_, entry)) => str_attr(entry, dw_unit, abbrevs, sections, name)?,
-                        None => None,
-                    }
-                }
-                None => None,
-                x => panic!("wat {:?}", x),
+    if let Some(attr) = entry.attr(gimli::DW_AT_linkage_name)? {
+        if let Some(val) = attr.string_value(&sections.debug_str) {
+            return Ok(Some(val));
+        }
+    }
+    if let Some(attr) = entry.attr(gimli::DW_AT_MIPS_linkage_name)? {
+        if let Some(val) = attr.string_value(&sections.debug_str) {
+            return Ok(Some(val));
+        }
+    }
+    if let Some(attr) = entry.attr(gimli::DW_AT_name)? {
+        if let Some(val) = attr.string_value(&sections.debug_str) {
+            return Ok(Some(val));
+        }
+    }
+    match entry.attr_value(gimli::DW_AT_abstract_origin)? {
+        Some(gimli::AttributeValue::UnitRef(offset)) => {
+            let mut entries = dw_unit.entries_at_offset(abbrevs, offset)?;
+            if let Some((_, entry)) = entries.next_dfs()? {
+                // FIXME: evil dwarf can send us into an infinite loop here
+                return name_attr(entry, dw_unit, abbrevs, sections);
             }
         }
-    })
+        // FIXME: handle DebugInfoRef
+        _ => {}
+    }
+    match entry.attr_value(gimli::DW_AT_specification)? {
+        Some(gimli::AttributeValue::UnitRef(offset)) => {
+            let mut entries = dw_unit.entries_at_offset(abbrevs, offset)?;
+            if let Some((_, entry)) = entries.next_dfs()? {
+                // FIXME: evil dwarf can send us into an infinite loop here
+                return name_attr(entry, dw_unit, abbrevs, sections);
+            }
+        }
+        // FIXME: handle DebugInfoRef
+        _ => {}
+    }
+    Ok(None)
 }
 
 impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
@@ -472,13 +492,7 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         let (_, entry) = cursor
             .next_dfs()?
             .expect("DIE we read a while ago is no longer readable??");
-        let name = str_attr(
-            entry,
-            &unit.dw_unit,
-            &unit.abbrevs,
-            self.sections,
-            gimli::DW_AT_linkage_name,
-        )?;
+        let name = name_attr(entry, &unit.dw_unit, &unit.abbrevs, self.sections)?;
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
@@ -494,7 +508,8 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
 
             let line = entry
                 .attr(gimli::DW_AT_call_line)?
-                .and_then(|x| x.udata_value());
+                .and_then(|x| x.udata_value())
+                .and_then(|x| if x == 0 { None } else { Some(x) });
             let column = entry
                 .attr(gimli::DW_AT_call_column)?
                 .and_then(|x| x.udata_value());
