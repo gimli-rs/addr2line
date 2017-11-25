@@ -191,7 +191,20 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
 
         unit_ranges.sort_by_key(|x| x.0.begin);
 
-        // ranges need to be disjoint or we lost
+        // Ranges need to be disjoint so that we can binary search, but weak symbols can
+        // cause overlap. In this case, we don't care which unit is used, so ignore the
+        // beginning of the subseqent range to avoid overlap.
+        let mut prev_end = 0;
+        for range in &mut unit_ranges {
+            if range.0.begin < prev_end {
+                range.0.begin = prev_end;
+            }
+            if range.0.end < prev_end {
+                range.0.end = prev_end;
+            } else {
+                prev_end = range.0.end;
+            }
+        }
         debug_assert!(unit_ranges.windows(2).all(|w| w[0].0.end <= w[1].0.begin));
 
         Ok(Context {
