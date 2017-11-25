@@ -172,6 +172,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
 
                 let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
                 let (lnp, mut sequences) = ilnp.sequences()?;
+                sequences.retain(|x| x.start != 0);
                 sequences.sort_by_key(|x| x.start);
                 UnitInner {
                     lnp,
@@ -241,6 +242,12 @@ impl<R: gimli::Reader> Context<R> {
                             unit.inner.base_addr,
                         )? {
                             while let Some(range) = ranges.next()? {
+                                // Ignore invalid DWARF so that a query of 0 does not give
+                                // a long list of matches.
+                                // TODO: don't ignore if there is a section at this address
+                                if range.begin == 0 {
+                                    continue;
+                                }
                                 results.push(Element {
                                     range: range.begin..range.end,
                                     value: Func {
