@@ -172,6 +172,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
 
                 let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
                 let (lnp, mut sequences) = ilnp.sequences()?;
+                sequences.retain(|x| x.start != 0);
                 sequences.sort_by_key(|x| x.start);
                 UnitInner {
                     lnp,
@@ -191,7 +192,20 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
 
         unit_ranges.sort_by_key(|x| x.0.begin);
 
-        // ranges need to be disjoint or we lost
+        // Ranges need to be disjoint so that we can binary search, but weak symbols can
+        // cause overlap. In this case, we don't care which unit is used, so ignore the
+        // beginning of the subseqent range to avoid overlap.
+        let mut prev_end = 0;
+        for range in &mut unit_ranges {
+            if range.0.begin < prev_end {
+                range.0.begin = prev_end;
+            }
+            if range.0.end < prev_end {
+                range.0.end = prev_end;
+            } else {
+                prev_end = range.0.end;
+            }
+        }
         debug_assert!(unit_ranges.windows(2).all(|w| w[0].0.end <= w[1].0.begin));
 
         Ok(Context {
@@ -228,6 +242,12 @@ impl<R: gimli::Reader> Context<R> {
                             unit.inner.base_addr,
                         )? {
                             while let Some(range) = ranges.next()? {
+                                // Ignore invalid DWARF so that a query of 0 does not give
+                                // a long list of matches.
+                                // TODO: don't ignore if there is a section at this address
+                                if range.begin == 0 {
+                                    continue;
+                                }
                                 results.push(Element {
                                     range: range.begin..range.end,
                                     value: Func {
