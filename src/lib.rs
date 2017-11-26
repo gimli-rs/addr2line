@@ -152,7 +152,8 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     .and_then(|x| x.string_value(&debug_str));
                 let base_addr = match unit.attr_value(gimli::DW_AT_low_pc)? {
                     Some(gimli::AttributeValue::Addr(addr)) => addr,
-                    _ => continue, // no base addr? HOW???
+                    None => 0, // ThinLTO yields inline-only compilation units; this is valid
+                    _ => unreachable!(),
                 };
                 let lang = match unit.attr_value(gimli::DW_AT_language)? {
                     Some(gimli::AttributeValue::Language(lang)) => lang,
@@ -446,10 +447,15 @@ type Error = gimli::Error;
 
 fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
     entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
-    dw_unit: &gimli::CompilationUnitHeader<R, R::Offset>,
-    abbrevs: &gimli::Abbreviations,
+    unit: &ResUnit<R>,
     sections: &DebugSections<R>,
+    units: &[ResUnit<R>],
+    recursion_limit: usize,
 ) -> Result<Option<R>, Error> {
+    if recursion_limit == 0 {
+        return Ok(None);
+    }
+
     if let Some(attr) = entry.attr(gimli::DW_AT_linkage_name)? {
         if let Some(val) = attr.string_value(&sections.debug_str) {
             return Ok(Some(val));
@@ -465,28 +471,31 @@ fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
             return Ok(Some(val));
         }
     }
-    match entry.attr_value(gimli::DW_AT_abstract_origin)? {
+
+    let next = entry.attr_value(gimli::DW_AT_abstract_origin)?.or(entry.attr_value(gimli::DW_AT_specification)?);
+    match next {
         Some(gimli::AttributeValue::UnitRef(offset)) => {
-            let mut entries = dw_unit.entries_at_offset(abbrevs, offset)?;
+            let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
             if let Some((_, entry)) = entries.next_dfs()? {
-                // FIXME: evil dwarf can send us into an infinite loop here
-                return name_attr(entry, dw_unit, abbrevs, sections);
+                return name_attr(entry, unit, sections, units, recursion_limit - 1);
+            } else {
+                return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        // FIXME: handle DebugInfoRef
-        _ => {}
-    }
-    match entry.attr_value(gimli::DW_AT_specification)? {
-        Some(gimli::AttributeValue::UnitRef(offset)) => {
-            let mut entries = dw_unit.entries_at_offset(abbrevs, offset)?;
-            if let Some((_, entry)) = entries.next_dfs()? {
-                // FIXME: evil dwarf can send us into an infinite loop here
-                return name_attr(entry, dw_unit, abbrevs, sections);
+        Some(gimli::AttributeValue::DebugInfoRef(dr)) => {
+            if let Some((unit, offset)) = units.iter()
+                .filter_map(|unit| dr.to_unit_offset(&unit.dw_unit).map(|uo| (unit, uo))).next() {
+                let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
+                if let Some((_, entry)) = entries.next_dfs()? {
+                    return name_attr(entry, unit, sections, units, recursion_limit - 1);
+                }
+            } else {
+                return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        // FIXME: handle DebugInfoRef
         _ => {}
     }
+
     Ok(None)
 }
 
@@ -512,7 +521,9 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         let (_, entry) = cursor
             .next_dfs()?
             .expect("DIE we read a while ago is no longer readable??");
-        let name = name_attr(entry, &unit.dw_unit, &unit.abbrevs, self.sections)?;
+
+        // Set an arbitrary recursion limit of 16
+        let name = name_attr(entry, unit, self.sections, self.units, 16)?;
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
