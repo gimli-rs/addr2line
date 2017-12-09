@@ -147,7 +147,8 @@ fn main() {
     let path = matches.value_of("exe").unwrap();
 
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
-    let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file =
+        &object::File::parse(unsafe { map.as_slice() }).unwrap();
 
     let ctx = Context::new(file).unwrap();
 

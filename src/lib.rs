@@ -309,10 +309,10 @@ impl<R: gimli::Reader> FunctionName<R> {
                 .as_ref()
                 .map(ToString::to_string),
             #[cfg(feature = "cpp_demangle")]
-            gimli::DW_LANG_C_plus_plus |
-            gimli::DW_LANG_C_plus_plus_03 |
-            gimli::DW_LANG_C_plus_plus_11 |
-            gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name.as_ref())
+            gimli::DW_LANG_C_plus_plus
+            | gimli::DW_LANG_C_plus_plus_03
+            | gimli::DW_LANG_C_plus_plus_11
+            | gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name.as_ref())
                 .ok()
                 .and_then(|x| x.demangle(&Default::default()).ok()),
             _ => None,
@@ -472,7 +472,9 @@ fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
         }
     }
 
-    let next = entry.attr_value(gimli::DW_AT_abstract_origin)?.or(entry.attr_value(gimli::DW_AT_specification)?);
+    let next = entry
+        .attr_value(gimli::DW_AT_abstract_origin)?
+        .or(entry.attr_value(gimli::DW_AT_specification)?);
     match next {
         Some(gimli::AttributeValue::UnitRef(offset)) => {
             let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
@@ -482,17 +484,18 @@ fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
                 return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        Some(gimli::AttributeValue::DebugInfoRef(dr)) => {
-            if let Some((unit, offset)) = units.iter()
-                .filter_map(|unit| dr.to_unit_offset(&unit.dw_unit).map(|uo| (unit, uo))).next() {
-                let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
-                if let Some((_, entry)) = entries.next_dfs()? {
-                    return name_attr(entry, unit, sections, units, recursion_limit - 1);
-                }
-            } else {
-                return Err(gimli::Error::NoEntryAtGivenOffset);
+        Some(gimli::AttributeValue::DebugInfoRef(dr)) => if let Some((unit, offset)) = units
+            .iter()
+            .filter_map(|unit| dr.to_unit_offset(&unit.dw_unit).map(|uo| (unit, uo)))
+            .next()
+        {
+            let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
+            if let Some((_, entry)) = entries.next_dfs()? {
+                return name_attr(entry, unit, sections, units, recursion_limit - 1);
             }
-        }
+        } else {
+            return Err(gimli::Error::NoEntryAtGivenOffset);
+        },
         _ => {}
     }
 
@@ -529,7 +532,11 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
                 Some(gimli::AttributeValue::FileIndex(fi)) => {
                     if let Some(file) = unit.inner.lnp.header().file(fi) {
-                        Some(render_file(unit.inner.lnp.header(), file, &unit.inner.comp_dir)?)
+                        Some(render_file(
+                            unit.inner.lnp.header(),
+                            file,
+                            &unit.inner.comp_dir,
+                        )?)
                     } else {
                         None
                     }
