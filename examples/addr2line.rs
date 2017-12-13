@@ -11,6 +11,7 @@ use std::borrow::Cow;
 
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;
+use object::{Object, SymbolMap};
 
 use addr2line::{Context, FullContext, Location};
 
@@ -22,9 +23,9 @@ fn parse_uint_from_hex_string(string: &str) -> u64 {
     }
 }
 
-enum VarCon<R: gimli::Reader> {
+enum VarCon<'a, R: gimli::Reader> {
     Light(Context<R>),
-    Full(FullContext<R>),
+    Full(FullContext<R>, SymbolMap<'a>),
 }
 
 enum Addrs<'a> {
@@ -153,7 +154,7 @@ fn main() {
     let ctx = Context::new(file).unwrap();
 
     let ctx = if do_functions || do_inlines {
-        VarCon::Full(ctx.parse_functions().unwrap())
+        VarCon::Full(ctx.parse_functions().unwrap(), file.symbol_map())
     } else {
         VarCon::Light(ctx)
     };
@@ -183,7 +184,7 @@ fn main() {
                 let loc = ctx.find_location(probe).unwrap();
                 print_loc(&loc, basenames, llvm);
             }
-            VarCon::Full(ref ctx) => {
+            VarCon::Full(ref ctx, ref symbols) => {
                 let mut printed_anything = false;
                 let mut frames = ctx.query(probe).unwrap().enumerate();
                 while let Some((i, frame)) = frames.next().unwrap() {
@@ -220,7 +221,16 @@ fn main() {
 
                 if !printed_anything {
                     if do_functions {
-                        print!("??");
+                        if let Some(name) = symbols.get(probe).and_then(|x| x.name()) {
+                            if demangle {
+                                print!("{}", addr2line::demangle(Cow::from(name), None));
+                            } else {
+                                print!("{}", name);
+                            }
+                        } else {
+                            print!("??");
+                        }
+
                         if pretty {
                             print!(" ");
                         } else {
