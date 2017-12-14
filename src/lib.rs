@@ -11,7 +11,6 @@ extern crate smallvec;
 use std::path::PathBuf;
 use std::cmp::Ordering;
 use std::borrow::Cow;
-use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
@@ -300,54 +299,24 @@ impl<R: gimli::Reader> FunctionName<R> {
     pub fn raw_name(&self) -> Result<Cow<str>, Error> {
         self.name.to_string_lossy()
     }
-
-    pub fn demangle(&self) -> Result<Cow<str>, Error> {
-        self.raw_name().map(|name| demangle(name, self.language))
-    }
 }
 
-impl<R: gimli::Reader> Display for FunctionName<R> {
-    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
-        write!(fmt, "{}", self.demangle().unwrap())
-    }
-}
-
-pub fn demangle(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
+pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
     match language {
-        Some(gimli::DW_LANG_Rust) => demangle_rust(&name),
-        Some(gimli::DW_LANG_C_plus_plus)
-        | Some(gimli::DW_LANG_C_plus_plus_03)
-        | Some(gimli::DW_LANG_C_plus_plus_11)
-        | Some(gimli::DW_LANG_C_plus_plus_14) => demangle_cpp(&name),
-        Some(_) => None,
-        None => demangle_cpp(&name).or_else(|| demangle_rust(&name)),
-    }.map(Cow::from)
-        .unwrap_or(name)
-}
-
-#[cfg(feature = "rustc-demangle")]
-fn demangle_rust(name: &str) -> Option<String> {
-    rustc_demangle::try_demangle(name)
-        .ok()
-        .as_ref()
-        .map(ToString::to_string)
-}
-
-#[cfg(not(feature = "rustc-demangle"))]
-fn demangle_rust(_name: &str) -> Option<String> {
-    None
-}
-
-#[cfg(feature = "cpp_demangle")]
-fn demangle_cpp(name: &str) -> Option<String> {
-    cpp_demangle::Symbol::new(name)
-        .ok()
-        .and_then(|x| x.demangle(&Default::default()).ok())
-}
-
-#[cfg(not(feature = "cpp_demangle"))]
-fn demangle_cpp(_name: &str) -> Option<String> {
-    None
+        #[cfg(feature = "rustc-demangle")]
+        gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name)
+            .ok()
+            .as_ref()
+            .map(ToString::to_string),
+        #[cfg(feature = "cpp_demangle")]
+        gimli::DW_LANG_C_plus_plus
+        | gimli::DW_LANG_C_plus_plus_03
+        | gimli::DW_LANG_C_plus_plus_11
+        | gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name)
+            .ok()
+            .and_then(|x| x.demangle(&Default::default()).ok()),
+        _ => None,
+    }
 }
 
 enum WrapRangeIter<R: gimli::Reader> {

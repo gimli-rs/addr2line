@@ -71,6 +71,22 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
     }
 }
 
+fn print_function(name: &str, language: Option<gimli::DwLang>, demangle: bool) {
+    if demangle {
+        let demangled_name = match language {
+            Some(language) => addr2line::demangle(name, language),
+            None => addr2line::demangle(name, gimli::DW_LANG_C_plus_plus)
+                .or_else(|| addr2line::demangle(name, gimli::DW_LANG_Rust)),
+        };
+        print!(
+            "{}",
+            demangled_name.as_ref().map(String::as_str).unwrap_or(name)
+        );
+    } else {
+        print!("{}", name);
+    }
+}
+
 fn main() {
     let matches = App::new("hardliner")
         .version("0.1")
@@ -194,11 +210,7 @@ fn main() {
 
                     if do_functions {
                         if let Some(func) = frame.function {
-                            if demangle {
-                                print!("{}", func);
-                            } else {
-                                print!("{}", func.raw_name().unwrap());
-                            }
+                            print_function(&func.raw_name().unwrap(), func.language, demangle);
                         } else {
                             print!("??");
                         }
@@ -222,11 +234,7 @@ fn main() {
                 if !printed_anything {
                     if do_functions {
                         if let Some(name) = symbols.get(probe).and_then(|x| x.name()) {
-                            if demangle {
-                                print!("{}", addr2line::demangle(Cow::from(name), None));
-                            } else {
-                                print!("{}", name);
-                            }
+                            print_function(name, None, demangle);
                         } else {
                             print!("??");
                         }
