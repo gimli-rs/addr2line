@@ -11,6 +11,7 @@ use std::borrow::Cow;
 
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;
+use object::{Object, SymbolMap};
 
 use addr2line::{Context, FullContext, Location};
 
@@ -22,9 +23,9 @@ fn parse_uint_from_hex_string(string: &str) -> u64 {
     }
 }
 
-enum VarCon<R: gimli::Reader> {
+enum VarCon<'a, R: gimli::Reader> {
     Light(Context<R>),
-    Full(FullContext<R>),
+    Full(FullContext<R>, SymbolMap<'a>),
 }
 
 enum Addrs<'a> {
@@ -67,6 +68,22 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
         println!("??:0:0");
     } else {
         println!("??:0");
+    }
+}
+
+fn print_function(name: &str, language: Option<gimli::DwLang>, demangle: bool) {
+    if demangle {
+        let demangled_name = match language {
+            Some(language) => addr2line::demangle(name, language),
+            None => addr2line::demangle(name, gimli::DW_LANG_C_plus_plus)
+                .or_else(|| addr2line::demangle(name, gimli::DW_LANG_Rust)),
+        };
+        print!(
+            "{}",
+            demangled_name.as_ref().map(String::as_str).unwrap_or(name)
+        );
+    } else {
+        print!("{}", name);
     }
 }
 
@@ -147,12 +164,13 @@ fn main() {
     let path = matches.value_of("exe").unwrap();
 
     let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
-    let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file =
+        &object::File::parse(unsafe { map.as_slice() }).unwrap();
 
     let ctx = Context::new(file).unwrap();
 
     let ctx = if do_functions || do_inlines {
-        VarCon::Full(ctx.parse_functions().unwrap())
+        VarCon::Full(ctx.parse_functions().unwrap(), file.symbol_map())
     } else {
         VarCon::Light(ctx)
     };
@@ -182,7 +200,7 @@ fn main() {
                 let loc = ctx.find_location(probe).unwrap();
                 print_loc(&loc, basenames, llvm);
             }
-            VarCon::Full(ref ctx) => {
+            VarCon::Full(ref ctx, ref symbols) => {
                 let mut printed_anything = false;
                 let mut frames = ctx.query(probe).unwrap().enumerate();
                 while let Some((i, frame)) = frames.next().unwrap() {
@@ -192,11 +210,7 @@ fn main() {
 
                     if do_functions {
                         if let Some(func) = frame.function {
-                            if demangle {
-                                print!("{}", func);
-                            } else {
-                                print!("{}", func.raw_name().unwrap());
-                            }
+                            print_function(&func.raw_name().unwrap(), func.language, demangle);
                         } else {
                             print!("??");
                         }
@@ -219,7 +233,12 @@ fn main() {
 
                 if !printed_anything {
                     if do_functions {
-                        print!("??");
+                        if let Some(name) = symbols.get(probe).and_then(|x| x.name()) {
+                            print_function(name, None, demangle);
+                        } else {
+                            print!("??");
+                        }
+
                         if pretty {
                             print!(" ");
                         } else {

@@ -17,7 +17,7 @@ travis-ci = { repository = "gimli-rs/addr2line" }
 [dependencies]
 gimli = "0.14"
 fallible-iterator = "0.1"
-object = "0.4"
+object = "0.7"
 intervaltree = "0.2"
 smallvec = "0.4"
 rustc-demangle = { version = "0.1", optional = true }

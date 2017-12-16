@@ -11,11 +11,11 @@ extern crate smallvec;
 use std::path::PathBuf;
 use std::cmp::Ordering;
 use std::borrow::Cow;
-use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
+use object::Object;
 use smallvec::SmallVec;
 
 struct Func<T> {
@@ -34,7 +34,7 @@ struct UnitInner<R: gimli::Reader> {
     lnp: gimli::CompleteLineNumberProgram<R>,
     sequences: Vec<gimli::LineNumberSequence<R>>,
     comp_dir: Option<R>,
-    lang: gimli::DwLang,
+    lang: Option<gimli::DwLang>,
     base_addr: u64,
 }
 
@@ -116,7 +116,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             Endian: gimli::Endianity,
             'file: 'input,
         {
-            let data = file.get_section(S::section_name()).unwrap_or(&[]);
+            let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
             S::from(gimli::EndianBuf::new(data, endian))
         }
 
@@ -156,8 +156,8 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     _ => unreachable!(),
                 };
                 let lang = match unit.attr_value(gimli::DW_AT_language)? {
-                    Some(gimli::AttributeValue::Language(lang)) => lang,
-                    _ => continue, // no language? HOW??? (TODO: this is not strictly mandatory for us)
+                    Some(gimli::AttributeValue::Language(lang)) => Some(lang),
+                    _ => None,
                 };
                 if let Some(mut ranges) =
                     read_ranges(unit, &debug_ranges, dw_unit.address_size(), base_addr)?
@@ -292,41 +292,30 @@ pub struct Frame<R: gimli::Reader> {
 
 pub struct FunctionName<R: gimli::Reader> {
     name: R,
-    pub language: gimli::DwLang,
+    pub language: Option<gimli::DwLang>,
 }
 
 impl<R: gimli::Reader> FunctionName<R> {
     pub fn raw_name(&self) -> Result<Cow<str>, Error> {
         self.name.to_string_lossy()
     }
-
-    pub fn demangle(&self) -> Result<Option<String>, Error> {
-        let name = self.name.to_string_lossy()?;
-        Ok(match self.language {
-            #[cfg(feature = "rustc-demangle")]
-            gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name.as_ref())
-                .ok()
-                .as_ref()
-                .map(ToString::to_string),
-            #[cfg(feature = "cpp_demangle")]
-            gimli::DW_LANG_C_plus_plus |
-            gimli::DW_LANG_C_plus_plus_03 |
-            gimli::DW_LANG_C_plus_plus_11 |
-            gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name.as_ref())
-                .ok()
-                .and_then(|x| x.demangle(&Default::default()).ok()),
-            _ => None,
-        })
-    }
 }
 
-impl<R: gimli::Reader> Display for FunctionName<R> {
-    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
-        let name = self.demangle()
-            .unwrap()
-            .map(Cow::from)
-            .unwrap_or_else(|| self.raw_name().unwrap());
-        write!(fmt, "{}", name)
+pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
+    match language {
+        #[cfg(feature = "rustc-demangle")]
+        gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name)
+            .ok()
+            .as_ref()
+            .map(ToString::to_string),
+        #[cfg(feature = "cpp_demangle")]
+        gimli::DW_LANG_C_plus_plus
+        | gimli::DW_LANG_C_plus_plus_03
+        | gimli::DW_LANG_C_plus_plus_11
+        | gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name)
+            .ok()
+            .and_then(|x| x.demangle(&Default::default()).ok()),
+        _ => None,
     }
 }
 
@@ -472,7 +461,9 @@ fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
         }
     }
 
-    let next = entry.attr_value(gimli::DW_AT_abstract_origin)?.or(entry.attr_value(gimli::DW_AT_specification)?);
+    let next = entry
+        .attr_value(gimli::DW_AT_abstract_origin)?
+        .or(entry.attr_value(gimli::DW_AT_specification)?);
     match next {
         Some(gimli::AttributeValue::UnitRef(offset)) => {
             let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
@@ -482,17 +473,18 @@ fn name_attr<'abbrev, 'unit, R: gimli::Reader>(
                 return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        Some(gimli::AttributeValue::DebugInfoRef(dr)) => {
-            if let Some((unit, offset)) = units.iter()
-                .filter_map(|unit| dr.to_unit_offset(&unit.dw_unit).map(|uo| (unit, uo))).next() {
-                let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
-                if let Some((_, entry)) = entries.next_dfs()? {
-                    return name_attr(entry, unit, sections, units, recursion_limit - 1);
-                }
-            } else {
-                return Err(gimli::Error::NoEntryAtGivenOffset);
+        Some(gimli::AttributeValue::DebugInfoRef(dr)) => if let Some((unit, offset)) = units
+            .iter()
+            .filter_map(|unit| dr.to_unit_offset(&unit.dw_unit).map(|uo| (unit, uo)))
+            .next()
+        {
+            let mut entries = unit.dw_unit.entries_at_offset(&unit.abbrevs, offset)?;
+            if let Some((_, entry)) = entries.next_dfs()? {
+                return name_attr(entry, unit, sections, units, recursion_limit - 1);
             }
-        }
+        } else {
+            return Err(gimli::Error::NoEntryAtGivenOffset);
+        },
         _ => {}
     }
 
@@ -529,7 +521,11 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
                 Some(gimli::AttributeValue::FileIndex(fi)) => {
                     if let Some(file) = unit.inner.lnp.header().file(fi) {
-                        Some(render_file(unit.inner.lnp.header(), file, &unit.inner.comp_dir)?)
+                        Some(render_file(
+                            unit.inner.lnp.header(),
+                            file,
+                            &unit.inner.comp_dir,
+                        )?)
                     } else {
                         None
                     }
