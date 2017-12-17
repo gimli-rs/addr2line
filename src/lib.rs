@@ -27,10 +27,6 @@ struct Func<T> {
 struct ResUnit<R: gimli::Reader> {
     dw_unit: gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: gimli::Abbreviations,
-    inner: UnitInner<R>,
-}
-
-struct UnitInner<R: gimli::Reader> {
     lnp: gimli::CompleteLineNumberProgram<R>,
     sequences: Vec<gimli::LineNumberSequence<R>>,
     comp_dir: Option<R>,
@@ -134,7 +130,12 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
 
             let abbrevs = dw_unit.abbreviations(&debug_abbrev)?;
 
-            let inner = {
+            let dlr;
+            let dcd;
+            let dcn;
+            let base_addr;
+            let lang;
+            {
                 let mut cursor = dw_unit.entries(&abbrevs);
 
                 let unit = match cursor.next_dfs()? {
@@ -142,20 +143,20 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     _ => continue, // wtf?
                 };
 
-                let dlr = match unit.attr_value(gimli::DW_AT_stmt_list)? {
+                dlr = match unit.attr_value(gimli::DW_AT_stmt_list)? {
                     Some(gimli::AttributeValue::DebugLineRef(dlr)) => dlr,
                     _ => unreachable!(),
                 };
-                let dcd = unit.attr(gimli::DW_AT_comp_dir)?
+                dcd = unit.attr(gimli::DW_AT_comp_dir)?
                     .and_then(|x| x.string_value(&debug_str));
-                let dcn = unit.attr(gimli::DW_AT_name)?
+                dcn = unit.attr(gimli::DW_AT_name)?
                     .and_then(|x| x.string_value(&debug_str));
-                let base_addr = match unit.attr_value(gimli::DW_AT_low_pc)? {
+                base_addr = match unit.attr_value(gimli::DW_AT_low_pc)? {
                     Some(gimli::AttributeValue::Addr(addr)) => addr,
                     None => 0, // ThinLTO yields inline-only compilation units; this is valid
                     _ => unreachable!(),
                 };
-                let lang = match unit.attr_value(gimli::DW_AT_language)? {
+                lang = match unit.attr_value(gimli::DW_AT_language)? {
                     Some(gimli::AttributeValue::Language(lang)) => Some(lang),
                     _ => None,
                 };
@@ -170,24 +171,21 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                         unit_ranges.push((range, unit_id));
                     }
                 }
+            }
 
-                let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
-                let (lnp, mut sequences) = ilnp.sequences()?;
-                sequences.retain(|x| x.start != 0);
-                sequences.sort_by_key(|x| x.start);
-                UnitInner {
-                    lnp,
-                    sequences,
-                    comp_dir: dcd,
-                    lang,
-                    base_addr,
-                }
-            };
+            let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
+            let (lnp, mut sequences) = ilnp.sequences()?;
+            sequences.retain(|x| x.start != 0);
+            sequences.sort_by_key(|x| x.start);
 
             res_units.push(ResUnit {
                 dw_unit,
                 abbrevs,
-                inner,
+                lnp,
+                sequences,
+                comp_dir: dcd,
+                lang,
+                base_addr,
             });
         }
 
@@ -240,7 +238,7 @@ impl<R: gimli::Reader> Context<R> {
                             entry,
                             &self.sections.debug_ranges,
                             dw_unit.address_size(),
-                            unit.inner.base_addr,
+                            unit.base_addr,
                         )? {
                             while let Some(range) = ranges.next()? {
                                 // Ignore invalid DWARF so that a query of 0 does not give
@@ -360,16 +358,14 @@ impl<R: gimli::Reader> Context<R> {
 
         let (_, unit_id) = self.unit_ranges[idx];
 
-        self.find_location_inner(probe, &self.units[unit_id].inner)
+        self.units[unit_id].find_location(probe)
     }
+}
 
-    fn find_location_inner(
-        &self,
-        probe: u64,
-        uunit: &UnitInner<R>,
-    ) -> Result<Option<Location>, Error> {
-        let cp = &uunit.lnp;
-        let idx = uunit.sequences.binary_search_by(|ln| {
+impl<R: gimli::Reader> ResUnit<R> {
+    fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
+        let cp = &self.lnp;
+        let idx = self.sequences.binary_search_by(|ln| {
             if probe < ln.start {
                 Ordering::Greater
             } else if probe >= ln.end {
@@ -382,7 +378,7 @@ impl<R: gimli::Reader> Context<R> {
             Ok(x) => x,
             Err(_) => return Ok(None),
         };
-        let ln = &uunit.sequences[idx];
+        let ln = &self.sequences[idx];
         let mut sm = cp.resume_from(ln);
         let mut file = None;
         let mut line = None;
@@ -401,7 +397,7 @@ impl<R: gimli::Reader> Context<R> {
         }
 
         let file = match file {
-            Some(file) => Some(render_file(uunit.lnp.header(), file, &uunit.comp_dir)?),
+            Some(file) => Some(render_file(self.lnp.header(), file, &self.comp_dir)?),
             None => None,
         };
 
@@ -416,10 +412,7 @@ impl<R: gimli::Reader> FullContext<R> {
         res.sort_by_key(|x| -x.depth);
 
         let loc = match res.get(0) {
-            Some(r) => {
-                let uunit = &ctx.units[r.unit_id].inner;
-                self.light.find_location_inner(probe, uunit)
-            }
+            Some(func) => self.light.units[func.unit_id].find_location(probe),
             None => self.light.find_location(probe),
         };
 
@@ -520,12 +513,8 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
                 Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    if let Some(file) = unit.inner.lnp.header().file(fi) {
-                        Some(render_file(
-                            unit.inner.lnp.header(),
-                            file,
-                            &unit.inner.comp_dir,
-                        )?)
+                    if let Some(file) = unit.lnp.header().file(fi) {
+                        Some(render_file(unit.lnp.header(), file, &unit.comp_dir)?)
                     } else {
                         None
                     }
@@ -549,7 +538,7 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
             function: name.map(|name| {
                 FunctionName {
                     name,
-                    language: unit.inner.lang,
+                    language: unit.lang,
                 }
             }),
             location: loc,
