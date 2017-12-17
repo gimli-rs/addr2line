@@ -34,26 +34,6 @@ struct ResUnit<R: gimli::Reader> {
     base_addr: u64,
 }
 
-fn render_file<R: gimli::Reader>(
-    header: &gimli::LineNumberProgramHeader<R>,
-    ffile: &gimli::FileEntry<R>,
-    dcd: &Option<R>,
-) -> Result<PathBuf, gimli::Error> {
-    let mut path = if let Some(ref dcd) = *dcd {
-        PathBuf::from(dcd.to_string_lossy()?.as_ref())
-    } else {
-        PathBuf::new()
-    };
-
-    if let Some(directory) = ffile.directory(header) {
-        path.push(directory.to_string_lossy()?.as_ref());
-    }
-
-    path.push(ffile.path_name().to_string_lossy()?.as_ref());
-
-    Ok(path)
-}
-
 pub struct Context<R: gimli::Reader> {
     unit_ranges: Vec<(gimli::Range, usize)>,
     units: Vec<ResUnit<R>>,
@@ -397,11 +377,27 @@ impl<R: gimli::Reader> ResUnit<R> {
         }
 
         let file = match file {
-            Some(file) => Some(render_file(self.lnp.header(), file, &self.comp_dir)?),
+            Some(file) => Some(self.render_file(file)?),
             None => None,
         };
 
         Ok(Some(Location { file, line, column }))
+    }
+
+    fn render_file(&self, file: &gimli::FileEntry<R>) -> Result<PathBuf, gimli::Error> {
+        let mut path = if let Some(ref comp_dir) = self.comp_dir {
+            PathBuf::from(comp_dir.to_string_lossy()?.as_ref())
+        } else {
+            PathBuf::new()
+        };
+
+        if let Some(directory) = file.directory(self.lnp.header()) {
+            path.push(directory.to_string_lossy()?.as_ref());
+        }
+
+        path.push(file.path_name().to_string_lossy()?.as_ref());
+
+        Ok(path)
     }
 }
 
@@ -513,10 +509,9 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
                 Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    if let Some(file) = unit.lnp.header().file(fi) {
-                        Some(render_file(unit.lnp.header(), file, &unit.comp_dir)?)
-                    } else {
-                        None
+                    match unit.lnp.header().file(fi) {
+                        Some(file) => Some(unit.render_file(file)?),
+                        None => None,
                     }
                 }
                 _ => None,
