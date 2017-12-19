@@ -64,7 +64,7 @@ fn test_frame_3() {
 fn zero_sequence() {
     let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
     let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
-    let ctx = Context::new(file).unwrap();
+    let mut ctx = Context::new(file).unwrap();
     for probe in 0..10 {
         assert!(ctx.find_location(probe).unwrap().is_none());
     }

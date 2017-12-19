@@ -196,7 +196,7 @@ fn main() {
         }
 
         match ctx {
-            VarCon::Light(ref ctx) => {
+            VarCon::Light(ref mut ctx) => {
                 let loc = ctx.find_location(probe).unwrap();
                 print_loc(&loc, basenames, llvm);
             }

@@ -23,14 +23,20 @@ struct Func<T> {
     depth: isize,
 }
 
+struct Lines<R: gimli::Reader> {
+    lnp: gimli::CompleteLineNumberProgram<R>,
+    sequences: Vec<gimli::LineNumberSequence<R>>,
+}
+
 struct ResUnit<R: gimli::Reader> {
     dw_unit: gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: gimli::Abbreviations,
-    lnp: gimli::CompleteLineNumberProgram<R>,
-    sequences: Vec<gimli::LineNumberSequence<R>>,
+    line_offset: gimli::DebugLineOffset<R::Offset>,
     comp_dir: Option<R>,
+    comp_name: Option<R>,
     lang: Option<gimli::DwLang>,
     base_addr: u64,
+    lines: Option<Lines<R>>,
     funcs: Option<IntervalTree<u64, Func<R::Offset>>>,
 }
 
@@ -148,19 +154,15 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                 }
             }
 
-            let ilnp = debug_line.program(dlr, dw_unit.address_size(), dcd, dcn)?;
-            let (lnp, mut sequences) = ilnp.sequences()?;
-            sequences.retain(|x| x.start != 0);
-            sequences.sort_by_key(|x| x.start);
-
             res_units.push(ResUnit {
                 dw_unit,
                 abbrevs,
-                lnp,
-                sequences,
+                line_offset: dlr,
                 comp_dir: dcd,
+                comp_name: dcn,
                 lang,
                 base_addr,
+                lines: None,
                 funcs: None,
             });
         }
@@ -189,12 +191,30 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             sections: DebugSections {
                 debug_str,
                 debug_ranges,
+                debug_line,
             },
         })
     }
 }
 
 impl<R: gimli::Reader> ResUnit<R> {
+    fn parse_lines(&mut self, sections: &DebugSections<R>) -> Result<(), Error> {
+        if self.lines.is_some() {
+            return Ok(());
+        }
+        let ilnp = sections.debug_line.program(
+            self.line_offset,
+            self.dw_unit.address_size(),
+            self.comp_dir.clone(),
+            self.comp_name.clone(),
+        )?;
+        let (lnp, mut sequences) = ilnp.sequences()?;
+        sequences.retain(|x| x.start != 0);
+        sequences.sort_by_key(|x| x.start);
+        self.lines = Some(Lines { lnp, sequences });
+        Ok(())
+    }
+
     fn parse_functions(&mut self, sections: &DebugSections<R>) -> Result<(), Error> {
         if self.funcs.is_some() {
             return Ok(());
@@ -244,6 +264,7 @@ impl<R: gimli::Reader> ResUnit<R> {
 struct DebugSections<R: gimli::Reader> {
     debug_str: gimli::DebugStr<R>,
     debug_ranges: gimli::DebugRanges<R>,
+    debug_line: gimli::DebugLine<R>,
 }
 
 pub struct IterFrames<'ctx, R: gimli::Reader + 'ctx> {
@@ -331,9 +352,12 @@ impl<R: gimli::Reader> Context<R> {
         Some(unit_id)
     }
 
-    pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
+    pub fn find_location(&mut self, probe: u64) -> Result<Option<Location>, Error> {
         match self.find_unit(probe) {
-            Some(unit_id) => self.units[unit_id].find_location(probe),
+            Some(unit_id) => {
+                self.units[unit_id].parse_lines(&self.sections)?;
+                self.units[unit_id].find_location(probe)
+            }
             None => Ok(None),
         }
     }
@@ -341,6 +365,7 @@ impl<R: gimli::Reader> Context<R> {
     pub fn find_frames(&mut self, probe: u64) -> Result<IterFrames<R>, Error> {
         let (unit_id, loc, funcs) = match self.find_unit(probe) {
             Some(unit_id) => {
+                self.units[unit_id].parse_lines(&self.sections)?;
                 self.units[unit_id].parse_functions(&self.sections)?;
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe)?;
@@ -368,8 +393,8 @@ impl<R: gimli::Reader> Context<R> {
 
 impl<R: gimli::Reader> ResUnit<R> {
     fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
-        let cp = &self.lnp;
-        let idx = self.sequences.binary_search_by(|ln| {
+        let lines = self.lines.as_ref().expect("lines have been parsed");
+        let idx = lines.sequences.binary_search_by(|ln| {
             if probe < ln.start {
                 Ordering::Greater
             } else if probe >= ln.end {
@@ -382,8 +407,8 @@ impl<R: gimli::Reader> ResUnit<R> {
             Ok(x) => x,
             Err(_) => return Ok(None),
         };
-        let ln = &self.sequences[idx];
-        let mut sm = cp.resume_from(ln);
+        let ln = &lines.sequences[idx];
+        let mut sm = lines.lnp.resume_from(ln);
         let mut file = None;
         let mut line = None;
         let mut column = None;
@@ -392,7 +417,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 break;
             }
 
-            file = row.file(cp.header());
+            file = row.file(lines.lnp.header());
             line = row.line();
             column = match row.column() {
                 gimli::ColumnType::LeftEdge => None,
@@ -415,7 +440,8 @@ impl<R: gimli::Reader> ResUnit<R> {
             PathBuf::new()
         };
 
-        if let Some(directory) = file.directory(self.lnp.header()) {
+        let lines = &self.lines.as_ref().expect("lines have been parsed");
+        if let Some(directory) = file.directory(lines.lnp.header()) {
             path.push(directory.to_string_lossy()?.as_ref());
         }
 
@@ -512,10 +538,13 @@ impl<'ctx, R: gimli::Reader + 'ctx> FallibleIterator for IterFrames<'ctx, R> {
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => match unit.lnp.header().file(fi) {
-                    Some(file) => Some(unit.render_file(file)?),
-                    None => None,
-                },
+                Some(gimli::AttributeValue::FileIndex(fi)) => {
+                    let lines = unit.lines.as_ref().expect("lines have been parsed");
+                    match lines.lnp.header().file(fi) {
+                        Some(file) => Some(unit.render_file(file)?),
+                        None => None,
+                    }
+                }
                 _ => None,
             };
 
