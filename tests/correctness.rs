@@ -45,11 +45,11 @@ fn test_frame_3() {
     DwarfUnwinder::default().trace(|frames| {
         let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
         let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
-        let ctx = Context::new(file).unwrap().parse_functions().unwrap();
+        let mut ctx = Context::new(file).unwrap();
         let mut trace: Vec<String> = Vec::new();
         while let Some(frame) = frames.next().unwrap() {
             let ip = frames.registers()[16].unwrap() - 1 - frame.object_base;
-            let mut frames = ctx.query(ip).unwrap();
+            let mut frames = ctx.find_frames(ip).unwrap();
             while let Some(frame) = frames.next().unwrap() {
                 trace.push(frame.function.unwrap().raw_name().unwrap().into_owned());
             }
@@ -74,8 +74,8 @@ fn zero_sequence() {
 fn zero_function() {
     let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
     let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
-    let ctx = Context::new(file).unwrap().parse_functions().unwrap();
+    let mut ctx = Context::new(file).unwrap();
     for probe in 0..10 {
-        assert!(ctx.query(probe).unwrap().next().unwrap().is_none());
+        assert!(ctx.find_frames(probe).unwrap().next().unwrap().is_none());
     }
 }

@@ -40,10 +40,6 @@ pub struct Context<R: gimli::Reader> {
     sections: DebugSections<R>,
 }
 
-pub struct FullContext<R: gimli::Reader> {
-    light: Context<R>,
-}
-
 fn read_ranges<R: gimli::Reader>(
     entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
     debug_ranges: &gimli::DebugRanges<R>,
@@ -198,17 +194,11 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
     }
 }
 
-impl<R: gimli::Reader> Context<R> {
-    pub fn parse_functions(mut self) -> Result<FullContext<R>, Error> {
-        for unit in &mut self.units {
-            unit.parse_functions(&self.sections)?;
-        }
-        Ok(FullContext { light: self })
-    }
-}
-
 impl<R: gimli::Reader> ResUnit<R> {
-    pub fn parse_functions(&mut self, sections: &DebugSections<R>) -> Result<(), Error> {
+    fn parse_functions(&mut self, sections: &DebugSections<R>) -> Result<(), Error> {
+        if self.funcs.is_some() {
+            return Ok(());
+        }
         let mut results = Vec::new();
         let mut depth = 0;
         let mut cursor = self.dw_unit.entries(&self.abbrevs);
@@ -347,6 +337,33 @@ impl<R: gimli::Reader> Context<R> {
             None => Ok(None),
         }
     }
+
+    pub fn find_frames(&mut self, probe: u64) -> Result<IterFrames<R>, Error> {
+        let (unit_id, loc, funcs) = match self.find_unit(probe) {
+            Some(unit_id) => {
+                self.units[unit_id].parse_functions(&self.sections)?;
+                let unit = &self.units[unit_id];
+                let loc = unit.find_location(probe)?;
+                let mut res: SmallVec<[_; 16]> = unit.funcs
+                    .as_ref()
+                    .expect("functions have been parsed")
+                    .query_point(probe)
+                    .map(|x| &x.value)
+                    .collect();
+                res.sort_by_key(|x| -x.depth);
+                (unit_id, loc, res)
+            }
+            None => (0, None, SmallVec::new()),
+        };
+
+        Ok(IterFrames {
+            unit_id,
+            units: &self.units,
+            sections: &self.sections,
+            funcs: funcs.into_iter(),
+            next: loc,
+        })
+    }
 }
 
 impl<R: gimli::Reader> ResUnit<R> {
@@ -405,35 +422,6 @@ impl<R: gimli::Reader> ResUnit<R> {
         path.push(file.path_name().to_string_lossy()?.as_ref());
 
         Ok(path)
-    }
-}
-
-impl<R: gimli::Reader> FullContext<R> {
-    pub fn query(&self, probe: u64) -> Result<IterFrames<R>, Error> {
-        let (unit_id, loc, funcs) = match self.light.find_unit(probe) {
-            Some(unit_id) => {
-                let unit = &self.light.units[unit_id];
-                let loc = unit.find_location(probe)?;
-                match unit.funcs {
-                    Some(ref funcs) => {
-                        let mut res: SmallVec<[_; 16]> =
-                            funcs.query_point(probe).map(|x| &x.value).collect();
-                        res.sort_by_key(|x| -x.depth);
-                        (unit_id, loc, res)
-                    }
-                    None => (unit_id, loc, SmallVec::new()),
-                }
-            }
-            None => (0, None, SmallVec::new()),
-        };
-
-        Ok(IterFrames {
-            unit_id,
-            units: &self.light.units,
-            sections: &self.light.sections,
-            funcs: funcs.into_iter(),
-            next: loc,
-        })
     }
 }
 
