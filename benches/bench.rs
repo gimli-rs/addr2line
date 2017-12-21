@@ -82,7 +82,7 @@ fn context_query_location(b: &mut test::Bencher) {
     let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
-        let mut ctx = addr2line::Context::new(file).unwrap();
+        let ctx = addr2line::Context::new(file).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
             test::black_box(ctx.find_location(*addr)).ok();
@@ -102,7 +102,7 @@ fn context_query_with_functions(b: &mut test::Bencher) {
     let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
-        let mut ctx = addr2line::Context::new(file)
+        let ctx = addr2line::Context::new(file)
             .unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
@@ -124,7 +124,7 @@ fn context_new_and_query_location(b: &mut test::Bencher) {
 
     with_file(&target, |file| {
         b.iter(|| {
-            let mut ctx = addr2line::Context::new(file).unwrap();
+            let ctx = addr2line::Context::new(file).unwrap();
             for addr in addresses.iter().take(100) {
                 test::black_box(ctx.find_location(*addr)).ok();
             }
@@ -139,7 +139,7 @@ fn context_new_and_query_with_functions(b: &mut test::Bencher) {
 
     with_file(&target, |file| {
         b.iter(|| {
-            let mut ctx = addr2line::Context::new(file)
+            let ctx = addr2line::Context::new(file)
                 .unwrap();
             for addr in addresses.iter().take(100) {
                 test::black_box(ctx.find_frames(*addr)).ok();

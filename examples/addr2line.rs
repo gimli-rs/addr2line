@@ -163,7 +163,7 @@ fn main() {
         &object::File::parse(unsafe { map.as_slice() }).unwrap();
 
     let symbols = file.symbol_map();
-    let mut ctx = Context::new(file).unwrap();
+    let ctx = Context::new(file).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches
