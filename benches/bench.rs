@@ -71,8 +71,6 @@ fn context_new_with_functions(b: &mut test::Bencher) {
     with_file(&target, |file| {
         b.iter(|| {
             addr2line::Context::new(file)
-                .unwrap()
-                .parse_functions()
                 .unwrap();
         });
     });
@@ -105,17 +103,15 @@ fn context_query_with_functions(b: &mut test::Bencher) {
 
     with_file(&target, |file| {
         let ctx = addr2line::Context::new(file)
-            .unwrap()
-            .parse_functions()
             .unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            test::black_box(ctx.query(*addr)).ok();
+            test::black_box(ctx.find_frames(*addr)).ok();
         }
 
         b.iter(|| {
             for addr in &addresses {
-                test::black_box(ctx.query(*addr)).ok();
+                test::black_box(ctx.find_frames(*addr)).ok();
             }
         });
     });
@@ -144,11 +140,9 @@ fn context_new_and_query_with_functions(b: &mut test::Bencher) {
     with_file(&target, |file| {
         b.iter(|| {
             let ctx = addr2line::Context::new(file)
-                .unwrap()
-                .parse_functions()
                 .unwrap();
             for addr in addresses.iter().take(100) {
-                test::black_box(ctx.query(*addr)).ok();
+                test::black_box(ctx.find_frames(*addr)).ok();
             }
         });
     });
