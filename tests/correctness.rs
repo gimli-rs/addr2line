@@ -33,7 +33,6 @@ fn test_frame_2() {
 }
 
 static REFERENCE: &'static [&'static str] = &[
-    "_ZN6unwind8{{impl}}14trace<closure>E",
     "_ZN11correctness12test_frame_3E",
     "_ZN11correctness12test_frame_2E",
     "_ZN11correctness12test_frame_1E",
@@ -55,7 +54,8 @@ fn test_frame_3() {
             }
         }
 
-        assert_eq!(&trace[..REFERENCE.len()], REFERENCE);
+        let start = trace.iter().position(|x| x == REFERENCE[0]).unwrap();
+        assert_eq!(&trace[start..][..REFERENCE.len()], REFERENCE);
     });
     no_tailcall_please();
 }
