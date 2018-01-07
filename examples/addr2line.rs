@@ -5,6 +5,7 @@ extern crate gimli;
 extern crate memmap;
 extern crate object;
 
+use std::fs::File;
 use std::path::Path;
 use std::io::{BufRead, Lines, StdinLock};
 use std::borrow::Cow;
@@ -158,9 +159,9 @@ fn main() {
     let llvm = matches.is_present("llvm");
     let path = matches.value_of("exe").unwrap();
 
-    let map = memmap::Mmap::open_path(path, memmap::Protection::Read).unwrap();
-    let file =
-        &object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file = File::open(path).unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = &object::File::parse(&*map).unwrap();
 
     let symbols = file.symbol_map();
     let ctx = Context::new(file).unwrap();

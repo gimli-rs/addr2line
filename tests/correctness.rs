@@ -4,6 +4,8 @@ extern crate memmap;
 extern crate object;
 extern crate unwind;
 
+use std::fs::File;
+
 use fallible_iterator::FallibleIterator;
 use unwind::{DwarfUnwinder, Unwinder};
 use addr2line::Context;
@@ -43,8 +45,9 @@ static REFERENCE: &'static [&'static str] = &[
 #[inline(never)]
 fn test_frame_3() {
     DwarfUnwinder::default().trace(|frames| {
-        let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
-        let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
+        let file = File::open("/proc/self/exe").unwrap();
+        let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+        let file = &object::File::parse(&*map).unwrap();
         let ctx = Context::new(file).unwrap();
         let mut trace: Vec<String> = Vec::new();
         while let Some(frame) = frames.next().unwrap() {
@@ -62,8 +65,9 @@ fn test_frame_3() {
 
 #[test]
 fn zero_sequence() {
-    let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
-    let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file = File::open("/proc/self/exe").unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
     for probe in 0..10 {
         assert!(ctx.find_location(probe).unwrap().is_none());
@@ -72,8 +76,9 @@ fn zero_sequence() {
 
 #[test]
 fn zero_function() {
-    let map = memmap::Mmap::open_path("/proc/self/exe", memmap::Protection::Read).unwrap();
-    let file = &object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file = File::open("/proc/self/exe").unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
     for probe in 0..10 {
         assert!(ctx.find_frames(probe).unwrap().next().unwrap().is_none());

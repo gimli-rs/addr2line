@@ -8,6 +8,7 @@ extern crate object;
 extern crate test;
 
 use std::env;
+use std::fs::File;
 use std::path::{self, PathBuf};
 use std::process;
 
@@ -22,8 +23,9 @@ fn release_fixture_path() -> PathBuf {
 }
 
 fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
-    let map = memmap::Mmap::open_path(target, memmap::Protection::Read).unwrap();
-    let file = object::File::parse(unsafe { map.as_slice() }).unwrap();
+    let file = File::open(target).unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = object::File::parse(&*map).unwrap();
     f(&file)
 }
 
