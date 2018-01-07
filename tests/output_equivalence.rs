@@ -40,7 +40,7 @@ fn make_trace() -> Vec<String> {
         .collect()
 }
 
-fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[String]) -> Vec<u8> {
+fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[String]) -> String {
     let mut cmd = Command::new(exe);
     cmd.env("LC_ALL", "C"); // GNU addr2line is localized, we aren't
     cmd.env("RUST_BACKTRACE", "1"); // if a child crashes, we want to know why
@@ -53,7 +53,7 @@ fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[Str
     let output = cmd.output().unwrap();
 
     assert!(output.status.success());
-    output.stdout
+    String::from_utf8(output.stdout).unwrap()
 }
 
 fn run_test(flags: Option<&str>) {
