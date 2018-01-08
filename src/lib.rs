@@ -312,6 +312,10 @@ impl<R: gimli::Reader> FunctionName<R> {
     pub fn raw_name(&self) -> Result<Cow<str>, Error> {
         self.name.to_string_lossy()
     }
+
+    pub fn demangle(&self) -> Result<Cow<str>, Error> {
+        self.raw_name().map(|x| demangle_auto(x, self.language))
+    }
 }
 
 pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
@@ -330,6 +334,14 @@ pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
             .and_then(|x| x.demangle(&Default::default()).ok()),
         _ => None,
     }
+}
+
+pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
+    match language {
+        Some(language) => demangle(name.as_ref(), language),
+        None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
+            .or_else(|| demangle(name.as_ref(), gimli::DW_LANG_C_plus_plus)),
+    }.map(Cow::from).unwrap_or(name)
 }
 
 enum WrapRangeIter<R: gimli::Reader> {

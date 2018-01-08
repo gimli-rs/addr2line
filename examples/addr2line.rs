@@ -69,15 +69,7 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
 
 fn print_function(name: &str, language: Option<gimli::DwLang>, demangle: bool) {
     if demangle {
-        let demangled_name = match language {
-            Some(language) => addr2line::demangle(name, language),
-            None => addr2line::demangle(name, gimli::DW_LANG_C_plus_plus)
-                .or_else(|| addr2line::demangle(name, gimli::DW_LANG_Rust)),
-        };
-        print!(
-            "{}",
-            demangled_name.as_ref().map(String::as_str).unwrap_or(name)
-        );
+        print!("{}", addr2line::demangle_auto(Cow::from(name), language));
     } else {
         print!("{}", name);
     }

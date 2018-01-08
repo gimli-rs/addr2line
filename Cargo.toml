@@ -30,7 +30,6 @@ clap = "2"
 backtrace = "0.3"
 findshlibs = "0.3"
 rustc-test = "0.2"
-unwind = { git = "https://github.com/gimli-rs/unwind-rs.git", rev = "f2f00120f697669867724c943e8082275dc87850" }
 
 [profile.release]
 debug = true
@@ -46,7 +45,3 @@ harness = false
 
 [[test]]
 name = "correctness"
-
-[replace]
-"gimli:0.14.0" = { git = 'https://github.com/main--/gimli.git', branch = 'unwind-patches' }
-
