@@ -73,7 +73,7 @@ fn run_test(flags: Option<&str>) {
     assert_eq!(theirs, ours);
 }
 
-static FLAGS: &'static str = "aipsfC";
+static FLAGS: &'static str = "aipsf";
 
 fn make_tests() -> Vec<TestDescAndFn> {
     (0..(1 << FLAGS.len()))
