@@ -286,7 +286,7 @@ struct DebugSections<R: gimli::Reader> {
     debug_line: gimli::DebugLine<R>,
 }
 
-pub struct IterFrames<'ctx, R>
+pub struct FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
@@ -398,7 +398,7 @@ where
         }
     }
 
-    pub fn find_frames(&self, probe: u64) -> Result<IterFrames<R>, Error> {
+    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
         let (unit_id, loc, funcs) = match self.find_unit(probe) {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
@@ -412,7 +412,7 @@ where
             None => (0, None, SmallVec::new()),
         };
 
-        Ok(IterFrames {
+        Ok(FrameIter {
             unit_id,
             units: &self.units,
             sections: &self.sections,
@@ -556,7 +556,7 @@ where
     Ok(None)
 }
 
-impl<'ctx, R> FallibleIterator for IterFrames<'ctx, R>
+impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
