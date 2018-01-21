@@ -84,7 +84,7 @@ dirname=$(perl -e 'use Cwd "abs_path";print abs_path(shift)' "$(dirname "$0")")
 	log1=$(mktemp tmp.XXXXXXXXXX)
 	echo "==> Benchmarking"
 	run nofunc binutils addr2line >> "$log1"
-	run nofunc elfutils eu-addr2line >> "$log1"
+	#run nofunc elfutils eu-addr2line >> "$log1"
 	run nofunc llvm-sym llvm-symbolizer -functions=none >> "$log1"
 	for ref in "$@"; do
 		run nofunc "$ref" "$dirname/target/release/addr2line-$ref" >> "$log1"
@@ -94,11 +94,11 @@ dirname=$(perl -e 'use Cwd "abs_path";print abs_path(shift)' "$(dirname "$0")")
 	# run with functions
 	log2=$(mktemp tmp.XXXXXXXXXX)
 	echo "==> Benchmarking with -f"
-	run func binutils addr2line -f >> "$log2"
-	run func elfutils eu-addr2line -f >> "$log2"
-	run func llvm-sym llvm-symbolizer -functions=linkage >> "$log2"
+	run func binutils addr2line "-f -i" >> "$log2"
+	#run func elfutils eu-addr2line "-f -i"  >> "$log2"
+	run func llvm-sym llvm-symbolizer "-functions=linkage -demangle=0" >> "$log2"
 	for ref in "$@"; do
-		run func "$ref" "$dirname/target/release/addr2line-$ref" -f >> "$log2"
+		run func "$ref" "$dirname/target/release/addr2line-$ref" "-f -i" >> "$log2"
 	done
 	cat "$log2" | column -t
 	cat "$log2" >> "$log1"; rm "$log2"

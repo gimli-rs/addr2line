@@ -1,3 +1,28 @@
+//! This crate provides a cross-platform library and binary for translating addresses into
+//! function names, file names and line numbers. Given an address in an executable or an
+//! offset in a section of a relocatable object, it uses the debugging information to
+//! figure out which file name and line number are associated with it.
+//!
+//! When used as a library, files must first be loaded using the
+//! [`object`](https://github.com/gimli-rs/object) crate.
+//! A context can then be created with [`Context::new`](./struct.Context.html#method.new).
+//! The context caches some of the parsed information so that multiple lookups are
+//! efficient.
+//! Location information is obtained with
+//! [`Context::find_location`](./struct.Context.html#method.find_location).
+//! Function information is obtained with
+//! [`Context::find_frames`](./struct.Context.html#method.find_frames), which returns
+//! a frame for each inline function. Each frame contains both name and location.
+//!
+//! The crate has an example CLI wrapper around the library which provides some of
+//! the functionality of the `addr2line` command line tool distributed with [GNU
+//! binutils](https://www.gnu.org/software/binutils/).
+//!
+//! Currently this library only provides information from the DWARF debugging information,
+//! which is parsed using [`gimli`](https://github.com/gimli-rs/gimli).  The example CLI
+//! wrapper also uses symbol table information provided by the `object` crate.
+#![deny(missing_docs)]
+
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
 extern crate fallible_iterator;
@@ -46,6 +71,10 @@ where
     funcs: Lazy<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
+/// The state necessary to perform address to line translation.
+///
+/// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
+/// when performing lookups for many addresses in the same executable.
 pub struct Context<R>
 where
     R: gimli::Reader + Sync,
@@ -87,6 +116,7 @@ fn read_ranges<R: gimli::Reader>(
 }
 
 impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
+    /// Construct a new `Context`.
     pub fn new(file: &'a object::File) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
@@ -286,7 +316,8 @@ struct DebugSections<R: gimli::Reader> {
     debug_line: gimli::DebugLine<R>,
 }
 
-pub struct IterFrames<'ctx, R>
+/// An iterator over function frames.
+pub struct FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
@@ -298,26 +329,36 @@ where
     next: Option<Location>,
 }
 
+/// A function frame.
 pub struct Frame<R: gimli::Reader> {
+    /// The name of the function.
     pub function: Option<FunctionName<R>>,
+    /// The source location corresponding to this frame.
     pub location: Option<Location>,
 }
 
+/// A function name.
 pub struct FunctionName<R: gimli::Reader> {
     name: R,
+    /// The language of the compilation unit containing this function.
     pub language: Option<gimli::DwLang>,
 }
 
 impl<R: gimli::Reader> FunctionName<R> {
+    /// The raw name of this function before demangling.
     pub fn raw_name(&self) -> Result<Cow<str>, Error> {
         self.name.to_string_lossy()
     }
 
+    /// The name of this function after demangling (if applicable).
     pub fn demangle(&self) -> Result<Cow<str>, Error> {
         self.raw_name().map(|x| demangle_auto(x, self.language))
     }
 }
 
+/// Demangle a symbol name using the demangling scheme for the given language.
+///
+/// Returns `None` if demangling failed or is not required.
 pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
     match language {
         #[cfg(feature = "rustc-demangle")]
@@ -336,6 +377,15 @@ pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
     }
 }
 
+/// Apply 'best effort' demangling of a symbol name.
+///
+/// If `language` is given, then only the demangling scheme for that language
+/// is used.
+///
+/// If `language` is `None`, then heuristics are used to determine how to
+/// demangle the name. Currently, these heuristics are very basic.
+///
+/// If demangling fails or is not required, then `name` is returned unchanged.
 pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
     match language {
         Some(language) => demangle(name.as_ref(), language),
@@ -361,9 +411,13 @@ impl<R: gimli::Reader> FallibleIterator for WrapRangeIter<R> {
     }
 }
 
+/// A source location.
 pub struct Location {
+    /// The file name.
     pub file: Option<PathBuf>,
+    /// The line number.
     pub line: Option<u64>,
+    /// The column number.
     pub column: Option<u64>,
 }
 
@@ -391,6 +445,7 @@ where
         Some(unit_id)
     }
 
+    /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
         match self.find_unit(probe) {
             Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
@@ -398,7 +453,16 @@ where
         }
     }
 
-    pub fn find_frames(&self, probe: u64) -> Result<IterFrames<R>, Error> {
+    /// Return an iterator for the function frames corresponding to the given virtual
+    /// memory address.
+    ///
+    /// If the probe address is not for an inline function then only one frame is
+    /// returned.
+    ///
+    /// If the probe address is for an inline function then the first frame corresponds
+    /// to the innermost inline function.  Subsequent frames contain the caller and call
+    /// location, until an non-inline caller is reached.
+    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
         let (unit_id, loc, funcs) = match self.find_unit(probe) {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
@@ -412,7 +476,7 @@ where
             None => (0, None, SmallVec::new()),
         };
 
-        Ok(IterFrames {
+        Ok(FrameIter {
             unit_id,
             units: &self.units,
             sections: &self.sections,
@@ -556,7 +620,7 @@ where
     Ok(None)
 }
 
-impl<'ctx, R> FallibleIterator for IterFrames<'ctx, R>
+impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
