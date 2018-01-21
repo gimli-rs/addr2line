@@ -620,14 +620,13 @@ where
     Ok(None)
 }
 
-impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
+impl<'ctx, R> FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
 {
-    type Item = Frame<R>;
-    type Error = Error;
-    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    /// Advances the iterator and returns the next frame.
+    pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
         let (loc, func) = match (self.next.take(), self.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
@@ -683,5 +682,19 @@ where
             }),
             location: loc,
         }))
+    }
+}
+
+impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
+where
+    R: gimli::Reader + Sync + 'ctx,
+    R::Offset: Sync,
+{
+    type Item = Frame<R>;
+    type Error = Error;
+
+    #[inline]
+    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+        self.next()
     }
 }

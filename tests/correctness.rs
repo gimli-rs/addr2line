@@ -7,7 +7,6 @@ extern crate object;
 
 use std::fs::File;
 
-use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use addr2line::Context;
 
