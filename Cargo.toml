@@ -15,12 +15,12 @@ exclude = ["/benches/*", "/fixtures/*"]
 travis-ci = { repository = "gimli-rs/addr2line" }
 
 [dependencies]
-gimli = "0.14"
+gimli = "0.15"
 fallible-iterator = "0.1"
 object = "0.7"
 intervaltree = "0.2"
-smallvec = "0.4"
-lazy-init = "0.2"
+smallvec = "0.6"
+lazy-init = "0.3"
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.2", optional = true }
 
