@@ -117,7 +117,7 @@ fn read_ranges<R: gimli::Reader>(
 
 impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new(file: &'a object::File) -> Result<Self, Error> {
+    pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
@@ -125,7 +125,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
         };
 
         fn load_section<'input, 'file, S, Endian>(
-            file: &'file object::File<'input>,
+            file: &object::File<'input>,
             endian: Endian,
         ) -> S
         where
@@ -620,14 +620,13 @@ where
     Ok(None)
 }
 
-impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
+impl<'ctx, R> FrameIter<'ctx, R>
 where
     R: gimli::Reader + Sync + 'ctx,
     R::Offset: Sync,
 {
-    type Item = Frame<R>;
-    type Error = Error;
-    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    /// Advances the iterator and returns the next frame.
+    pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
         let (loc, func) = match (self.next.take(), self.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
@@ -683,5 +682,19 @@ where
             }),
             location: loc,
         }))
+    }
+}
+
+impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
+where
+    R: gimli::Reader + Sync + 'ctx,
+    R::Offset: Sync,
+{
+    type Item = Frame<R>;
+    type Error = Error;
+
+    #[inline]
+    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+        self.next()
     }
 }
