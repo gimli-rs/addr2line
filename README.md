@@ -24,7 +24,7 @@ performed programmatically through `Context::find_location` and
  - Add `extern crate object` and `extern crate addr2line` to your main crate entry file
  - Load the file and parse it with [`object::File::parse`](https://docs.rs/object/*/object/struct.File.html#method.parse)
  - Pass the parsed file to [`addr2line::Context::new` ](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.new)
- - Use [`addr2line::Context::find_location`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_framefind_location)
+ - Use [`addr2line::Context::find_location`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_location)
    or [`addr2line::Context::find_frames`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_frames)
    to look up debug information for an address
 
