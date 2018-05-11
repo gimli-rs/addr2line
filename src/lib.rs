@@ -42,7 +42,6 @@ use std::u64;
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
 use lazycell::LazyCell;
-use object::Object;
 use smallvec::SmallVec;
 
 struct Func<T> {
@@ -115,18 +114,19 @@ fn read_ranges<R: gimli::Reader>(
 
 impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
+    pub fn new<'file, O: object::Object<'a, 'file>>(file: &O) -> Result<Self, Error>
+    where
+        'file: 'a,
+    {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'file, S, Endian>(
-            file: &object::File<'input>,
-            endian: Endian,
-        ) -> S
+        fn load_section<'input, 'file, O, S, Endian>(file: &O, endian: Endian) -> S
         where
+            O: object::Object<'input, 'file>,
             S: gimli::Section<gimli::EndianSlice<'input, Endian>>,
             Endian: gimli::Endianity,
             'file: 'input,
