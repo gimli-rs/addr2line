@@ -1,6 +1,6 @@
 extern crate backtrace;
 extern crate findshlibs;
-extern crate test;
+extern crate rustc_test as test;
 
 use std::env;
 use std::process::Command;
