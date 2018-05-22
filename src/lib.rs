@@ -142,6 +142,27 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
         let debug_rnglists: gimli::DebugRngLists<_> = load_section(file, endian);
         let debug_str: gimli::DebugStr<_> = load_section(file, endian);
 
+        Context::from_sections(
+            debug_abbrev,
+            debug_info,
+            debug_line,
+            debug_ranges,
+            debug_rnglists,
+            debug_str,
+        )
+    }
+}
+
+impl<R: gimli::Reader> Context<R> {
+    /// Construct a new `Context` from DWARF sections.
+    pub fn from_sections(
+        debug_abbrev: gimli::DebugAbbrev<R>,
+        debug_info: gimli::DebugInfo<R>,
+        debug_line: gimli::DebugLine<R>,
+        debug_ranges: gimli::DebugRanges<R>,
+        debug_rnglists: gimli::DebugRngLists<R>,
+        debug_str: gimli::DebugStr<R>,
+    ) -> Result<Self, Error> {
         let range_lists = gimli::RangeLists::new(debug_ranges, debug_rnglists)?;
 
         let mut unit_ranges = Vec::new();
