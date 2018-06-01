@@ -115,7 +115,7 @@ fn read_ranges<R: gimli::Reader>(
     }))
 }
 
-impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
+impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
     pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
@@ -129,12 +129,12 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             endian: Endian,
         ) -> S
         where
-            S: gimli::Section<gimli::EndianBuf<'input, Endian>>,
+            S: gimli::Section<gimli::EndianSlice<'input, Endian>>,
             Endian: gimli::Endianity,
             'file: 'input,
         {
             let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
-            S::from(gimli::EndianBuf::new(data, endian))
+            S::from(gimli::EndianSlice::new(data, endian))
         }
 
         let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
