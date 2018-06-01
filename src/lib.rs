@@ -87,8 +87,8 @@ where
 
 fn read_ranges<R: gimli::Reader>(
     entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
-    debug_ranges: &gimli::DebugRanges<R>,
-    addr_size: u8,
+    range_lists: &gimli::RangeLists<R>,
+    dw_unit: &gimli::CompilationUnitHeader<R, R::Offset>,
     base_addr: u64,
 ) -> Result<Option<WrapRangeIter<R>>, Error> {
     Ok(Some(match entry.attr_value(gimli::DW_AT_ranges)? {
@@ -107,8 +107,8 @@ fn read_ranges<R: gimli::Reader>(
                 end: high_pc,
             }))
         }
-        Some(gimli::AttributeValue::DebugRangesRef(rr)) => {
-            let ranges = debug_ranges.ranges(rr, addr_size, base_addr)?;
+        Some(gimli::AttributeValue::RangeListsRef(rr)) => {
+            let ranges = range_lists.ranges(rr, dw_unit.version(), dw_unit.address_size(), base_addr)?;
             WrapRangeIter::Real(ranges)
         }
         _ => unreachable!(),
@@ -141,7 +141,10 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
         let debug_info: gimli::DebugInfo<_> = load_section(file, endian);
         let debug_line: gimli::DebugLine<_> = load_section(file, endian);
         let debug_ranges: gimli::DebugRanges<_> = load_section(file, endian);
+        let debug_rnglists: gimli::DebugRngLists<_> = load_section(file, endian);
         let debug_str: gimli::DebugStr<_> = load_section(file, endian);
+
+        let range_lists = gimli::RangeLists::new(debug_ranges, debug_rnglists)?;
 
         let mut unit_ranges = Vec::new();
         let mut res_units = Vec::new();
@@ -182,7 +185,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
                     _ => None,
                 };
                 if let Some(mut ranges) =
-                    read_ranges(unit, &debug_ranges, dw_unit.address_size(), base_addr)?
+                    read_ranges(unit, &range_lists, &dw_unit, base_addr)?
                 {
                     while let Some(range) = ranges.next()? {
                         if range.begin == range.end {
@@ -230,7 +233,7 @@ impl<'a> Context<gimli::EndianBuf<'a, gimli::RunTimeEndian>> {
             unit_ranges,
             sections: DebugSections {
                 debug_str,
-                debug_ranges,
+                range_lists,
                 debug_line,
             },
         })
@@ -277,8 +280,8 @@ where
                             // may be an inline-only function and thus not have any ranges
                             if let Some(mut ranges) = read_ranges(
                                 entry,
-                                &sections.debug_ranges,
-                                self.dw_unit.address_size(),
+                                &sections.range_lists,
+                                &self.dw_unit,
                                 self.base_addr,
                             )? {
                                 while let Some(range) = ranges.next()? {
@@ -312,7 +315,7 @@ where
 
 struct DebugSections<R: gimli::Reader> {
     debug_str: gimli::DebugStr<R>,
-    debug_ranges: gimli::DebugRanges<R>,
+    range_lists: gimli::RangeLists<R>,
     debug_line: gimli::DebugLine<R>,
 }
 
@@ -395,7 +398,7 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
 }
 
 enum WrapRangeIter<R: gimli::Reader> {
-    Real(gimli::RangesIter<R>),
+    Real(gimli::RngListIter<R>),
     Synthetic(Option<gimli::Range>),
 }
 
