@@ -4,6 +4,7 @@ extern crate fallible_iterator;
 extern crate gimli;
 extern crate memmap;
 extern crate object;
+extern crate typed_arena;
 
 use std::fs::File;
 use std::path::Path;
@@ -13,6 +14,7 @@ use std::borrow::Cow;
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;
 use object::Object;
+use typed_arena::Arena;
 
 use addr2line::{Context, Location};
 
@@ -156,7 +158,8 @@ fn main() {
     let file = &object::File::parse(&*map).unwrap();
 
     let symbols = file.symbol_map();
-    let ctx = Context::new(file).unwrap();
+    let arena = Arena::new();
+    let ctx = Context::new(&arena, file).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches

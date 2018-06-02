@@ -120,7 +120,7 @@ fn read_ranges<R: gimli::Reader>(
 
 impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
+    pub fn new(arena: &'a Arena<Cow<'a, [u8]>>, file: &'a object::File<'a>) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
@@ -143,13 +143,12 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
             S::from(gimli::EndianSlice::new(data_ref, endian))
         }
 
-        let mut arena = Arena::new();
-        let debug_abbrev: gimli::DebugAbbrev<_> = load_section(&arena, file, endian);
-        let debug_info: gimli::DebugInfo<_> = load_section(&arena, file, endian);
-        let debug_line: gimli::DebugLine<_> = load_section(&arena, file, endian);
-        let debug_ranges: gimli::DebugRanges<_> = load_section(&arena, file, endian);
-        let debug_rnglists: gimli::DebugRngLists<_> = load_section(&arena, file, endian);
-        let debug_str: gimli::DebugStr<_> = load_section(&arena, file, endian);
+        let debug_abbrev: gimli::DebugAbbrev<_> = load_section(arena, file, endian);
+        let debug_info: gimli::DebugInfo<_> = load_section(arena, file, endian);
+        let debug_line: gimli::DebugLine<_> = load_section(arena, file, endian);
+        let debug_ranges: gimli::DebugRanges<_> = load_section(arena, file, endian);
+        let debug_rnglists: gimli::DebugRngLists<_> = load_section(arena, file, endian);
+        let debug_str: gimli::DebugStr<_> = load_section(arena, file, endian);
 
         let range_lists = gimli::RangeLists::new(debug_ranges, debug_rnglists)?;
 

@@ -4,18 +4,21 @@ extern crate findshlibs;
 extern crate gimli;
 extern crate memmap;
 extern crate object;
+extern crate typed_arena;
 
 use std::fs::File;
 
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use addr2line::Context;
+use typed_arena::Arena;
 
 #[test]
 fn correctness() {
     let file = File::open("/proc/self/exe").unwrap();
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
     let file = &object::File::parse(&*map).unwrap();
-    let ctx = Context::new(file).unwrap();
+    let arena = Arena::new();
+    let ctx = Context::new(&arena, file).unwrap();
 
     let mut bias = None;
     TargetSharedLibrary::each(|lib| {
@@ -40,7 +43,8 @@ fn zero_sequence() {
     let file = File::open("/proc/self/exe").unwrap();
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
     let file = &object::File::parse(&*map).unwrap();
-    let ctx = Context::new(file).unwrap();
+    let arena = Arena::new();
+    let ctx = Context::new(&arena, file).unwrap();
     for probe in 0..10 {
         assert!(ctx.find_location(probe).unwrap().is_none());
     }
@@ -51,7 +55,8 @@ fn zero_function() {
     let file = File::open("/proc/self/exe").unwrap();
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
     let file = &object::File::parse(&*map).unwrap();
-    let ctx = Context::new(file).unwrap();
+    let arena = Arena::new();
+    let ctx = Context::new(&arena, file).unwrap();
     for probe in 0..10 {
         assert!(ctx.find_frames(probe).unwrap().next().unwrap().is_none());
     }
