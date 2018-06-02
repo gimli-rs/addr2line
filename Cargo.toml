@@ -21,6 +21,7 @@ object = "0.8"
 intervaltree = "0.2"
 smallvec = "0.6"
 lazy-init = "0.3"
+typed-arena = "1"
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.2", optional = true }
 
