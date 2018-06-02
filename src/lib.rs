@@ -33,10 +33,11 @@ extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
 extern crate smallvec;
+extern crate typed_arena;
 
 use std::path::PathBuf;
 use std::cmp::Ordering;
-use std::borrow::Cow;
+use std::borrow::{Cow, Borrow};
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
@@ -44,6 +45,8 @@ use intervaltree::{Element, IntervalTree};
 use lazy_init::Lazy;
 use object::Object;
 use smallvec::SmallVec;
+
+use typed_arena::Arena;
 
 struct Func<T> {
     entry_off: gimli::UnitOffset<T>,
@@ -117,32 +120,35 @@ fn read_ranges<R: gimli::Reader>(
 
 impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
+    pub fn new(arena: &'a Arena<Cow<'a, [u8]>>, file: &'a object::File<'a>) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'file, S, Endian>(
-            file: &object::File<'input>,
+        fn load_section<'a, 'input, 'file, S, Endian>(
+            arena: &'a Arena<Cow<'file, [u8]>>,
+            file: &'file object::File<'input>,
             endian: Endian,
         ) -> S
         where
             S: gimli::Section<gimli::EndianSlice<'input, Endian>>,
             Endian: gimli::Endianity,
             'file: 'input,
+            'a: 'file,
         {
-            let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
-            S::from(gimli::EndianSlice::new(data, endian))
+            let data = file.section_data_by_name(S::section_name()).unwrap_or(Cow::Borrowed(&[]));
+            let data_ref = (*arena.alloc(data)).borrow();
+            S::from(gimli::EndianSlice::new(data_ref, endian))
         }
 
-        let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
-        let debug_info: gimli::DebugInfo<_> = load_section(file, endian);
-        let debug_line: gimli::DebugLine<_> = load_section(file, endian);
-        let debug_ranges: gimli::DebugRanges<_> = load_section(file, endian);
-        let debug_rnglists: gimli::DebugRngLists<_> = load_section(file, endian);
-        let debug_str: gimli::DebugStr<_> = load_section(file, endian);
+        let debug_abbrev: gimli::DebugAbbrev<_> = load_section(arena, file, endian);
+        let debug_info: gimli::DebugInfo<_> = load_section(arena, file, endian);
+        let debug_line: gimli::DebugLine<_> = load_section(arena, file, endian);
+        let debug_ranges: gimli::DebugRanges<_> = load_section(arena, file, endian);
+        let debug_rnglists: gimli::DebugRngLists<_> = load_section(arena, file, endian);
+        let debug_str: gimli::DebugStr<_> = load_section(arena, file, endian);
 
         let range_lists = gimli::RangeLists::new(debug_ranges, debug_rnglists)?;
 

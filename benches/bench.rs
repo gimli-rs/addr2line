@@ -6,11 +6,13 @@ extern crate addr2line;
 extern crate memmap;
 extern crate object;
 extern crate test;
+extern crate typed_arena;
 
 use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
 use std::process;
+use typed_arena::Arena;
 
 fn release_fixture_path() -> PathBuf {
     let mut path = PathBuf::new();
@@ -61,7 +63,8 @@ fn context_new_location(b: &mut test::Bencher) {
 
     with_file(&target, |file| {
         b.iter(|| {
-            addr2line::Context::new(file).unwrap();
+            let arena = Arena::new();
+            addr2line::Context::new(&arena, file).unwrap();
         });
     });
 }
@@ -72,7 +75,8 @@ fn context_new_with_functions(b: &mut test::Bencher) {
 
     with_file(&target, |file| {
         b.iter(|| {
-            addr2line::Context::new(file)
+            let arena = Arena::new();
+            addr2line::Context::new(&arena, file)
                 .unwrap();
         });
     });
