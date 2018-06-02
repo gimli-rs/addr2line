@@ -17,7 +17,7 @@ travis-ci = { repository = "gimli-rs/addr2line" }
 [dependencies]
 gimli = "0.16"
 fallible-iterator = "0.1"
-object = "0.7"
+object = "0.8"
 intervaltree = "0.2"
 smallvec = "0.6"
 lazy-init = "0.3"

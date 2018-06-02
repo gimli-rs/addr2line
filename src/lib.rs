@@ -133,8 +133,8 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
             Endian: gimli::Endianity,
             'file: 'input,
         {
-            let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
-            S::from(gimli::EndianSlice::new(data, endian))
+            let data = file.section_data_by_name(S::section_name()).unwrap_or(Cow::from(&[][..]));
+            S::from(gimli::EndianSlice::new(&data, endian))
         }
 
         let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
