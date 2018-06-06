@@ -28,7 +28,7 @@ extern crate cpp_demangle;
 extern crate fallible_iterator;
 extern crate gimli;
 extern crate intervaltree;
-extern crate lazy_init;
+extern crate lazycell;
 extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
@@ -41,7 +41,7 @@ use std::u64;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
-use lazy_init::Lazy;
+use lazycell::LazyCell;
 use object::Object;
 use smallvec::SmallVec;
 
@@ -67,8 +67,8 @@ where
     comp_name: Option<R>,
     lang: Option<gimli::DwLang>,
     base_addr: u64,
-    lines: Lazy<Result<Lines<R>, Error>>,
-    funcs: Lazy<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
+    lines: LazyCell<Result<Lines<R>, Error>>,
+    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
 /// The state necessary to perform address to line translation.
@@ -205,8 +205,8 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
                 comp_name: dcn,
                 lang,
                 base_addr,
-                lines: Lazy::new(),
-                funcs: Lazy::new(),
+                lines: LazyCell::new(),
+                funcs: LazyCell::new(),
             });
         }
 
@@ -247,7 +247,7 @@ where
 {
     fn parse_lines(&self, sections: &DebugSections<R>) -> Result<&Lines<R>, Error> {
         self.lines
-            .get_or_create(|| {
+            .borrow_with(|| {
                 let ilnp = sections.debug_line.program(
                     self.line_offset,
                     self.dw_unit.address_size(),
@@ -269,7 +269,7 @@ where
         sections: &DebugSections<R>,
     ) -> Result<&IntervalTree<u64, Func<R::Offset>>, Error> {
         self.funcs
-            .get_or_create(|| {
+            .borrow_with(|| {
                 let mut results = Vec::new();
                 let mut depth = 0;
                 let mut cursor = self.dw_unit.entries(&self.abbrevs);
