@@ -38,6 +38,7 @@ use std::path::PathBuf;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use std::u64;
+use std::rc::Rc;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
@@ -112,27 +113,30 @@ fn read_ranges<R: gimli::Reader>(
     }))
 }
 
-impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
+impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new<'file, O: object::Object<'a, 'file>>(file: &O) -> Result<Self, Error>
-    where
-        'file: 'a,
-    {
+    ///
+    /// The resulting `Context` uses `gimli::EndianRcSlice<gimli::RunTimeEndian>`.
+    /// This means it is not thread safe, has no lifetime constraints (since it copies
+    /// the input data), and works for any endianity.
+    ///
+    /// Performance sensitive applications may want to use `Context::from_sections`
+    /// with a more specialised `gimli::Reader` implementation.
+    pub fn new<'input, 'data, O: object::Object<'input, 'data>>(file: &O) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'file, O, S, Endian>(file: &O, endian: Endian) -> S
+        fn load_section<'input, 'data, O, S, Endian>(file: &O, endian: Endian) -> S
         where
-            O: object::Object<'input, 'file>,
-            S: gimli::Section<gimli::EndianSlice<'input, Endian>>,
+            O: object::Object<'input, 'data>,
+            S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
-            'file: 'input,
         {
-            let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
-            S::from(gimli::EndianSlice::new(data, endian))
+            let data = file.section_data_by_name(S::section_name()).unwrap_or(Cow::Borrowed(&[]));
+            S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
         let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
