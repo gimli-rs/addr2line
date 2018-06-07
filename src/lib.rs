@@ -28,7 +28,7 @@ extern crate cpp_demangle;
 extern crate fallible_iterator;
 extern crate gimli;
 extern crate intervaltree;
-extern crate lazy_init;
+extern crate lazycell;
 extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
@@ -41,7 +41,7 @@ use std::u64;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
-use lazy_init::Lazy;
+use lazycell::LazyCell;
 use object::Object;
 use smallvec::SmallVec;
 
@@ -57,8 +57,7 @@ struct Lines<R: gimli::Reader> {
 
 struct ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     dw_unit: gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: gimli::Abbreviations,
@@ -67,8 +66,8 @@ where
     comp_name: Option<R>,
     lang: Option<gimli::DwLang>,
     base_addr: u64,
-    lines: Lazy<Result<Lines<R>, Error>>,
-    funcs: Lazy<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
+    lines: LazyCell<Result<Lines<R>, Error>>,
+    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
 /// The state necessary to perform address to line translation.
@@ -77,8 +76,7 @@ where
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     unit_ranges: Vec<(gimli::Range, usize)>,
     units: Vec<ResUnit<R>>,
@@ -205,8 +203,8 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
                 comp_name: dcn,
                 lang,
                 base_addr,
-                lines: Lazy::new(),
-                funcs: Lazy::new(),
+                lines: LazyCell::new(),
+                funcs: LazyCell::new(),
             });
         }
 
@@ -242,12 +240,11 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
 
 impl<R> ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn parse_lines(&self, sections: &DebugSections<R>) -> Result<&Lines<R>, Error> {
         self.lines
-            .get_or_create(|| {
+            .borrow_with(|| {
                 let ilnp = sections.debug_line.program(
                     self.line_offset,
                     self.dw_unit.address_size(),
@@ -269,7 +266,7 @@ where
         sections: &DebugSections<R>,
     ) -> Result<&IntervalTree<u64, Func<R::Offset>>, Error> {
         self.funcs
-            .get_or_create(|| {
+            .borrow_with(|| {
                 let mut results = Vec::new();
                 let mut depth = 0;
                 let mut cursor = self.dw_unit.entries(&self.abbrevs);
@@ -322,8 +319,7 @@ struct DebugSections<R: gimli::Reader> {
 /// An iterator over function frames.
 pub struct FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
@@ -426,8 +422,7 @@ pub struct Location {
 
 impl<R> Context<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn find_unit(&self, probe: u64) -> Option<usize> {
         let idx = self.unit_ranges.binary_search_by(|r| {
@@ -491,8 +486,7 @@ where
 
 impl<R> ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn find_location(
         &self,
@@ -570,8 +564,7 @@ fn name_attr<'abbrev, 'unit, R>(
     recursion_limit: usize,
 ) -> Result<Option<R>, Error>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     if recursion_limit == 0 {
         return Ok(None);
@@ -625,8 +618,7 @@ where
 
 impl<'ctx, R> FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     /// Advances the iterator and returns the next frame.
     pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
@@ -690,8 +682,7 @@ where
 
 impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     type Item = Frame<R>;
     type Error = Error;
