@@ -57,8 +57,7 @@ struct Lines<R: gimli::Reader> {
 
 struct ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     dw_unit: gimli::CompilationUnitHeader<R, R::Offset>,
     abbrevs: gimli::Abbreviations,
@@ -77,8 +76,7 @@ where
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     unit_ranges: Vec<(gimli::Range, usize)>,
     units: Vec<ResUnit<R>>,
@@ -242,8 +240,7 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
 
 impl<R> ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn parse_lines(&self, sections: &DebugSections<R>) -> Result<&Lines<R>, Error> {
         self.lines
@@ -322,8 +319,7 @@ struct DebugSections<R: gimli::Reader> {
 /// An iterator over function frames.
 pub struct FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
@@ -426,8 +422,7 @@ pub struct Location {
 
 impl<R> Context<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn find_unit(&self, probe: u64) -> Option<usize> {
         let idx = self.unit_ranges.binary_search_by(|r| {
@@ -491,8 +486,7 @@ where
 
 impl<R> ResUnit<R>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     fn find_location(
         &self,
@@ -570,8 +564,7 @@ fn name_attr<'abbrev, 'unit, R>(
     recursion_limit: usize,
 ) -> Result<Option<R>, Error>
 where
-    R: gimli::Reader + Sync,
-    R::Offset: Sync,
+    R: gimli::Reader,
 {
     if recursion_limit == 0 {
         return Ok(None);
@@ -625,8 +618,7 @@ where
 
 impl<'ctx, R> FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     /// Advances the iterator and returns the next frame.
     pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
@@ -690,8 +682,7 @@ where
 
 impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
-    R: gimli::Reader + Sync + 'ctx,
-    R::Offset: Sync,
+    R: gimli::Reader + 'ctx,
 {
     type Item = Frame<R>;
     type Error = Error;
