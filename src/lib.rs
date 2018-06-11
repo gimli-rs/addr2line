@@ -38,11 +38,11 @@ use std::path::PathBuf;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use std::u64;
+use std::rc::Rc;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
 use lazycell::LazyCell;
-use object::Object;
 use smallvec::SmallVec;
 
 struct Func<T> {
@@ -113,26 +113,30 @@ fn read_ranges<R: gimli::Reader>(
     }))
 }
 
-impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
+impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
-    pub fn new(file: &object::File<'a>) -> Result<Self, Error> {
+    ///
+    /// The resulting `Context` uses `gimli::EndianRcSlice<gimli::RunTimeEndian>`.
+    /// This means it is not thread safe, has no lifetime constraints (since it copies
+    /// the input data), and works for any endianity.
+    ///
+    /// Performance sensitive applications may want to use `Context::from_sections`
+    /// with a more specialised `gimli::Reader` implementation.
+    pub fn new<'input, 'data, O: object::Object<'input, 'data>>(file: &O) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'file, S, Endian>(
-            file: &object::File<'input>,
-            endian: Endian,
-        ) -> S
+        fn load_section<'input, 'data, O, S, Endian>(file: &O, endian: Endian) -> S
         where
-            S: gimli::Section<gimli::EndianSlice<'input, Endian>>,
+            O: object::Object<'input, 'data>,
+            S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
-            'file: 'input,
         {
-            let data = file.section_data_by_name(S::section_name()).unwrap_or(&[]);
-            S::from(gimli::EndianSlice::new(data, endian))
+            let data = file.section_data_by_name(S::section_name()).unwrap_or(Cow::Borrowed(&[]));
+            S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
         let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
@@ -142,6 +146,27 @@ impl<'a> Context<gimli::EndianSlice<'a, gimli::RunTimeEndian>> {
         let debug_rnglists: gimli::DebugRngLists<_> = load_section(file, endian);
         let debug_str: gimli::DebugStr<_> = load_section(file, endian);
 
+        Context::from_sections(
+            debug_abbrev,
+            debug_info,
+            debug_line,
+            debug_ranges,
+            debug_rnglists,
+            debug_str,
+        )
+    }
+}
+
+impl<R: gimli::Reader> Context<R> {
+    /// Construct a new `Context` from DWARF sections.
+    pub fn from_sections(
+        debug_abbrev: gimli::DebugAbbrev<R>,
+        debug_info: gimli::DebugInfo<R>,
+        debug_line: gimli::DebugLine<R>,
+        debug_ranges: gimli::DebugRanges<R>,
+        debug_rnglists: gimli::DebugRngLists<R>,
+        debug_str: gimli::DebugStr<R>,
+    ) -> Result<Self, Error> {
         let range_lists = gimli::RangeLists::new(debug_ranges, debug_rnglists)?;
 
         let mut unit_ranges = Vec::new();
