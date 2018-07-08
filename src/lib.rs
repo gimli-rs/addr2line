@@ -34,7 +34,6 @@ extern crate object;
 extern crate rustc_demangle;
 extern crate smallvec;
 
-use std::path::PathBuf;
 use std::cmp::Ordering;
 use std::borrow::Cow;
 use std::u64;
@@ -438,7 +437,7 @@ impl<R: gimli::Reader> FallibleIterator for WrapRangeIter<R> {
 /// A source location.
 pub struct Location {
     /// The file name.
-    pub file: Option<PathBuf>,
+    pub file: Option<String>,
     /// The line number.
     pub line: Option<u64>,
     /// The column number.
@@ -562,20 +561,31 @@ where
         &self,
         file: &gimli::FileEntry<R>,
         lines: &Lines<R>,
-    ) -> Result<PathBuf, gimli::Error> {
+    ) -> Result<String, gimli::Error> {
         let mut path = if let Some(ref comp_dir) = self.comp_dir {
-            PathBuf::from(comp_dir.to_string_lossy()?.as_ref())
+            String::from(comp_dir.to_string_lossy()?.as_ref())
         } else {
-            PathBuf::new()
+            String::new()
         };
 
         if let Some(directory) = file.directory(lines.lnp.header()) {
-            path.push(directory.to_string_lossy()?.as_ref());
+            path_push(&mut path, directory.to_string_lossy()?.as_ref());
         }
 
-        path.push(file.path_name().to_string_lossy()?.as_ref());
+        path_push(&mut path, file.path_name().to_string_lossy()?.as_ref());
 
         Ok(path)
+    }
+}
+
+fn path_push(path: &mut String, p: &str) {
+    if p.starts_with("/") {
+        *path = p.to_string();
+    } else {
+        if !path.ends_with("/") {
+            *path += "/";
+        }
+        *path += p;
     }
 }
 
