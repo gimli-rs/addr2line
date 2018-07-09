@@ -47,9 +47,9 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
     if let Some(ref loc) = *loc {
         let file = loc.file.as_ref().unwrap();
         let path = if basenames {
-            Path::new(file.file_name().unwrap())
+            Path::new(Path::new(file).file_name().unwrap())
         } else {
-            file
+            Path::new(file)
         };
         print!("{}:", path.display());
         if llvm {
