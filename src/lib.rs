@@ -23,6 +23,23 @@
 //! wrapper also uses symbol table information provided by the `object` crate.
 #![deny(missing_docs)]
 
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "nightly", feature(alloc))]
+
+#[cfg(all(not(feature = "std"), not(feature = "nightly")))]
+compile_error!("You must enable either the std or nightly feature");
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+use core as std;
+
+#[cfg(feature = "std")]
+mod alloc {
+    use std::*;
+    use std::prelude::v1::*;
+}
+
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
 extern crate fallible_iterator;
@@ -35,9 +52,11 @@ extern crate rustc_demangle;
 extern crate smallvec;
 
 use std::cmp::Ordering;
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 use std::u64;
-use std::rc::Rc;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use alloc::string::{ToString, String};
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
@@ -382,6 +401,7 @@ impl<R: gimli::Reader> FunctionName<R> {
 /// Demangle a symbol name using the demangling scheme for the given language.
 ///
 /// Returns `None` if demangling failed or is not required.
+#[allow(unused_variables)]
 pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
     match language {
         #[cfg(feature = "rustc-demangle")]
