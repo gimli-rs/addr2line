@@ -29,6 +29,7 @@ extern crate fallible_iterator;
 extern crate gimli;
 extern crate intervaltree;
 extern crate lazycell;
+#[cfg(feature = "object")]
 extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
@@ -121,6 +122,7 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     ///
     /// Performance sensitive applications may want to use `Context::from_sections`
     /// with a more specialised `gimli::Reader` implementation.
+    #[cfg(feature = "object")]
     pub fn new<'input, 'data, O: object::Object<'input, 'data>>(file: &O) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
