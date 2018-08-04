@@ -22,6 +22,17 @@
 //! which is parsed using [`gimli`](https://github.com/gimli-rs/gimli).  The example CLI
 //! wrapper also uses symbol table information provided by the `object` crate.
 #![deny(missing_docs)]
+#![no_std]
+#![cfg_attr(not(feature = "std"), feature(alloc))]
+
+#[cfg(feature = "std")]
+#[macro_use]
+extern crate std;
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+extern crate core as std;
 
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
@@ -35,10 +46,18 @@ extern crate object;
 extern crate rustc_demangle;
 extern crate smallvec;
 
+#[cfg(feature = "std")]
+mod alloc {
+    pub use std::{borrow, rc, string, vec};
+}
+
+use alloc::borrow::Cow;
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use std::cmp::Ordering;
-use std::borrow::Cow;
 use std::u64;
-use std::rc::Rc;
 
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};

@@ -49,3 +49,6 @@ matrix:
     # Benching should only happen on nightly with --release.
     - rust: nightly
       env: GIMLI_JOB="bench"    GIMLI_PROFILE="--release"
+    # alloc requires nightly.
+    - rust: nightly
+      env: GIMLI_JOB="build"    GIMLI_PROFILE="--no-default-features" GIMLI_FEATURES="alloc"
