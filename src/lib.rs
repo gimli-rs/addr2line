@@ -403,6 +403,7 @@ impl<R: gimli::Reader> FunctionName<R> {
 /// Demangle a symbol name using the demangling scheme for the given language.
 ///
 /// Returns `None` if demangling failed or is not required.
+#[allow(unused_variables)]
 pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
     match language {
         #[cfg(feature = "rustc-demangle")]
