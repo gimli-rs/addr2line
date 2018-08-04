@@ -22,33 +22,24 @@ rust:
 - stable
 
 env:
-- GIMLI_JOB="test"  GIMLI_PROFILE=
-- GIMLI_JOB="test"  GIMLI_PROFILE="--release"
-- GIMLI_JOB="build" GIMLI_PROFILE="--no-default-features"
-- GIMLI_JOB="build" GIMLI_PROFILE="--no-default-features" GIMLI_FEATURES="cpp_demangle"
-- GIMLI_JOB="build" GIMLI_PROFILE="--no-default-features" GIMLI_FEATURES="rustc-demangle"
+- GIMLI_JOB="build"
+- GIMLI_JOB="features"
 
 matrix:
   fast_finish: true
-  exclude:
-    # Testing needs addr2line
-    - os: osx
-      env: GIMLI_JOB="test"  GIMLI_PROFILE=
-    - os: osx
-      env: GIMLI_JOB="test"  GIMLI_PROFILE="--release"
   include:
     # Coverage should only run on Linux and stable Rust.
     - rust: stable
       os: linux
       sudo: required
-      env: GIMLI_JOB="coverage" GIMLI_PROFILE=
+      env: GIMLI_JOB="coverage"
     # Building docs only needs to happen on one os and only on stable.
     - rust: stable
       os: linux
-      env: GIMLI_JOB="doc"      GIMLI_PROFILE=
-    # Benching should only happen on nightly with --release.
+      env: GIMLI_JOB="doc"
+    # Benching should only happen on nightly.
     - rust: nightly
-      env: GIMLI_JOB="bench"    GIMLI_PROFILE="--release"
-    # alloc requires nightly.
+      env: GIMLI_JOB="bench"
+    # Some features require nightly.
     - rust: nightly
-      env: GIMLI_JOB="build"    GIMLI_PROFILE="--no-default-features" GIMLI_FEATURES="alloc"
+      env: GIMLI_JOB="nightly_features"
