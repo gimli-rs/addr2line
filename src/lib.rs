@@ -52,6 +52,7 @@ mod alloc {
 }
 
 use alloc::borrow::Cow;
+#[cfg(feature = "object")]
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
