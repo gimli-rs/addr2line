@@ -4,12 +4,24 @@ set -ex
 
 case "$GIMLI_JOB" in
     "build")
-        cargo build $GIMLI_PROFILE --features "$GIMLI_FEATURES"
+        if [ "$TRAVIS_OS_NAME" = "linux" ]; then
+            cargo test
+            cargo test --release
+        else
+            cargo build
+            cargo build --release
+        fi
         ;;
 
-    "test")
-        cargo build $GIMLI_PROFILE --features "$GIMLI_FEATURES"
-        cargo test $GIMLI_PROFILE --features "$GIMLI_FEATURES"
+    "features")
+        cargo build --no-default-features --features "std"
+        cargo build --no-default-features --features "std cpp_demangle"
+        cargo build --no-default-features --features "std rustc-demangle"
+        cargo build --no-default-features --features "std object"
+        ;;
+
+    "nightly_features")
+        cargo build --no-default-features --features "alloc"
         ;;
 
     "doc")
