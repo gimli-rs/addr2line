@@ -143,16 +143,18 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Performance sensitive applications may want to use `Context::from_sections`
     /// with a more specialised `gimli::Reader` implementation.
     #[cfg(feature = "object")]
-    pub fn new<'input, 'data, O: object::Object<'input, 'data>>(file: &O) -> Result<Self, Error> {
+    pub fn new<'data, 'file, O: object::Object<'data, 'file>>(
+        file: &'file O,
+    ) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'input, 'data, O, S, Endian>(file: &O, endian: Endian) -> S
+        fn load_section<'data, 'file, O, S, Endian>(file: &'file O, endian: Endian) -> S
         where
-            O: object::Object<'input, 'data>,
+            O: object::Object<'data, 'file>,
             S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
         {
