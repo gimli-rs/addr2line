@@ -413,7 +413,7 @@ pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
         gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name)
             .ok()
             .as_ref()
-            .map(ToString::to_string),
+            .map(|x| format!("{:#}", x)),
         #[cfg(feature = "cpp_demangle")]
         gimli::DW_LANG_C_plus_plus
         | gimli::DW_LANG_C_plus_plus_03
