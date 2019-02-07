@@ -71,6 +71,11 @@ fn run_test(flags: Option<&str>) {
     let theirs = run_cmd("addr2line", &me, flags, &trace);
     let ours = run_cmd(&exe, &me, flags, &trace);
 
+    // HACK: GNU addr2line does not tidy up paths properly, causing double slashes to be printed
+    //       for for inlined frames from /src/libpanic_unwind/lib.rs
+    // We consider our behavior to be correct, so we fix their output to match ours.
+    let theirs = theirs.replace("//src", "/src");
+
     assert!(theirs == ours, "Output not equivalent:
 
 $ addr2line {0} --exe {1} {2}
