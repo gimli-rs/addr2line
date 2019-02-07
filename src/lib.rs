@@ -94,7 +94,7 @@ where
 ///
 /// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
 /// when performing lookups for many addresses in the same executable.
-pub struct Context<R>
+pub struct Context<R = gimli::EndianRcSlice<gimli::RunTimeEndian>>
 where
     R: gimli::Reader,
 {
