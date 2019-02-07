@@ -70,7 +70,16 @@ fn run_test(flags: Option<&str>) {
 
     let theirs = run_cmd("addr2line", &me, flags, &trace);
     let ours = run_cmd(&exe, &me, flags, &trace);
-    assert_eq!(theirs, ours);
+
+    assert!(theirs == ours, "Output not equivalent:
+
+$ addr2line {0} --exe {1} {2}
+{4}
+$ {3} {0} --exe {1} {2}
+{5}
+
+
+", flags.unwrap_or(""), me.display(), trace.join(" "), exe.display(), theirs, ours);
 }
 
 static FLAGS: &'static str = "aipsf";
