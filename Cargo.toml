@@ -37,8 +37,9 @@ debug = true
 debug = true
 
 [features]
-default = ["rustc-demangle", "cpp_demangle", "object", "std"]
-std = ["gimli/std", "intervaltree/std", "object/std", "smallvec/std"]
+default = ["rustc-demangle", "cpp_demangle", "std-object"]
+std = ["gimli/std", "intervaltree/std", "smallvec/std"]
+std-object = ["std", "object", "object/std"]
 alloc = ["gimli/alloc"]
 
 [[test]]
