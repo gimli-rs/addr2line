@@ -98,35 +98,6 @@ where
     sections: gimli::Dwarf<R>,
 }
 
-fn read_ranges<R: gimli::Reader>(
-    entry: &gimli::DebuggingInformationEntry<R, R::Offset>,
-    sections: &gimli::Dwarf<R>,
-    dw_unit: &gimli::Unit<R>,
-) -> Result<Option<WrapRangeIter<R>>, Error> {
-    Ok(Some(match entry.attr_value(gimli::DW_AT_ranges)? {
-        None => {
-            let low_pc = match entry.attr_value(gimli::DW_AT_low_pc)? {
-                Some(gimli::AttributeValue::Addr(low_pc)) => low_pc,
-                _ => return Ok(None), // neither ranges nor low_pc => None
-            };
-            let high_pc = match entry.attr_value(gimli::DW_AT_high_pc)? {
-                Some(gimli::AttributeValue::Addr(high_pc)) => high_pc,
-                Some(gimli::AttributeValue::Udata(x)) => low_pc + x,
-                _ => return Ok(None), // only low_pc, no high_pc? wtf is this? TODO: perhaps return error
-            };
-            WrapRangeIter::Synthetic(Some(gimli::Range {
-                begin: low_pc,
-                end: high_pc,
-            }))
-        }
-        Some(gimli::AttributeValue::RangeListsRef(rr)) => {
-            let ranges = sections.ranges(dw_unit, rr)?;
-            WrapRangeIter::Real(ranges)
-        }
-        _ => unreachable!(),
-    }))
-}
-
 impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
     ///
@@ -230,16 +201,13 @@ impl<R: gimli::Reader> Context<R> {
                     Some(gimli::AttributeValue::Language(lang)) => Some(lang),
                     _ => None,
                 };
-                if let Some(mut ranges) =
-                    read_ranges(unit, &sections, &dw_unit)?
-                {
-                    while let Some(range) = ranges.next()? {
-                        if range.begin == range.end {
-                            continue;
-                        }
-
-                        unit_ranges.push((range, unit_id));
+                let mut ranges = sections.unit_ranges(&dw_unit)?;
+                while let Some(range) = ranges.next()? {
+                    if range.begin == range.end {
+                        continue;
                     }
+
+                    unit_ranges.push((range, unit_id));
                 }
             }
 
@@ -311,27 +279,24 @@ where
                     depth += d;
                     match entry.tag() {
                         gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                            // may be an inline-only function and thus not have any ranges
-                            if let Some(mut ranges) = read_ranges(
-                                entry,
-                                sections,
+                            let mut ranges = sections.die_ranges(
                                 &self.dw_unit,
-                            )? {
-                                while let Some(range) = ranges.next()? {
-                                    // Ignore invalid DWARF so that a query of 0 does not give
-                                    // a long list of matches.
-                                    // TODO: don't ignore if there is a section at this address
-                                    if range.begin == 0 {
-                                        continue;
-                                    }
-                                    results.push(Element {
-                                        range: range.begin..range.end,
-                                        value: Func {
-                                            entry_off: entry.offset(),
-                                            depth,
-                                        },
-                                    });
+                                entry,
+                            )?;
+                            while let Some(range) = ranges.next()? {
+                                // Ignore invalid DWARF so that a query of 0 does not give
+                                // a long list of matches.
+                                // TODO: don't ignore if there is a section at this address
+                                if range.begin == 0 {
+                                    continue;
                                 }
+                                results.push(Element {
+                                    range: range.begin..range.end,
+                                    value: Func {
+                                        entry_off: entry.offset(),
+                                        depth,
+                                    },
+                                });
                             }
                         }
                         _ => (),
@@ -422,23 +387,6 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
         None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
             .or_else(|| demangle(name.as_ref(), gimli::DW_LANG_C_plus_plus)),
     }.map(Cow::from).unwrap_or(name)
-}
-
-enum WrapRangeIter<R: gimli::Reader> {
-    Real(gimli::RngListIter<R>),
-    Synthetic(Option<gimli::Range>),
-}
-
-impl<R: gimli::Reader> FallibleIterator for WrapRangeIter<R> {
-    type Item = gimli::Range;
-    type Error = gimli::Error;
-
-    fn next(&mut self) -> Result<Option<gimli::Range>, gimli::Error> {
-        match *self {
-            WrapRangeIter::Real(ref mut ri) => ri.next(),
-            WrapRangeIter::Synthetic(ref mut range) => Ok(range.take()),
-        }
-    }
 }
 
 /// A source location.
