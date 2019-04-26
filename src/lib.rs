@@ -36,12 +36,12 @@ extern crate core as std;
 
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
-extern crate fallible_iterator;
-extern crate gimli;
+pub extern crate fallible_iterator;
+pub extern crate gimli;
 extern crate intervaltree;
 extern crate lazycell;
 #[cfg(feature = "object")]
-extern crate object;
+pub extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
 extern crate smallvec;
