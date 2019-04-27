@@ -30,7 +30,9 @@ fn correctness() {
     let name = frame.function.as_ref().unwrap().demangle().unwrap();
     // Old rust versions generate DWARF with wrong linkage name,
     // so only check the start.
-    assert!(name.starts_with("correctness::test_function"));
+    if !name.starts_with("correctness::test_function") {
+        panic!("incorrect name '{}'", name);
+    }
 }
 
 fn test_function() {}
