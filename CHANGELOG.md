@@ -1,3 +1,16 @@
+## 0.9.0 (2019/05/02)
+
+### Breaking changes
+
+* [#121](https://github.com/gimli-rs/addr2line/pull/121)
+  Update `gimli`, `object`, and `fallible-iterator` dependencies.
+
+### Added
+
+* [#121](https://github.com/gimli-rs/addr2line/pull/121)
+  Reexport `gimli`, `object`, and `fallible-iterator`.
+
+
 ## 0.8.0 (2019/02/06)
 
 ### Breaking changes
