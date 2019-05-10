@@ -57,6 +57,9 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+#[cfg(feature = "rustc-demangle")]
+use alloc::format;
+
 use std::cmp::Ordering;
 use std::u64;
 
