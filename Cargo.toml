@@ -28,7 +28,7 @@ cpp_demangle = { version = "0.2", default-features = false, optional = true }
 memmap = "0.7"
 clap = "2"
 backtrace = "0.3.13"
-findshlibs = "0.4"
+findshlibs = "0.5"
 rustc-test = "0.3"
 
 [profile.release]
