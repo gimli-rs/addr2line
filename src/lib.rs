@@ -85,19 +85,34 @@ where
     funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
-/// The state necessary to perform address to line translation.
-///
-/// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
-/// when performing lookups for many addresses in the same executable.
-pub struct Context<R = gimli::EndianRcSlice<gimli::RunTimeEndian>>
-where
-    R: gimli::Reader,
-{
-    unit_ranges: Vec<(gimli::Range, usize)>,
-    units: Vec<ResUnit<R>>,
-    sections: gimli::Dwarf<R>,
+macro_rules! maybe_default {
+    ($(#[$attr:meta])* pub struct Context<R = $default:ty> $($rest:tt)* ) => {
+        #[cfg(feature = "alloc")]
+        $(#[$attr])*
+        pub struct Context<R = $default> $($rest)*
+
+        #[cfg(not(feature = "alloc"))]
+        $(#[$attr])*
+        pub struct Context<R> $($rest)*
+    }
 }
 
+maybe_default! {
+    /// The state necessary to perform address to line translation.
+    ///
+    /// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
+    /// when performing lookups for many addresses in the same executable.
+    pub struct Context<R = gimli::EndianRcSlice<gimli::RunTimeEndian>>
+    where
+        R: gimli::Reader,
+    {
+        unit_ranges: Vec<(gimli::Range, usize)>,
+        units: Vec<ResUnit<R>>,
+        sections: gimli::Dwarf<R>,
+    }
+}
+
+#[cfg(feature = "alloc")]
 impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
     ///

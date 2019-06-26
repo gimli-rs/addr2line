@@ -21,6 +21,7 @@ case "$GIMLI_JOB" in
         ;;
 
     "nightly_features")
+        cargo build --no-default-features
         cargo build --no-default-features --features "alloc"
         cargo build --no-default-features --features "alloc object"
         ;;
