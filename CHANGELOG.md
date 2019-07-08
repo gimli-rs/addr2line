@@ -1,3 +1,11 @@
+## 0.10.0 (2019/07/07)
+
+### Breaking changes
+
+* [#127](https://github.com/gimli-rs/addr2line/pull/127)
+  Update `gimli`.
+
+
 ## 0.9.0 (2019/05/02)
 
 ### Breaking changes
