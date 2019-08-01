@@ -65,25 +65,7 @@ use intervaltree::{Element, IntervalTree};
 use lazycell::LazyCell;
 use smallvec::SmallVec;
 
-struct Func<T> {
-    entry_off: gimli::UnitOffset<T>,
-    depth: isize,
-}
-
-struct Lines<R: gimli::Reader> {
-    lnp: gimli::CompleteLineProgram<R, R::Offset>,
-    sequences: Vec<gimli::LineSequence<R>>,
-}
-
-struct ResUnit<R>
-where
-    R: gimli::Reader,
-{
-    dw_unit: gimli::Unit<R>,
-    lang: Option<gimli::DwLang>,
-    lines: LazyCell<Result<Lines<R>, Error>>,
-    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
-}
+type Error = gimli::Error;
 
 /// The state necessary to perform address to line translation.
 ///
@@ -243,6 +225,85 @@ impl<R: gimli::Reader> Context<R> {
             sections,
         })
     }
+
+    fn find_unit(&self, probe: u64) -> Option<usize> {
+        let idx = self.unit_ranges.binary_search_by(|r| {
+            if probe < r.0.begin {
+                Ordering::Greater
+            } else if probe >= r.0.end {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        });
+        let idx = match idx {
+            Ok(x) => x,
+            Err(_) => return None,
+        };
+
+        let (_, unit_id) = self.unit_ranges[idx];
+        Some(unit_id)
+    }
+
+    /// Find the source file and line corresponding to the given virtual memory address.
+    pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
+        match self.find_unit(probe) {
+            Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
+            None => Ok(None),
+        }
+    }
+
+    /// Return an iterator for the function frames corresponding to the given virtual
+    /// memory address.
+    ///
+    /// If the probe address is not for an inline function then only one frame is
+    /// returned.
+    ///
+    /// If the probe address is for an inline function then the first frame corresponds
+    /// to the innermost inline function.  Subsequent frames contain the caller and call
+    /// location, until an non-inline caller is reached.
+    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
+        let (unit_id, loc, funcs) = match self.find_unit(probe) {
+            Some(unit_id) => {
+                let unit = &self.units[unit_id];
+                let loc = unit.find_location(probe, &self.sections)?;
+                let funcs = unit.parse_functions(&self.sections)?;
+                let mut res: SmallVec<[_; 16]> =
+                    funcs.query_point(probe).map(|x| &x.value).collect();
+                res.sort_by_key(|x| -x.depth);
+                (unit_id, loc, res)
+            }
+            None => (0, None, SmallVec::new()),
+        };
+
+        Ok(FrameIter {
+            unit_id,
+            units: &self.units,
+            sections: &self.sections,
+            funcs: funcs.into_iter(),
+            next: loc,
+        })
+    }
+}
+
+struct Lines<R: gimli::Reader> {
+    lnp: gimli::CompleteLineProgram<R, R::Offset>,
+    sequences: Vec<gimli::LineSequence<R>>,
+}
+
+struct Func<T> {
+    entry_off: gimli::UnitOffset<T>,
+    depth: isize,
+}
+
+struct ResUnit<R>
+where
+    R: gimli::Reader,
+{
+    dw_unit: gimli::Unit<R>,
+    lang: Option<gimli::DwLang>,
+    lines: LazyCell<Result<Lines<R>, Error>>,
+    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
 impl<R> ResUnit<R>
@@ -309,164 +370,7 @@ where
             .as_ref()
             .map_err(Error::clone)
     }
-}
 
-/// An iterator over function frames.
-pub struct FrameIter<'ctx, R>
-where
-    R: gimli::Reader + 'ctx,
-{
-    unit_id: usize,
-    units: &'ctx Vec<ResUnit<R>>,
-    sections: &'ctx gimli::Dwarf<R>,
-    funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
-    next: Option<Location>,
-}
-
-/// A function frame.
-pub struct Frame<R: gimli::Reader> {
-    /// The name of the function.
-    pub function: Option<FunctionName<R>>,
-    /// The source location corresponding to this frame.
-    pub location: Option<Location>,
-}
-
-/// A function name.
-pub struct FunctionName<R: gimli::Reader> {
-    name: R,
-    /// The language of the compilation unit containing this function.
-    pub language: Option<gimli::DwLang>,
-}
-
-impl<R: gimli::Reader> FunctionName<R> {
-    /// The raw name of this function before demangling.
-    pub fn raw_name(&self) -> Result<Cow<str>, Error> {
-        self.name.to_string_lossy()
-    }
-
-    /// The name of this function after demangling (if applicable).
-    pub fn demangle(&self) -> Result<Cow<str>, Error> {
-        self.raw_name().map(|x| demangle_auto(x, self.language))
-    }
-}
-
-/// Demangle a symbol name using the demangling scheme for the given language.
-///
-/// Returns `None` if demangling failed or is not required.
-#[allow(unused_variables)]
-pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
-    match language {
-        #[cfg(feature = "rustc-demangle")]
-        gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name)
-            .ok()
-            .as_ref()
-            .map(|x| format!("{:#}", x)),
-        #[cfg(feature = "cpp_demangle")]
-        gimli::DW_LANG_C_plus_plus
-        | gimli::DW_LANG_C_plus_plus_03
-        | gimli::DW_LANG_C_plus_plus_11
-        | gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name)
-            .ok()
-            .and_then(|x| x.demangle(&Default::default()).ok()),
-        _ => None,
-    }
-}
-
-/// Apply 'best effort' demangling of a symbol name.
-///
-/// If `language` is given, then only the demangling scheme for that language
-/// is used.
-///
-/// If `language` is `None`, then heuristics are used to determine how to
-/// demangle the name. Currently, these heuristics are very basic.
-///
-/// If demangling fails or is not required, then `name` is returned unchanged.
-pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
-    match language {
-        Some(language) => demangle(name.as_ref(), language),
-        None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
-            .or_else(|| demangle(name.as_ref(), gimli::DW_LANG_C_plus_plus)),
-    }.map(Cow::from).unwrap_or(name)
-}
-
-/// A source location.
-pub struct Location {
-    /// The file name.
-    pub file: Option<String>,
-    /// The line number.
-    pub line: Option<u64>,
-    /// The column number.
-    pub column: Option<u64>,
-}
-
-impl<R> Context<R>
-where
-    R: gimli::Reader,
-{
-    fn find_unit(&self, probe: u64) -> Option<usize> {
-        let idx = self.unit_ranges.binary_search_by(|r| {
-            if probe < r.0.begin {
-                Ordering::Greater
-            } else if probe >= r.0.end {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        });
-        let idx = match idx {
-            Ok(x) => x,
-            Err(_) => return None,
-        };
-
-        let (_, unit_id) = self.unit_ranges[idx];
-        Some(unit_id)
-    }
-
-    /// Find the source file and line corresponding to the given virtual memory address.
-    pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
-        match self.find_unit(probe) {
-            Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
-            None => Ok(None),
-        }
-    }
-
-    /// Return an iterator for the function frames corresponding to the given virtual
-    /// memory address.
-    ///
-    /// If the probe address is not for an inline function then only one frame is
-    /// returned.
-    ///
-    /// If the probe address is for an inline function then the first frame corresponds
-    /// to the innermost inline function.  Subsequent frames contain the caller and call
-    /// location, until an non-inline caller is reached.
-    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit_id, loc, funcs) = match self.find_unit(probe) {
-            Some(unit_id) => {
-                let unit = &self.units[unit_id];
-                let loc = unit.find_location(probe, &self.sections)?;
-                let funcs = unit.parse_functions(&self.sections)?;
-                let mut res: SmallVec<[_; 16]> =
-                    funcs.query_point(probe).map(|x| &x.value).collect();
-                res.sort_by_key(|x| -x.depth);
-                (unit_id, loc, res)
-            }
-            None => (0, None, SmallVec::new()),
-        };
-
-        Ok(FrameIter {
-            unit_id,
-            units: &self.units,
-            sections: &self.sections,
-            funcs: funcs.into_iter(),
-            next: loc,
-        })
-    }
-}
-
-impl<R> ResUnit<R>
-where
-    R: gimli::Reader,
-{
     fn find_location(
         &self,
         probe: u64,
@@ -548,8 +452,6 @@ fn path_push(path: &mut String, p: &str) {
     }
 }
 
-type Error = gimli::Error;
-
 fn name_attr<'abbrev, 'unit, R>(
     entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
     unit: &ResUnit<R>,
@@ -612,6 +514,18 @@ where
     }
 
     Ok(None)
+}
+
+/// An iterator over function frames.
+pub struct FrameIter<'ctx, R>
+where
+    R: gimli::Reader + 'ctx,
+{
+    unit_id: usize,
+    units: &'ctx Vec<ResUnit<R>>,
+    sections: &'ctx gimli::Dwarf<R>,
+    funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
+    next: Option<Location>,
 }
 
 impl<'ctx, R> FrameIter<'ctx, R>
@@ -692,4 +606,80 @@ where
     fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
         self.next()
     }
+}
+
+/// A function frame.
+pub struct Frame<R: gimli::Reader> {
+    /// The name of the function.
+    pub function: Option<FunctionName<R>>,
+    /// The source location corresponding to this frame.
+    pub location: Option<Location>,
+}
+
+/// A function name.
+pub struct FunctionName<R: gimli::Reader> {
+    name: R,
+    /// The language of the compilation unit containing this function.
+    pub language: Option<gimli::DwLang>,
+}
+
+impl<R: gimli::Reader> FunctionName<R> {
+    /// The raw name of this function before demangling.
+    pub fn raw_name(&self) -> Result<Cow<str>, Error> {
+        self.name.to_string_lossy()
+    }
+
+    /// The name of this function after demangling (if applicable).
+    pub fn demangle(&self) -> Result<Cow<str>, Error> {
+        self.raw_name().map(|x| demangle_auto(x, self.language))
+    }
+}
+
+/// Demangle a symbol name using the demangling scheme for the given language.
+///
+/// Returns `None` if demangling failed or is not required.
+#[allow(unused_variables)]
+pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
+    match language {
+        #[cfg(feature = "rustc-demangle")]
+        gimli::DW_LANG_Rust => rustc_demangle::try_demangle(name)
+            .ok()
+            .as_ref()
+            .map(|x| format!("{:#}", x)),
+        #[cfg(feature = "cpp_demangle")]
+        gimli::DW_LANG_C_plus_plus
+        | gimli::DW_LANG_C_plus_plus_03
+        | gimli::DW_LANG_C_plus_plus_11
+        | gimli::DW_LANG_C_plus_plus_14 => cpp_demangle::Symbol::new(name)
+            .ok()
+            .and_then(|x| x.demangle(&Default::default()).ok()),
+        _ => None,
+    }
+}
+
+/// Apply 'best effort' demangling of a symbol name.
+///
+/// If `language` is given, then only the demangling scheme for that language
+/// is used.
+///
+/// If `language` is `None`, then heuristics are used to determine how to
+/// demangle the name. Currently, these heuristics are very basic.
+///
+/// If demangling fails or is not required, then `name` is returned unchanged.
+pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
+    match language {
+        Some(language) => demangle(name.as_ref(), language),
+        None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
+            .or_else(|| demangle(name.as_ref(), gimli::DW_LANG_C_plus_plus)),
+    }.map(Cow::from).unwrap_or(name)
+}
+
+/// A source location.
+pub struct Location {
+    /// The file name.
+    pub file: Option<String>,
+    /// The line number.
+    pub line: Option<u64>,
+    /// The column number.
+    pub column: Option<u64>,
 }
