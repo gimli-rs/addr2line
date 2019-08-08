@@ -3,9 +3,9 @@ extern crate findshlibs;
 extern crate rustc_test as test;
 
 use std::env;
-use std::process::Command;
-use std::path::Path;
 use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
 
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
@@ -76,7 +76,9 @@ fn run_test(flags: Option<&str>) {
     // We consider our behavior to be correct, so we fix their output to match ours.
     let theirs = theirs.replace("//src", "/src");
 
-    assert!(theirs == ours, "Output not equivalent:
+    assert!(
+        theirs == ours,
+        "Output not equivalent:
 
 $ addr2line {0} --exe {1} {2}
 {4}
@@ -84,7 +86,14 @@ $ {3} {0} --exe {1} {2}
 {5}
 
 
-", flags.unwrap_or(""), me.display(), trace.join(" "), exe.display(), theirs, ours);
+",
+        flags.unwrap_or(""),
+        me.display(),
+        trace.join(" "),
+        exe.display(),
+        theirs,
+        ours
+    );
 }
 
 static FLAGS: &'static str = "aipsf";
@@ -105,20 +114,19 @@ fn make_tests() -> Vec<TestDescAndFn> {
                 Some(param)
             }
         })
-        .map(|param| {
-            TestDescAndFn {
-                desc: TestDesc {
-                    name: TestName::DynTestName(
-                        format!("addr2line {}", param.as_ref().map_or("", String::as_str)),
-                    ),
-                    ignore: false,
-                    should_panic: ShouldPanic::No,
-                    allow_fail: false,
-                },
-                testfn: TestFn::DynTestFn(
-                    Box::new(move || run_test(param.as_ref().map(String::as_str))),
-                ),
-            }
+        .map(|param| TestDescAndFn {
+            desc: TestDesc {
+                name: TestName::DynTestName(format!(
+                    "addr2line {}",
+                    param.as_ref().map_or("", String::as_str)
+                )),
+                ignore: false,
+                should_panic: ShouldPanic::No,
+                allow_fail: false,
+            },
+            testfn: TestFn::DynTestFn(Box::new(move || {
+                run_test(param.as_ref().map(String::as_str))
+            })),
         })
         .collect()
 }

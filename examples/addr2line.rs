@@ -5,10 +5,10 @@ extern crate gimli;
 extern crate memmap;
 extern crate object;
 
-use std::fs::File;
-use std::path::Path;
-use std::io::{BufRead, Lines, StdinLock};
 use std::borrow::Cow;
+use std::fs::File;
+use std::io::{BufRead, Lines, StdinLock};
+use std::path::Path;
 
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;

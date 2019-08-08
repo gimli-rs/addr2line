@@ -105,7 +105,9 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
         {
-            let data = file.section_data_by_name(S::section_name()).unwrap_or(Cow::Borrowed(&[]));
+            let data = file
+                .section_data_by_name(S::section_name())
+                .unwrap_or(Cow::Borrowed(&[]));
             S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
@@ -159,7 +161,10 @@ impl<R: gimli::Reader> Context<R> {
             debug_str_offsets,
             debug_str_sup: default_section.clone().into(),
             debug_types: default_section.clone().into(),
-            locations: gimli::LocationLists::new(default_section.clone().into(), default_section.clone().into()),
+            locations: gimli::LocationLists::new(
+                default_section.clone().into(),
+                default_section.clone().into(),
+            ),
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
         };
 
@@ -340,10 +345,7 @@ where
                     depth += d;
                     match entry.tag() {
                         gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                            let mut ranges = sections.die_ranges(
-                                &self.dw_unit,
-                                entry,
-                            )?;
+                            let mut ranges = sections.die_ranges(&self.dw_unit, entry)?;
                             while let Some(range) = ranges.next()? {
                                 // Ignore invalid DWARF so that a query of 0 does not give
                                 // a long list of matches.
@@ -432,10 +434,22 @@ where
         };
 
         if let Some(directory) = file.directory(lines.lnp.header()) {
-            path_push(&mut path, sections.attr_string(&self.dw_unit, directory)?.to_string_lossy()?.as_ref());
+            path_push(
+                &mut path,
+                sections
+                    .attr_string(&self.dw_unit, directory)?
+                    .to_string_lossy()?
+                    .as_ref(),
+            );
         }
 
-        path_push(&mut path, sections.attr_string(&self.dw_unit, file.path_name())?.to_string_lossy()?.as_ref());
+        path_push(
+            &mut path,
+            sections
+                .attr_string(&self.dw_unit, file.path_name())?
+                .to_string_lossy()?
+                .as_ref(),
+        );
 
         Ok(path)
     }
@@ -494,22 +508,24 @@ where
                 return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        Some(gimli::AttributeValue::DebugInfoRef(dr)) => if let Some((unit, offset)) = units
-            .iter()
-            .filter_map(|unit| {
-                gimli::UnitSectionOffset::DebugInfoOffset(dr)
-                    .to_unit_offset(&unit.dw_unit)
-                    .map(|uo| (unit, uo))
-            })
-            .next()
-        {
-            let mut entries = unit.dw_unit.entries_at_offset(offset)?;
-            if let Some((_, entry)) = entries.next_dfs()? {
-                return name_attr(entry, unit, sections, units, recursion_limit - 1);
+        Some(gimli::AttributeValue::DebugInfoRef(dr)) => {
+            if let Some((unit, offset)) = units
+                .iter()
+                .filter_map(|unit| {
+                    gimli::UnitSectionOffset::DebugInfoOffset(dr)
+                        .to_unit_offset(&unit.dw_unit)
+                        .map(|uo| (unit, uo))
+                })
+                .next()
+            {
+                let mut entries = unit.dw_unit.entries_at_offset(offset)?;
+                if let Some((_, entry)) = entries.next_dfs()? {
+                    return name_attr(entry, unit, sections, units, recursion_limit - 1);
+                }
+            } else {
+                return Err(gimli::Error::NoEntryAtGivenOffset);
             }
-        } else {
-            return Err(gimli::Error::NoEntryAtGivenOffset);
-        },
+        }
         _ => {}
     }
 
@@ -557,17 +573,13 @@ where
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    match unit.parse_lines()? {
-                        Some(lines) => {
-                            match lines.lnp.header().file(fi) {
-                                Some(file) => Some(unit.render_file(file, lines, self.sections)?),
-                                None => None,
-                            }
-                        }
+                Some(gimli::AttributeValue::FileIndex(fi)) => match unit.parse_lines()? {
+                    Some(lines) => match lines.lnp.header().file(fi) {
+                        Some(file) => Some(unit.render_file(file, lines, self.sections)?),
                         None => None,
-                    }
-                }
+                    },
+                    None => None,
+                },
                 _ => None,
             };
 
@@ -582,13 +594,10 @@ where
             self.next = Some(Location { file, line, column });
         }
 
-
         Ok(Some(Frame {
-            function: name.map(|name| {
-                FunctionName {
-                    name,
-                    language: unit.lang,
-                }
+            function: name.map(|name| FunctionName {
+                name,
+                language: unit.lang,
             }),
             location: loc,
         }))
@@ -671,7 +680,9 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
         Some(language) => demangle(name.as_ref(), language),
         None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
             .or_else(|| demangle(name.as_ref(), gimli::DW_LANG_C_plus_plus)),
-    }.map(Cow::from).unwrap_or(name)
+    }
+    .map(Cow::from)
+    .unwrap_or(name)
 }
 
 /// A source location.
