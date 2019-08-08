@@ -456,11 +456,11 @@ where
 }
 
 fn path_push(path: &mut String, p: &str) {
-    if p.starts_with("/") {
+    if p.starts_with('/') {
         *path = p.to_string();
     } else {
-        if !path.ends_with("/") {
-            *path += "/";
+        if !path.ends_with('/') {
+            path.push('/');
         }
         *path += p;
     }
