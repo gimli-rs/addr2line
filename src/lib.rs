@@ -682,7 +682,8 @@ pub struct Frame<'ctx, R: gimli::Reader> {
 
 /// A function name.
 pub struct FunctionName<R: gimli::Reader> {
-    name: R,
+    /// The name of the function.
+    pub name: R,
     /// The language of the compilation unit containing this function.
     pub language: Option<gimli::DwLang>,
 }
