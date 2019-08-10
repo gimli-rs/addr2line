@@ -58,6 +58,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use std::cmp::Ordering;
+use std::mem;
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
@@ -251,7 +252,7 @@ impl<R: gimli::Reader> Context<R> {
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
-    pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
+    pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
         match self.find_unit(probe) {
             Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
             None => Ok(None),
@@ -291,9 +292,22 @@ impl<R: gimli::Reader> Context<R> {
     }
 }
 
-struct Lines<R: gimli::Reader> {
-    lnp: gimli::CompleteLineProgram<R, R::Offset>,
-    sequences: Vec<gimli::LineSequence<R>>,
+struct Lines {
+    files: Vec<String>,
+    sequences: Vec<LineSequence>,
+}
+
+struct LineSequence {
+    start: u64,
+    end: u64,
+    rows: Vec<LineRow>,
+}
+
+struct LineRow {
+    address: u64,
+    file_index: u64,
+    line: Option<u64>,
+    column: Option<u64>,
 }
 
 struct Func<T> {
@@ -307,7 +321,7 @@ where
 {
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
-    lines: LazyCell<Result<Lines<R>, Error>>,
+    lines: LazyCell<Result<Lines, Error>>,
     funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
@@ -315,17 +329,64 @@ impl<R> ResUnit<R>
 where
     R: gimli::Reader,
 {
-    fn parse_lines(&self) -> Result<Option<&Lines<R>>, Error> {
+    fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
         let ilnp = match self.dw_unit.line_program {
             Some(ref ilnp) => ilnp,
             None => return Ok(None),
         };
         self.lines
             .borrow_with(|| {
-                let (lnp, mut sequences) = ilnp.clone().sequences()?;
-                sequences.retain(|x| x.start != 0);
+                let mut sequences = Vec::new();
+                let mut sequence_rows = Vec::<LineRow>::new();
+                let mut rows = ilnp.clone().rows();
+                while let Some((_, row)) = rows.next_row()? {
+                    if row.end_sequence() {
+                        if let Some(start) = sequence_rows.first().map(|x| x.address) {
+                            let end = row.address();
+                            let mut rows = Vec::new();
+                            mem::swap(&mut rows, &mut sequence_rows);
+                            if start != 0 {
+                                sequences.push(LineSequence { start, end, rows });
+                            }
+                        }
+                        continue;
+                    }
+
+                    let address = row.address();
+                    let file_index = row.file_index();
+                    let line = row.line();
+                    let column = match row.column() {
+                        gimli::ColumnType::LeftEdge => None,
+                        gimli::ColumnType::Column(x) => Some(x),
+                    };
+
+                    if let Some(last_row) = sequence_rows.last_mut() {
+                        if last_row.address == address {
+                            last_row.file_index = file_index;
+                            last_row.line = line;
+                            last_row.column = column;
+                            continue;
+                        }
+                    }
+
+                    sequence_rows.push(LineRow {
+                        address,
+                        file_index,
+                        line,
+                        column,
+                    });
+                }
                 sequences.sort_by_key(|x| x.start);
-                Ok(Lines { lnp, sequences })
+
+                let mut files = Vec::new();
+                let mut index = 0;
+                let header = ilnp.header();
+                while let Some(file) = header.file(index) {
+                    files.push(self.render_file(file, header, sections)?);
+                    index += 1;
+                }
+
+                Ok(Lines { files, sequences })
             })
             .as_ref()
             .map(Some)
@@ -377,15 +438,16 @@ where
         &self,
         probe: u64,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Option<Location>, Error> {
-        let lines = match self.parse_lines()? {
+    ) -> Result<Option<Location<'_>>, Error> {
+        let lines = match self.parse_lines(sections)? {
             Some(lines) => lines,
             None => return Ok(None),
         };
-        let idx = lines.sequences.binary_search_by(|ln| {
-            if probe < ln.start {
+
+        let idx = lines.sequences.binary_search_by(|sequence| {
+            if probe < sequence.start {
                 Ordering::Greater
-            } else if probe >= ln.end {
+            } else if probe >= sequence.end {
                 Ordering::Less
             } else {
                 Ordering::Equal
@@ -395,45 +457,39 @@ where
             Ok(x) => x,
             Err(_) => return Ok(None),
         };
-        let ln = &lines.sequences[idx];
-        let mut sm = lines.lnp.resume_from(ln);
-        let mut file = None;
-        let mut line = None;
-        let mut column = None;
-        while let Some((_, row)) = sm.next_row()? {
-            if row.address() > probe {
-                break;
-            }
+        let sequence = &lines.sequences[idx];
 
-            file = row.file(lines.lnp.header());
-            line = row.line();
-            column = match row.column() {
-                gimli::ColumnType::LeftEdge => None,
-                gimli::ColumnType::Column(x) => Some(x),
-            };
-        }
-
-        let file = match file {
-            Some(file) => Some(self.render_file(file, lines, sections)?),
-            None => None,
+        let idx = sequence
+            .rows
+            .binary_search_by(|row| row.address.cmp(&probe));
+        let idx = match idx {
+            Ok(x) => x,
+            Err(0) => return Ok(None),
+            Err(x) => x - 1,
         };
+        let row = &sequence.rows[idx];
 
-        Ok(Some(Location { file, line, column }))
+        let file = lines.files.get(row.file_index as usize).map(String::as_str);
+        Ok(Some(Location {
+            file,
+            line: row.line,
+            column: row.column,
+        }))
     }
 
     fn render_file(
         &self,
         file: &gimli::FileEntry<R, R::Offset>,
-        lines: &Lines<R>,
+        header: &gimli::LineProgramHeader<R, R::Offset>,
         sections: &gimli::Dwarf<R>,
     ) -> Result<String, gimli::Error> {
         let mut path = if let Some(ref comp_dir) = self.dw_unit.comp_dir {
-            String::from(comp_dir.to_string_lossy()?.as_ref())
+            comp_dir.to_string_lossy()?.into_owned()
         } else {
             String::new()
         };
 
-        if let Some(directory) = file.directory(lines.lnp.header()) {
+        if let Some(directory) = file.directory(header) {
             path_push(
                 &mut path,
                 sections
@@ -541,7 +597,7 @@ where
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
     funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
-    next: Option<Location>,
+    next: Option<Location<'ctx>>,
 }
 
 impl<'ctx, R> FrameIter<'ctx, R>
@@ -549,7 +605,7 @@ where
     R: gimli::Reader + 'ctx,
 {
     /// Advances the iterator and returns the next frame.
-    pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let (loc, func) = match (self.next.take(), self.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
@@ -573,13 +629,12 @@ where
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => match unit.parse_lines()? {
-                    Some(lines) => match lines.lnp.header().file(fi) {
-                        Some(file) => Some(unit.render_file(file, lines, self.sections)?),
+                Some(gimli::AttributeValue::FileIndex(fi)) => {
+                    match unit.parse_lines(self.sections)? {
+                        Some(lines) => lines.files.get(fi as usize).map(String::as_str),
                         None => None,
-                    },
-                    None => None,
-                },
+                    }
+                }
                 _ => None,
             };
 
@@ -608,26 +663,27 @@ impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {
-    type Item = Frame<R>;
+    type Item = Frame<'ctx, R>;
     type Error = Error;
 
     #[inline]
-    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         self.next()
     }
 }
 
 /// A function frame.
-pub struct Frame<R: gimli::Reader> {
+pub struct Frame<'ctx, R: gimli::Reader> {
     /// The name of the function.
     pub function: Option<FunctionName<R>>,
     /// The source location corresponding to this frame.
-    pub location: Option<Location>,
+    pub location: Option<Location<'ctx>>,
 }
 
 /// A function name.
 pub struct FunctionName<R: gimli::Reader> {
-    name: R,
+    /// The name of the function.
+    pub name: R,
     /// The language of the compilation unit containing this function.
     pub language: Option<gimli::DwLang>,
 }
@@ -686,9 +742,9 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
 }
 
 /// A source location.
-pub struct Location {
+pub struct Location<'a> {
     /// The file name.
-    pub file: Option<String>,
+    pub file: Option<&'a str>,
     /// The line number.
     pub line: Option<u64>,
     /// The column number.
