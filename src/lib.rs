@@ -252,7 +252,7 @@ impl<R: gimli::Reader> Context<R> {
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
-    pub fn find_location(&self, probe: u64) -> Result<Option<Location>, Error> {
+    pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
         match self.find_unit(probe) {
             Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
             None => Ok(None),
@@ -292,8 +292,8 @@ impl<R: gimli::Reader> Context<R> {
     }
 }
 
-struct Lines<R: gimli::Reader> {
-    lnp: gimli::IncompleteLineProgram<R, R::Offset>,
+struct Lines {
+    files: Vec<String>,
     sequences: Vec<LineSequence>,
 }
 
@@ -321,7 +321,7 @@ where
 {
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
-    lines: LazyCell<Result<Lines<R>, Error>>,
+    lines: LazyCell<Result<Lines, Error>>,
     funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
 }
 
@@ -329,7 +329,7 @@ impl<R> ResUnit<R>
 where
     R: gimli::Reader,
 {
-    fn parse_lines(&self) -> Result<Option<&Lines<R>>, Error> {
+    fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
         let ilnp = match self.dw_unit.line_program {
             Some(ref ilnp) => ilnp,
             None => return Ok(None),
@@ -376,9 +376,17 @@ where
                         column,
                     });
                 }
-                let lnp = ilnp.clone();
                 sequences.sort_by_key(|x| x.start);
-                Ok(Lines { lnp, sequences })
+
+                let mut files = Vec::new();
+                let mut index = 0;
+                let header = ilnp.header();
+                while let Some(file) = header.file(index) {
+                    files.push(self.render_file(file, header, sections)?);
+                    index += 1;
+                }
+
+                Ok(Lines { files, sequences })
             })
             .as_ref()
             .map(Some)
@@ -430,8 +438,8 @@ where
         &self,
         probe: u64,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Option<Location>, Error> {
-        let lines = match self.parse_lines()? {
+    ) -> Result<Option<Location<'_>>, Error> {
+        let lines = match self.parse_lines(sections)? {
             Some(lines) => lines,
             None => return Ok(None),
         };
@@ -461,10 +469,7 @@ where
         };
         let row = &sequence.rows[idx];
 
-        let file = match lines.lnp.header().file(row.file_index) {
-            Some(file) => Some(self.render_file(file, lines, sections)?),
-            None => None,
-        };
+        let file = lines.files.get(row.file_index as usize).map(String::as_str);
         Ok(Some(Location {
             file,
             line: row.line,
@@ -475,16 +480,16 @@ where
     fn render_file(
         &self,
         file: &gimli::FileEntry<R, R::Offset>,
-        lines: &Lines<R>,
+        header: &gimli::LineProgramHeader<R, R::Offset>,
         sections: &gimli::Dwarf<R>,
     ) -> Result<String, gimli::Error> {
         let mut path = if let Some(ref comp_dir) = self.dw_unit.comp_dir {
-            String::from(comp_dir.to_string_lossy()?.as_ref())
+            comp_dir.to_string_lossy()?.into_owned()
         } else {
             String::new()
         };
 
-        if let Some(directory) = file.directory(lines.lnp.header()) {
+        if let Some(directory) = file.directory(header) {
             path_push(
                 &mut path,
                 sections
@@ -592,7 +597,7 @@ where
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
     funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
-    next: Option<Location>,
+    next: Option<Location<'ctx>>,
 }
 
 impl<'ctx, R> FrameIter<'ctx, R>
@@ -600,7 +605,7 @@ where
     R: gimli::Reader + 'ctx,
 {
     /// Advances the iterator and returns the next frame.
-    pub fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let (loc, func) = match (self.next.take(), self.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
@@ -624,13 +629,12 @@ where
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
             let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => match unit.parse_lines()? {
-                    Some(lines) => match lines.lnp.header().file(fi) {
-                        Some(file) => Some(unit.render_file(file, lines, self.sections)?),
+                Some(gimli::AttributeValue::FileIndex(fi)) => {
+                    match unit.parse_lines(self.sections)? {
+                        Some(lines) => lines.files.get(fi as usize).map(String::as_str),
                         None => None,
-                    },
-                    None => None,
-                },
+                    }
+                }
                 _ => None,
             };
 
@@ -659,21 +663,21 @@ impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {
-    type Item = Frame<R>;
+    type Item = Frame<'ctx, R>;
     type Error = Error;
 
     #[inline]
-    fn next(&mut self) -> Result<Option<Frame<R>>, Error> {
+    fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         self.next()
     }
 }
 
 /// A function frame.
-pub struct Frame<R: gimli::Reader> {
+pub struct Frame<'ctx, R: gimli::Reader> {
     /// The name of the function.
     pub function: Option<FunctionName<R>>,
     /// The source location corresponding to this frame.
-    pub location: Option<Location>,
+    pub location: Option<Location<'ctx>>,
 }
 
 /// A function name.
@@ -737,9 +741,9 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
 }
 
 /// A source location.
-pub struct Location {
+pub struct Location<'a> {
     /// The file name.
-    pub file: Option<String>,
+    pub file: Option<&'a str>,
     /// The line number.
     pub line: Option<u64>,
     /// The column number.
