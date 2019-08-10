@@ -58,6 +58,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use std::cmp::Ordering;
+use std::mem;
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
@@ -292,8 +293,21 @@ impl<R: gimli::Reader> Context<R> {
 }
 
 struct Lines<R: gimli::Reader> {
-    lnp: gimli::CompleteLineProgram<R, R::Offset>,
-    sequences: Vec<gimli::LineSequence<R>>,
+    lnp: gimli::IncompleteLineProgram<R, R::Offset>,
+    sequences: Vec<LineSequence>,
+}
+
+struct LineSequence {
+    start: u64,
+    end: u64,
+    rows: Vec<LineRow>,
+}
+
+struct LineRow {
+    address: u64,
+    file_index: u64,
+    line: Option<u64>,
+    column: Option<u64>,
 }
 
 struct Func<T> {
@@ -322,8 +336,47 @@ where
         };
         self.lines
             .borrow_with(|| {
-                let (lnp, mut sequences) = ilnp.clone().sequences()?;
-                sequences.retain(|x| x.start != 0);
+                let mut sequences = Vec::new();
+                let mut sequence_rows = Vec::<LineRow>::new();
+                let mut rows = ilnp.clone().rows();
+                while let Some((_, row)) = rows.next_row()? {
+                    if row.end_sequence() {
+                        if let Some(start) = sequence_rows.first().map(|x| x.address) {
+                            let end = row.address();
+                            let mut rows = Vec::new();
+                            mem::swap(&mut rows, &mut sequence_rows);
+                            if start != 0 {
+                                sequences.push(LineSequence { start, end, rows });
+                            }
+                        }
+                        continue;
+                    }
+
+                    let address = row.address();
+                    let file_index = row.file_index();
+                    let line = row.line();
+                    let column = match row.column() {
+                        gimli::ColumnType::LeftEdge => None,
+                        gimli::ColumnType::Column(x) => Some(x),
+                    };
+
+                    if let Some(last_row) = sequence_rows.last_mut() {
+                        if last_row.address == address {
+                            last_row.file_index = file_index;
+                            last_row.line = line;
+                            last_row.column = column;
+                            continue;
+                        }
+                    }
+
+                    sequence_rows.push(LineRow {
+                        address,
+                        file_index,
+                        line,
+                        column,
+                    });
+                }
+                let lnp = ilnp.clone();
                 sequences.sort_by_key(|x| x.start);
                 Ok(Lines { lnp, sequences })
             })
@@ -382,10 +435,11 @@ where
             Some(lines) => lines,
             None => return Ok(None),
         };
-        let idx = lines.sequences.binary_search_by(|ln| {
-            if probe < ln.start {
+
+        let idx = lines.sequences.binary_search_by(|sequence| {
+            if probe < sequence.start {
                 Ordering::Greater
-            } else if probe >= ln.end {
+            } else if probe >= sequence.end {
                 Ordering::Less
             } else {
                 Ordering::Equal
@@ -395,30 +449,27 @@ where
             Ok(x) => x,
             Err(_) => return Ok(None),
         };
-        let ln = &lines.sequences[idx];
-        let mut sm = lines.lnp.resume_from(ln);
-        let mut file = None;
-        let mut line = None;
-        let mut column = None;
-        while let Some((_, row)) = sm.next_row()? {
-            if row.address() > probe {
-                break;
-            }
+        let sequence = &lines.sequences[idx];
 
-            file = row.file(lines.lnp.header());
-            line = row.line();
-            column = match row.column() {
-                gimli::ColumnType::LeftEdge => None,
-                gimli::ColumnType::Column(x) => Some(x),
-            };
-        }
+        let idx = sequence
+            .rows
+            .binary_search_by(|row| row.address.cmp(&probe));
+        let idx = match idx {
+            Ok(x) => x,
+            Err(0) => return Ok(None),
+            Err(x) => x - 1,
+        };
+        let row = &sequence.rows[idx];
 
-        let file = match file {
+        let file = match lines.lnp.header().file(row.file_index) {
             Some(file) => Some(self.render_file(file, lines, sections)?),
             None => None,
         };
-
-        Ok(Some(Location { file, line, column }))
+        Ok(Some(Location {
+            file,
+            line: row.line,
+            column: row.column,
+        }))
     }
 
     fn render_file(
