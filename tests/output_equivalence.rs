@@ -3,9 +3,9 @@ extern crate findshlibs;
 extern crate rustc_test as test;
 
 use std::env;
-use std::process::Command;
-use std::path::Path;
 use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
 
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
@@ -40,7 +40,7 @@ fn make_trace() -> Vec<String> {
         .collect()
 }
 
-fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[String]) -> String {
+fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &str) -> String {
     let mut cmd = Command::new(exe);
     cmd.env("LC_ALL", "C"); // GNU addr2line is localized, we aren't
     cmd.env("RUST_BACKTRACE", "1"); // if a child crashes, we want to know why
@@ -48,7 +48,7 @@ fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &[Str
     if let Some(flags) = flags {
         cmd.arg(flags);
     }
-    cmd.arg("--exe").arg(me).args(trace);
+    cmd.arg("--exe").arg(me).arg(trace);
 
     let output = cmd.output().unwrap();
 
@@ -68,15 +68,20 @@ fn run_test(flags: Option<&str>) {
 
     let trace = make_trace();
 
-    let theirs = run_cmd("addr2line", &me, flags, &trace);
-    let ours = run_cmd(&exe, &me, flags, &trace);
+    // HACK: GNU addr2line has a bug where looking up multiple addresses can cause the second
+    // lookup to fail. Workaround by doing one address at a time.
+    for addr in &trace {
+        let theirs = run_cmd("addr2line", &me, flags, addr);
+        let ours = run_cmd(&exe, &me, flags, addr);
 
-    // HACK: GNU addr2line does not tidy up paths properly, causing double slashes to be printed
-    //       for for inlined frames from /src/libpanic_unwind/lib.rs
-    // We consider our behavior to be correct, so we fix their output to match ours.
-    let theirs = theirs.replace("//src", "/src");
+        // HACK: GNU addr2line does not tidy up paths properly, causing double slashes to be printed
+        //       for for inlined frames from /src/libpanic_unwind/lib.rs
+        // We consider our behavior to be correct, so we fix their output to match ours.
+        let theirs = theirs.replace("//src", "/src");
 
-    assert!(theirs == ours, "Output not equivalent:
+        assert!(
+            theirs == ours,
+            "Output not equivalent:
 
 $ addr2line {0} --exe {1} {2}
 {4}
@@ -84,7 +89,15 @@ $ {3} {0} --exe {1} {2}
 {5}
 
 
-", flags.unwrap_or(""), me.display(), trace.join(" "), exe.display(), theirs, ours);
+",
+            flags.unwrap_or(""),
+            me.display(),
+            trace.join(" "),
+            exe.display(),
+            theirs,
+            ours
+        );
+    }
 }
 
 static FLAGS: &'static str = "aipsf";
@@ -105,20 +118,19 @@ fn make_tests() -> Vec<TestDescAndFn> {
                 Some(param)
             }
         })
-        .map(|param| {
-            TestDescAndFn {
-                desc: TestDesc {
-                    name: TestName::DynTestName(
-                        format!("addr2line {}", param.as_ref().map_or("", String::as_str)),
-                    ),
-                    ignore: false,
-                    should_panic: ShouldPanic::No,
-                    allow_fail: false,
-                },
-                testfn: TestFn::DynTestFn(
-                    Box::new(move || run_test(param.as_ref().map(String::as_str))),
-                ),
-            }
+        .map(|param| TestDescAndFn {
+            desc: TestDesc {
+                name: TestName::DynTestName(format!(
+                    "addr2line {}",
+                    param.as_ref().map_or("", String::as_str)
+                )),
+                ignore: false,
+                should_panic: ShouldPanic::No,
+                allow_fail: false,
+            },
+            testfn: TestFn::DynTestFn(Box::new(move || {
+                run_test(param.as_ref().map(String::as_str))
+            })),
         })
         .collect()
 }

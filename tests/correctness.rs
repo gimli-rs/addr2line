@@ -7,8 +7,8 @@ extern crate object;
 
 use std::fs::File;
 
-use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use addr2line::Context;
+use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 
 #[test]
 fn correctness() {
