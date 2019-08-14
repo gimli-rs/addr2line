@@ -38,7 +38,6 @@ extern crate core as std;
 extern crate cpp_demangle;
 pub extern crate fallible_iterator;
 pub extern crate gimli;
-extern crate intervaltree;
 extern crate lazycell;
 #[cfg(feature = "object")]
 pub extern crate object;
@@ -58,11 +57,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use std::cmp::Ordering;
+use std::iter;
 use std::mem;
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
-use intervaltree::{Element, IntervalTree};
 use lazycell::LazyCell;
 use smallvec::SmallVec;
 
@@ -279,10 +278,31 @@ impl<R: gimli::Reader> Context<R> {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
-                let funcs = unit.parse_functions(&self.sections)?;
-                let mut res: SmallVec<[_; 16]> =
-                    funcs.query_point(probe).map(|x| &x.value).collect();
-                res.sort_by_key(|x| -x.depth);
+                let functions = unit.parse_functions(&self.sections)?;
+                let mut res: SmallVec<[_; 16]> = SmallVec::new();
+                if let Ok(address) = functions.addresses.binary_search_by(|address| {
+                    if probe < address.range.begin {
+                        Ordering::Greater
+                    } else if probe >= address.range.end {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                }) {
+                    let mut address = &functions.addresses[address];
+                    loop {
+                        let function = &functions.functions[address.function];
+                        res.push(function);
+                        if let Some(inlined) = function.inlined.iter().find(|inlined| {
+                            probe >= inlined.range.begin && probe < inlined.range.end
+                        }) {
+                            address = inlined;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 (unit_id, loc, res)
             }
             None => (0, None, SmallVec::new()),
@@ -292,7 +312,7 @@ impl<R: gimli::Reader> Context<R> {
             unit_id,
             units: &self.units,
             sections: &self.sections,
-            funcs: funcs.into_iter(),
+            funcs: funcs.into_iter().rev(),
             next: loc,
         })
     }
@@ -334,11 +354,6 @@ struct LineRow {
     column: Option<u64>,
 }
 
-struct Func<T> {
-    entry_off: gimli::UnitOffset<T>,
-    depth: isize,
-}
-
 struct ResUnit<R>
 where
     R: gimli::Reader,
@@ -346,7 +361,7 @@ where
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
+    funcs: LazyCell<Result<Functions<R::Offset>, Error>>,
 }
 
 impl<R> ResUnit<R>
@@ -417,43 +432,9 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(
-        &self,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<&IntervalTree<u64, Func<R::Offset>>, Error> {
+    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<&Functions<R::Offset>, Error> {
         self.funcs
-            .borrow_with(|| {
-                let mut results = Vec::new();
-                let mut depth = 0;
-                let mut cursor = self.dw_unit.entries();
-                while let Some((d, entry)) = cursor.next_dfs()? {
-                    depth += d;
-                    match entry.tag() {
-                        gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                            let mut ranges = sections.die_ranges(&self.dw_unit, entry)?;
-                            while let Some(range) = ranges.next()? {
-                                // Ignore invalid DWARF so that a query of 0 does not give
-                                // a long list of matches.
-                                // TODO: don't ignore if there is a section at this address
-                                if range.begin == 0 {
-                                    continue;
-                                }
-                                results.push(Element {
-                                    range: range.begin..range.end,
-                                    value: Func {
-                                        entry_off: entry.offset(),
-                                        depth,
-                                    },
-                                });
-                            }
-                        }
-                        _ => (),
-                    }
-                }
-
-                let tree: IntervalTree<_, _> = results.into_iter().collect();
-                Ok(tree)
-            })
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -612,6 +593,140 @@ where
     Ok(None)
 }
 
+#[derive(Debug)]
+struct FunctionAddress {
+    range: gimli::Range,
+    function: usize,
+}
+
+struct Functions<T> {
+    addresses: Vec<FunctionAddress>,
+    functions: Vec<Function<T>>,
+}
+
+impl<T: gimli::ReaderOffset> Functions<T> {
+    fn parse<R: gimli::Reader<Offset = T>>(
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<Functions<T>, Error> {
+        let mut functions = Vec::new();
+        let mut addresses = Vec::new();
+        // These are ignored.
+        let mut inlined = Vec::new();
+        let mut entries = unit.entries();
+        while entries.next_entry()?.is_some() {
+            let recurse = if let Some(entry) = entries.current() {
+                if entry.tag() == gimli::DW_TAG_subprogram {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if recurse {
+                Function::parse(
+                    &mut entries,
+                    unit,
+                    sections,
+                    &mut functions,
+                    &mut addresses,
+                    &mut inlined,
+                )?;
+            }
+        }
+        addresses.sort_by_key(|x| x.range.begin);
+        debug_assert!(addresses
+            .windows(2)
+            .all(|w| w[0].range.end <= w[1].range.begin));
+
+        Ok(Functions {
+            addresses,
+            functions,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Function<T> {
+    offset: gimli::UnitOffset<T>,
+    inlined: Vec<FunctionAddress>,
+}
+
+impl<T: gimli::ReaderOffset> Function<T> {
+    fn parse<R: gimli::Reader<Offset = T>>(
+        entries: &mut gimli::EntriesCursor<R>,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+        functions: &mut Vec<Function<T>>,
+        addresses: &mut Vec<FunctionAddress>,
+        inlined: &mut Vec<FunctionAddress>,
+    ) -> Result<(), Error> {
+        let offset = entries.current().unwrap().offset();
+        let tag = entries.current().unwrap().tag();
+        let mut ranges = sections.die_ranges(unit, entries.current().unwrap())?;
+
+        let mut local_inlined = Vec::new();
+        let mut depth = if entries.current().unwrap().has_children() {
+            1
+        } else {
+            0
+        };
+        while depth > 0 && entries.next_entry()?.is_some() {
+            let recurse = if let Some(entry) = entries.current() {
+                match entry.tag() {
+                    gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => true,
+                    _ => {
+                        if entry.has_children() {
+                            depth += 1;
+                        }
+                        false
+                    }
+                }
+            } else {
+                depth -= 1;
+                false
+            };
+            if recurse {
+                Function::parse(
+                    entries,
+                    unit,
+                    sections,
+                    functions,
+                    addresses,
+                    &mut local_inlined,
+                )?;
+            }
+        }
+
+        let function_index = functions.len();
+        functions.push(Function {
+            offset,
+            inlined: local_inlined,
+        });
+
+        while let Some(range) = ranges.next()? {
+            // Ignore invalid DWARF so that a query of 0 does not give
+            // a long list of matches.
+            // TODO: don't ignore if there is a section at this address
+            if range.begin == 0 {
+                continue;
+            }
+            let address = FunctionAddress {
+                range,
+                function: function_index,
+            };
+            if tag == gimli::DW_TAG_inlined_subroutine {
+                inlined.push(address);
+            } else {
+                addresses.push(address);
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// An iterator over function frames.
 pub struct FrameIter<'ctx, R>
 where
@@ -620,7 +735,7 @@ where
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
+    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R::Offset>; 16]>>,
     next: Option<Location<'ctx>>,
 }
 
@@ -643,7 +758,7 @@ where
 
         let unit = &self.units[self.unit_id];
 
-        let mut cursor = unit.dw_unit.entries_at_offset(func.entry_off)?;
+        let mut cursor = unit.dw_unit.entries_at_offset(func.offset)?;
         let (_, entry) = cursor
             .next_dfs()?
             .expect("DIE we read a while ago is no longer readable??");
