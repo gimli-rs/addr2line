@@ -50,12 +50,36 @@ fn get_test_addresses(target: &object::File) -> Vec<u64> {
 }
 
 #[bench]
-fn context_new_location(b: &mut test::Bencher) {
+fn context_new(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
         b.iter(|| {
             addr2line::Context::new(file).unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_new_parse_lines(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let context = addr2line::Context::new(file).unwrap();
+            context.parse_lines().unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_new_parse_functions(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let context = addr2line::Context::new(file).unwrap();
+            context.parse_functions().unwrap();
         });
     });
 }

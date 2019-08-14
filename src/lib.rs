@@ -296,6 +296,24 @@ impl<R: gimli::Reader> Context<R> {
             next: loc,
         })
     }
+
+    /// Initialize all line data structures. This is used for benchmarks.
+    #[doc(hidden)]
+    pub fn parse_lines(&self) -> Result<(), Error> {
+        for unit in &self.units {
+            unit.parse_lines(&self.sections)?;
+        }
+        Ok(())
+    }
+
+    /// Initialize all function data structures. This is used for benchmarks.
+    #[doc(hidden)]
+    pub fn parse_functions(&self) -> Result<(), Error> {
+        for unit in &self.units {
+            unit.parse_functions(&self.sections)?;
+        }
+        Ok(())
+    }
 }
 
 struct Lines {
