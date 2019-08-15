@@ -541,25 +541,32 @@ where
         return Ok(None);
     }
 
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_linkage_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
-        }
-    }
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_MIPS_linkage_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
-        }
-    }
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
+    let mut name = None;
+    let mut next = None;
+    let mut attrs = entry.attrs();
+    while let Some(attr) = attrs.next()? {
+        match attr.name() {
+            gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    return Ok(Some(val));
+                }
+            }
+            gimli::DW_AT_name => {
+                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    name = Some(val);
+                }
+            }
+            gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                next = Some(attr.value());
+            }
+            _ => {}
         }
     }
 
-    let next = entry
-        .attr_value(gimli::DW_AT_abstract_origin)?
-        .or(entry.attr_value(gimli::DW_AT_specification)?);
+    if name.is_some() {
+        return Ok(name);
+    }
+
     match next {
         Some(gimli::AttributeValue::UnitRef(offset)) => {
             let mut entries = unit.dw_unit.entries_at_offset(offset)?;
@@ -767,25 +774,30 @@ where
         let name = name_attr(entry, unit, self.sections, self.units, 16)?;
 
         if entry.tag() == gimli::DW_TAG_inlined_subroutine {
-            let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    match unit.parse_lines(self.sections)? {
-                        Some(lines) => lines.files.get(fi as usize).map(String::as_str),
-                        None => None,
+            let mut next = Location::default();
+            let mut attrs = entry.attrs();
+            while let Some(attr) = attrs.next()? {
+                match attr.name() {
+                    gimli::DW_AT_call_file => {
+                        if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                            if let Some(lines) = unit.parse_lines(self.sections)? {
+                                next.file = lines.files.get(fi as usize).map(String::as_str);
+                            }
+                        }
                     }
+                    gimli::DW_AT_call_line => {
+                        next.line =
+                            attr.udata_value()
+                                .and_then(|x| if x == 0 { None } else { Some(x) });
+                    }
+                    gimli::DW_AT_call_column => {
+                        next.column = attr.udata_value();
+                    }
+                    _ => {}
                 }
-                _ => None,
-            };
+            }
 
-            let line = entry
-                .attr(gimli::DW_AT_call_line)?
-                .and_then(|x| x.udata_value())
-                .and_then(|x| if x == 0 { None } else { Some(x) });
-            let column = entry
-                .attr(gimli::DW_AT_call_column)?
-                .and_then(|x| x.udata_value());
-
-            self.next = Some(Location { file, line, column });
+            self.next = Some(next);
         }
 
         Ok(Some(Frame {
@@ -881,6 +893,7 @@ pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str
 }
 
 /// A source location.
+#[derive(Default)]
 pub struct Location<'a> {
     /// The file name.
     pub file: Option<&'a str>,
