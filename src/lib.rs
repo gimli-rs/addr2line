@@ -278,7 +278,7 @@ impl<R: gimli::Reader> Context<R> {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
-                let functions = unit.parse_functions(&self.sections)?;
+                let functions = unit.parse_functions(&self.sections, &self.units)?;
                 let mut res: SmallVec<[_; 16]> = SmallVec::new();
                 if let Ok(address) = functions.addresses.binary_search_by(|address| {
                     if probe < address.range.begin {
@@ -330,7 +330,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
         for unit in &self.units {
-            unit.parse_functions(&self.sections)?;
+            unit.parse_functions(&self.sections, &self.units)?;
         }
         Ok(())
     }
@@ -361,7 +361,7 @@ where
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<Functions<R::Offset>, Error>>,
+    funcs: LazyCell<Result<Functions<R>, Error>>,
 }
 
 impl<R> ResUnit<R>
@@ -432,9 +432,13 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<&Functions<R::Offset>, Error> {
+    fn parse_functions(
+        &self,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+    ) -> Result<&Functions<R>, Error> {
         self.funcs
-            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections, units))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -529,7 +533,7 @@ fn path_push(path: &mut String, p: &str) {
 
 fn name_attr<'abbrev, 'unit, R>(
     entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
-    unit: &ResUnit<R>,
+    unit: &gimli::Unit<R>,
     sections: &gimli::Dwarf<R>,
     units: &[ResUnit<R>],
     recursion_limit: usize,
@@ -547,12 +551,12 @@ where
     while let Some(attr) = attrs.next()? {
         match attr.name() {
             gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                if let Ok(val) = sections.attr_string(unit, attr.value()) {
                     return Ok(Some(val));
                 }
             }
             gimli::DW_AT_name => {
-                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                if let Ok(val) = sections.attr_string(unit, attr.value()) {
                     name = Some(val);
                 }
             }
@@ -569,7 +573,7 @@ where
 
     match next {
         Some(gimli::AttributeValue::UnitRef(offset)) => {
-            let mut entries = unit.dw_unit.entries_at_offset(offset)?;
+            let mut entries = unit.entries_at_offset(offset)?;
             if let Some((_, entry)) = entries.next_dfs()? {
                 return name_attr(entry, unit, sections, units, recursion_limit - 1);
             } else {
@@ -582,11 +586,11 @@ where
                 .filter_map(|unit| {
                     gimli::UnitSectionOffset::DebugInfoOffset(dr)
                         .to_unit_offset(&unit.dw_unit)
-                        .map(|uo| (unit, uo))
+                        .map(|uo| (&unit.dw_unit, uo))
                 })
                 .next()
             {
-                let mut entries = unit.dw_unit.entries_at_offset(offset)?;
+                let mut entries = unit.entries_at_offset(offset)?;
                 if let Some((_, entry)) = entries.next_dfs()? {
                     return name_attr(entry, unit, sections, units, recursion_limit - 1);
                 }
@@ -606,16 +610,17 @@ struct FunctionAddress {
     function: usize,
 }
 
-struct Functions<T> {
+struct Functions<R> {
     addresses: Vec<FunctionAddress>,
-    functions: Vec<Function<T>>,
+    functions: Vec<Function<R>>,
 }
 
-impl<T: gimli::ReaderOffset> Functions<T> {
-    fn parse<R: gimli::Reader<Offset = T>>(
+impl<R: gimli::Reader> Functions<R> {
+    fn parse(
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Functions<T>, Error> {
+        units: &[ResUnit<R>],
+    ) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
         // These are ignored.
@@ -636,6 +641,7 @@ impl<T: gimli::ReaderOffset> Functions<T> {
                     &mut entries,
                     unit,
                     sections,
+                    units,
                     &mut functions,
                     &mut addresses,
                     &mut inlined,
@@ -655,23 +661,53 @@ impl<T: gimli::ReaderOffset> Functions<T> {
 }
 
 #[derive(Debug)]
-struct Function<T> {
-    offset: gimli::UnitOffset<T>,
+struct Function<R> {
+    name: Option<R>,
+    call_file: Option<u64>,
+    call_line: Option<u64>,
+    call_column: Option<u64>,
     inlined: Vec<FunctionAddress>,
 }
 
-impl<T: gimli::ReaderOffset> Function<T> {
-    fn parse<R: gimli::Reader<Offset = T>>(
+impl<R: gimli::Reader> Function<R> {
+    fn parse(
         entries: &mut gimli::EntriesCursor<R>,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
-        functions: &mut Vec<Function<T>>,
+        units: &[ResUnit<R>],
+        functions: &mut Vec<Function<R>>,
         addresses: &mut Vec<FunctionAddress>,
         inlined: &mut Vec<FunctionAddress>,
     ) -> Result<(), Error> {
-        let offset = entries.current().unwrap().offset();
         let tag = entries.current().unwrap().tag();
         let mut ranges = sections.die_ranges(unit, entries.current().unwrap())?;
+
+        let name = name_attr(entries.current().unwrap(), unit, sections, units, 16)?;
+
+        let mut call_file = None;
+        let mut call_line = None;
+        let mut call_column = None;
+        if tag == gimli::DW_TAG_inlined_subroutine {
+            let mut attrs = entries.current().unwrap().attrs();
+            while let Some(attr) = attrs.next()? {
+                match attr.name() {
+                    gimli::DW_AT_call_file => {
+                        if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                            call_file = Some(fi);
+                        }
+                    }
+                    gimli::DW_AT_call_line => {
+                        call_line =
+                            attr.udata_value()
+                                .and_then(|x| if x == 0 { None } else { Some(x) });
+                    }
+                    gimli::DW_AT_call_column => {
+                        call_column = attr.udata_value();
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let mut local_inlined = Vec::new();
         let mut depth = if entries.current().unwrap().has_children() {
@@ -699,6 +735,7 @@ impl<T: gimli::ReaderOffset> Function<T> {
                     entries,
                     unit,
                     sections,
+                    units,
                     functions,
                     addresses,
                     &mut local_inlined,
@@ -708,7 +745,10 @@ impl<T: gimli::ReaderOffset> Function<T> {
 
         let function_index = functions.len();
         functions.push(Function {
-            offset,
+            name,
+            call_file,
+            call_line,
+            call_column,
             inlined: local_inlined,
         });
 
@@ -742,7 +782,7 @@ where
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R::Offset>; 16]>>,
+    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R>; 16]>>,
     next: Option<Location<'ctx>>,
 }
 
@@ -765,43 +805,22 @@ where
 
         let unit = &self.units[self.unit_id];
 
-        let mut cursor = unit.dw_unit.entries_at_offset(func.offset)?;
-        let (_, entry) = cursor
-            .next_dfs()?
-            .expect("DIE we read a while ago is no longer readable??");
-
-        // Set an arbitrary recursion limit of 16
-        let name = name_attr(entry, unit, self.sections, self.units, 16)?;
-
-        if entry.tag() == gimli::DW_TAG_inlined_subroutine {
-            let mut next = Location::default();
-            let mut attrs = entry.attrs();
-            while let Some(attr) = attrs.next()? {
-                match attr.name() {
-                    gimli::DW_AT_call_file => {
-                        if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
-                            if let Some(lines) = unit.parse_lines(self.sections)? {
-                                next.file = lines.files.get(fi as usize).map(String::as_str);
-                            }
-                        }
-                    }
-                    gimli::DW_AT_call_line => {
-                        next.line =
-                            attr.udata_value()
-                                .and_then(|x| if x == 0 { None } else { Some(x) });
-                    }
-                    gimli::DW_AT_call_column => {
-                        next.column = attr.udata_value();
-                    }
-                    _ => {}
+        if self.funcs.len() != 0 {
+            let mut next = Location {
+                file: None,
+                line: func.call_line,
+                column: func.call_column,
+            };
+            if let Some(fi) = func.call_file {
+                if let Some(lines) = unit.parse_lines(self.sections)? {
+                    next.file = lines.files.get(fi as usize).map(String::as_str);
                 }
             }
-
             self.next = Some(next);
         }
 
         Ok(Some(Frame {
-            function: name.map(|name| FunctionName {
+            function: func.name.clone().map(|name| FunctionName {
                 name,
                 language: unit.lang,
             }),
