@@ -181,26 +181,65 @@ impl<R: gimli::Reader> Context<R> {
                 Err(_) => continue,
             };
 
-            let lang;
+            let mut lang = None;
             {
                 let mut cursor = dw_unit.entries();
 
-                let unit = match cursor.next_dfs()? {
-                    Some((_, unit)) if unit.tag() == gimli::DW_TAG_compile_unit => unit,
+                let entry = match cursor.next_dfs()? {
+                    Some((_, entry)) if entry.tag() == gimli::DW_TAG_compile_unit => entry,
                     _ => continue, // wtf?
                 };
 
-                lang = match unit.attr_value(gimli::DW_AT_language)? {
-                    Some(gimli::AttributeValue::Language(lang)) => Some(lang),
-                    _ => None,
-                };
-                let mut ranges = sections.unit_ranges(&dw_unit)?;
-                while let Some(range) = ranges.next()? {
-                    if range.begin == range.end {
-                        continue;
+                let mut low_pc = None;
+                let mut high_pc = None;
+                let mut size = None;
+                let mut ranges = None;
+                let mut attrs = entry.attrs();
+                while let Some(attr) = attrs.next()? {
+                    match attr.name() {
+                        gimli::DW_AT_low_pc => {
+                            if let gimli::AttributeValue::Addr(val) = attr.value() {
+                                low_pc = Some(val);
+                            }
+                        }
+                        gimli::DW_AT_high_pc => match attr.value() {
+                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
+                            gimli::AttributeValue::Udata(val) => size = Some(val),
+                            _ => {}
+                        },
+                        gimli::DW_AT_ranges => {
+                            ranges = sections.attr_ranges_offset(&dw_unit, attr.value())?;
+                        }
+                        gimli::DW_AT_language => {
+                            if let gimli::AttributeValue::Language(val) = attr.value() {
+                                lang = Some(val);
+                            }
+                        }
+                        _ => {}
                     }
+                }
 
-                    unit_ranges.push((range, unit_id));
+                if let Some(offset) = ranges {
+                    let mut ranges = sections.ranges(&dw_unit, offset)?;
+                    while let Some(range) = ranges.next()? {
+                        if range.begin != range.end {
+                            unit_ranges.push((range, unit_id));
+                        }
+                    }
+                } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
+                    if begin != end {
+                        unit_ranges.push((gimli::Range { begin, end }, unit_id));
+                    }
+                } else if let (Some(begin), Some(size)) = (low_pc, size) {
+                    if size != 0 {
+                        unit_ranges.push((
+                            gimli::Range {
+                                begin,
+                                end: begin + size,
+                            },
+                            unit_id,
+                        ));
+                    }
                 }
             }
 
