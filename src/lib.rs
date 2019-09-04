@@ -174,7 +174,10 @@ impl<R: gimli::Reader> Context<R> {
         let mut units = sections.units();
         while let Some(header) = units.next()? {
             let unit_id = res_units.len();
-            let dw_unit = sections.unit(header)?;
+            let dw_unit = match sections.unit(header) {
+                Ok(dw_unit) => dw_unit,
+                Err(_) => continue,
+            };
 
             let lang;
             {
