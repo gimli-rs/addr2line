@@ -152,7 +152,7 @@ impl<R: gimli::Reader> Context<R> {
         debug_str_offsets: gimli::DebugStrOffsets<R>,
         default_section: R,
     ) -> Result<Self, Error> {
-        let sections = gimli::Dwarf {
+        Self::from_dwarf(gimli::Dwarf {
             debug_abbrev,
             debug_addr,
             debug_info,
@@ -167,8 +167,11 @@ impl<R: gimli::Reader> Context<R> {
                 default_section.clone().into(),
             ),
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
-        };
+        })
+    }
 
+    /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
+    pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Self, Error> {
         let mut unit_ranges = Vec::new();
         let mut res_units = Vec::new();
         let mut units = sections.units();
