@@ -68,17 +68,6 @@ fn context_new_location(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_with_functions(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        b.iter(|| {
-            addr2line::Context::new(file).unwrap();
-        });
-    });
-}
-
-#[bench]
 fn context_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
     let addresses = get_test_addresses(target.as_path());
