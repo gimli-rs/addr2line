@@ -38,20 +38,21 @@ fn get_test_addresses(target: &path::Path) -> Vec<u64> {
         .output()
         .expect("failed to execute nm");
 
-    let symbols = String::from_utf8_lossy(&names.stdout);
-    let mut addresses = Vec::new();
-    for line in symbols.lines().take(200) {
-        let fields: Vec<_> = line.split_whitespace().take(4).collect();
-        if fields.len() >= 4 && (fields[2] == "T" || fields[2] == "t") {
-            let mut addr = u64::from_str_radix(fields[0], 16).unwrap();
+    let addresses: Vec<_> = String::from_utf8_lossy(&names.stdout)
+        .lines()
+        .map(|line| line.split_whitespace().take(4).collect::<Vec<_>>())
+        .filter(|fields| fields.len() >= 4 && (fields[2] == "T" || fields[2] == "t"))
+        .take(200)
+        .flat_map(|fields| {
+            let addr = u64::from_str_radix(fields[0], 16).unwrap();
             let size = u64::from_str_radix(fields[1], 16).unwrap();
             let end = addr + size;
-            while addr < end {
-                addresses.push(addr);
-                addr += 5;
-            }
-        }
-    }
+            (addr..end).step_by(5)
+        })
+        .collect();
+
+    assert!(!addresses.is_empty());
+
     addresses
 }
 
