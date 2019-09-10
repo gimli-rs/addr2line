@@ -35,6 +35,7 @@ rustc-test = "0.3"
 debug = true
 [profile.bench]
 debug = true
+codegen-units = 1
 
 [features]
 default = ["rustc-demangle", "cpp_demangle", "std-object"]
