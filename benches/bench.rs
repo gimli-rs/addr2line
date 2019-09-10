@@ -1,6 +1,4 @@
 #![feature(test)]
-// FIXME: `get_test_addresses` doesn't work on macos.
-#![cfg(not(target_os = "macos"))]
 
 extern crate addr2line;
 extern crate memmap;
@@ -10,7 +8,8 @@ extern crate test;
 use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
-use std::process;
+
+use object::Object;
 
 fn release_fixture_path() -> PathBuf {
     let mut path = PathBuf::new();
@@ -30,22 +29,16 @@ fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
 }
 
 /// Obtain a list of addresses contained within the text section of the `target` executable.
-// TODO: use object crate instead of nm
-fn get_test_addresses(target: &path::Path) -> Vec<u64> {
-    let names = process::Command::new("/usr/bin/nm")
-        .arg("-S")
-        .arg(target)
-        .output()
-        .expect("failed to execute nm");
-
-    let addresses: Vec<_> = String::from_utf8_lossy(&names.stdout)
-        .lines()
-        .map(|line| line.split_whitespace().take(4).collect::<Vec<_>>())
-        .filter(|fields| fields.len() >= 4 && (fields[2] == "T" || fields[2] == "t"))
+fn get_test_addresses(target: &object::File) -> Vec<u64> {
+    let addresses: Vec<_> =
+        target
+        .symbols()
+        .map(|(_, s)| s)
+        .filter(|s| s.kind() == object::SymbolKind::Text && s.address() != 0 && s.size() != 0)
         .take(200)
-        .flat_map(|fields| {
-            let addr = u64::from_str_radix(fields[0], 16).unwrap();
-            let size = u64::from_str_radix(fields[1], 16).unwrap();
+        .flat_map(|s| {
+            let addr = s.address();
+            let size = s.size();
             let end = addr + size;
             (addr..end).step_by(5)
         })
@@ -70,9 +63,10 @@ fn context_new_location(b: &mut test::Bencher) {
 #[bench]
 fn context_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
         let ctx = addr2line::Context::new(file).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
@@ -90,9 +84,10 @@ fn context_query_location(b: &mut test::Bencher) {
 #[bench]
 fn context_query_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
         let ctx = addr2line::Context::new(file).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
@@ -110,9 +105,10 @@ fn context_query_with_functions(b: &mut test::Bencher) {
 #[bench]
 fn context_new_and_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
         b.iter(|| {
             let ctx = addr2line::Context::new(file).unwrap();
             for addr in addresses.iter().take(100) {
@@ -125,9 +121,10 @@ fn context_new_and_query_location(b: &mut test::Bencher) {
 #[bench]
 fn context_new_and_query_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
-    let addresses = get_test_addresses(target.as_path());
 
     with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
         b.iter(|| {
             let ctx = addr2line::Context::new(file).unwrap();
             for addr in addresses.iter().take(100) {
