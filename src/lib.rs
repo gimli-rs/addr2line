@@ -182,26 +182,61 @@ impl<R: gimli::Reader> Context<R> {
                 Err(_) => continue,
             };
 
-            let lang;
+            let mut lang = None;
             {
-                let mut cursor = dw_unit.entries();
+                let mut entries = dw_unit.entries_raw(None)?;
 
-                let unit = match cursor.next_dfs()? {
-                    Some((_, unit)) if unit.tag() == gimli::DW_TAG_compile_unit => unit,
+                let abbrev = match entries.read_abbreviation()? {
+                    Some(abbrev) if abbrev.tag() == gimli::DW_TAG_compile_unit => abbrev,
                     _ => continue, // wtf?
                 };
 
-                lang = match unit.attr_value(gimli::DW_AT_language)? {
-                    Some(gimli::AttributeValue::Language(lang)) => Some(lang),
-                    _ => None,
-                };
-                let mut ranges = sections.unit_ranges(&dw_unit)?;
-                while let Some(range) = ranges.next()? {
-                    if range.begin == range.end {
-                        continue;
+                let mut low_pc = None;
+                let mut high_pc = None;
+                let mut size = None;
+                let mut ranges = None;
+                for spec in abbrev.attributes() {
+                    let attr = entries.read_attribute(*spec)?;
+                    match attr.name() {
+                        gimli::DW_AT_low_pc => {
+                            if let gimli::AttributeValue::Addr(val) = attr.value() {
+                                low_pc = Some(val);
+                            }
+                        }
+                        gimli::DW_AT_high_pc => match attr.value() {
+                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
+                            gimli::AttributeValue::Udata(val) => size = Some(val),
+                            _ => {}
+                        },
+                        gimli::DW_AT_ranges => {
+                            ranges = sections.attr_ranges_offset(&dw_unit, attr.value())?;
+                        }
+                        gimli::DW_AT_language => {
+                            if let gimli::AttributeValue::Language(val) = attr.value() {
+                                lang = Some(val);
+                            }
+                        }
+                        _ => {}
                     }
+                }
 
-                    unit_ranges.push((range, unit_id));
+                let mut add_range = |range: gimli::Range| {
+                    if range.begin < range.end {
+                        unit_ranges.push((range, unit_id));
+                    }
+                };
+                if let Some(offset) = ranges {
+                    let mut ranges = sections.ranges(&dw_unit, offset)?;
+                    while let Some(range) = ranges.next()? {
+                        add_range(range);
+                    }
+                } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
+                    add_range(gimli::Range { begin, end });
+                } else if let (Some(begin), Some(size)) = (low_pc, size) {
+                    add_range(gimli::Range {
+                        begin,
+                        end: begin + size,
+                    });
                 }
             }
 
@@ -334,6 +369,7 @@ struct LineRow {
     column: Option<u64>,
 }
 
+#[derive(Clone, Copy)]
 struct Func<T> {
     entry_off: gimli::UnitOffset<T>,
     depth: isize,
@@ -424,30 +460,65 @@ where
         self.funcs
             .borrow_with(|| {
                 let mut results = Vec::new();
-                let mut depth = 0;
-                let mut cursor = self.dw_unit.entries();
-                while let Some((d, entry)) = cursor.next_dfs()? {
-                    depth += d;
-                    match entry.tag() {
-                        gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                            let mut ranges = sections.die_ranges(&self.dw_unit, entry)?;
-                            while let Some(range) = ranges.next()? {
-                                // Ignore invalid DWARF so that a query of 0 does not give
-                                // a long list of matches.
-                                // TODO: don't ignore if there is a section at this address
-                                if range.begin == 0 {
-                                    continue;
+                let mut entries = self.dw_unit.entries_raw(None)?;
+                while !entries.is_empty() {
+                    let value = Func {
+                        entry_off: entries.next_offset(),
+                        depth: entries.next_depth(),
+                    };
+                    if let Some(abbrev) = entries.read_abbreviation()? {
+                        match abbrev.tag() {
+                            gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
+                                let mut low_pc = None;
+                                let mut high_pc = None;
+                                let mut size = None;
+                                let mut ranges = None;
+                                for spec in abbrev.attributes() {
+                                    let attr = entries.read_attribute(*spec)?;
+                                    match attr.name() {
+                                        gimli::DW_AT_low_pc => {
+                                            if let gimli::AttributeValue::Addr(val) = attr.value() {
+                                                low_pc = Some(val);
+                                            }
+                                        }
+                                        gimli::DW_AT_high_pc => match attr.value() {
+                                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
+                                            gimli::AttributeValue::Udata(val) => size = Some(val),
+                                            _ => {}
+                                        },
+                                        gimli::DW_AT_ranges => {
+                                            ranges = sections
+                                                .attr_ranges_offset(&self.dw_unit, attr.value())?;
+                                        }
+                                        _ => {}
+                                    }
                                 }
-                                results.push(Element {
-                                    range: range.begin..range.end,
-                                    value: Func {
-                                        entry_off: entry.offset(),
-                                        depth,
-                                    },
-                                });
+
+                                let mut add_range = |range: std::ops::Range<_>| {
+                                    // Ignore invalid DWARF so that a query of 0 does not give
+                                    // a long list of matches.
+                                    // TODO: don't ignore if there is a section at this address
+                                    if range.start != 0 && range.start < range.end {
+                                        results.push(Element { range, value });
+                                    }
+                                };
+                                if let Some(offset) = ranges {
+                                    let mut ranges = sections.ranges(&self.dw_unit, offset)?;
+                                    while let Some(range) = ranges.next()? {
+                                        add_range(range.begin..range.end);
+                                    }
+                                } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
+                                    add_range(begin..end);
+                                } else if let (Some(begin), Some(size)) = (low_pc, size) {
+                                    add_range(begin..(begin + size));
+                                }
+                            }
+                            _ => {
+                                for spec in abbrev.attributes() {
+                                    entries.read_attribute(*spec)?;
+                                }
                             }
                         }
-                        _ => (),
                     }
                 }
 
@@ -547,7 +618,7 @@ fn path_push(path: &mut String, p: &str) {
 }
 
 fn name_attr<'abbrev, 'unit, R>(
-    entry: &gimli::DebuggingInformationEntry<'abbrev, 'unit, R, R::Offset>,
+    attr: gimli::AttributeValue<R>,
     unit: &ResUnit<R>,
     sections: &gimli::Dwarf<R>,
     units: &[ResUnit<R>],
@@ -560,53 +631,60 @@ where
         return Ok(None);
     }
 
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_linkage_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
-        }
-    }
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_MIPS_linkage_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
-        }
-    }
-    if let Some(attr) = entry.attr_value(gimli::DW_AT_name)? {
-        if let Ok(val) = sections.attr_string(&unit.dw_unit, attr) {
-            return Ok(Some(val));
-        }
-    }
-
-    let next = entry
-        .attr_value(gimli::DW_AT_abstract_origin)?
-        .or(entry.attr_value(gimli::DW_AT_specification)?);
-    match next {
-        Some(gimli::AttributeValue::UnitRef(offset)) => {
-            let mut entries = unit.dw_unit.entries_at_offset(offset)?;
-            if let Some((_, entry)) = entries.next_dfs()? {
-                return name_attr(entry, unit, sections, units, recursion_limit - 1);
-            } else {
-                return Err(gimli::Error::NoEntryAtGivenOffset);
-            }
-        }
-        Some(gimli::AttributeValue::DebugInfoRef(dr)) => {
+    let mut entries = match attr {
+        gimli::AttributeValue::UnitRef(offset) => unit.dw_unit.entries_raw(Some(offset))?,
+        gimli::AttributeValue::DebugInfoRef(dr) => {
             if let Some((unit, offset)) = units
                 .iter()
                 .filter_map(|unit| {
                     gimli::UnitSectionOffset::DebugInfoOffset(dr)
                         .to_unit_offset(&unit.dw_unit)
-                        .map(|uo| (unit, uo))
+                        .map(|uo| (&unit.dw_unit, uo))
                 })
                 .next()
             {
-                let mut entries = unit.dw_unit.entries_at_offset(offset)?;
-                if let Some((_, entry)) = entries.next_dfs()? {
-                    return name_attr(entry, unit, sections, units, recursion_limit - 1);
-                }
+                unit.entries_raw(Some(offset))?
             } else {
                 return Err(gimli::Error::NoEntryAtGivenOffset);
             }
         }
-        _ => {}
+        _ => return Ok(None),
+    };
+
+    let abbrev = if let Some(abbrev) = entries.read_abbreviation()? {
+        abbrev
+    } else {
+        return Err(gimli::Error::NoEntryAtGivenOffset);
+    };
+
+    let mut name = None;
+    let mut next = None;
+    for spec in abbrev.attributes() {
+        let attr = entries.read_attribute(*spec)?;
+        match attr.name() {
+            gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    return Ok(Some(val));
+                }
+            }
+            gimli::DW_AT_name => {
+                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    name = Some(val);
+                }
+            }
+            gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                next = Some(attr.value());
+            }
+            _ => {}
+        }
+    }
+
+    if name.is_some() {
+        return Ok(name);
+    }
+
+    if let Some(next) = next {
+        return name_attr(next, unit, sections, units, recursion_limit - 1);
     }
 
     Ok(None)
@@ -643,34 +721,69 @@ where
 
         let unit = &self.units[self.unit_id];
 
-        let mut cursor = unit.dw_unit.entries_at_offset(func.entry_off)?;
-        let (_, entry) = cursor
-            .next_dfs()?
+        let mut entries = unit.dw_unit.entries_raw(Some(func.entry_off))?;
+        let abbrev = entries
+            .read_abbreviation()?
             .expect("DIE we read a while ago is no longer readable??");
 
-        // Set an arbitrary recursion limit of 16
-        let name = name_attr(entry, unit, self.sections, self.units, 16)?;
-
-        if entry.tag() == gimli::DW_TAG_inlined_subroutine {
-            let file = match entry.attr_value(gimli::DW_AT_call_file)? {
-                Some(gimli::AttributeValue::FileIndex(fi)) => {
-                    match unit.parse_lines(self.sections)? {
-                        Some(lines) => lines.files.get(fi as usize).map(String::as_str),
-                        None => None,
+        let mut name = None;
+        let mut call_file = None;
+        let mut call_line = None;
+        let mut call_column = None;
+        for spec in abbrev.attributes() {
+            let attr = entries.read_attribute(*spec)?;
+            match attr.name() {
+                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                    if let Ok(val) = self.sections.attr_string(&unit.dw_unit, attr.value()) {
+                        name = Some(val);
                     }
                 }
+                gimli::DW_AT_name => {
+                    if name.is_none() {
+                        name = self.sections.attr_string(&unit.dw_unit, attr.value()).ok();
+                    }
+                }
+                gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                    if name.is_none() {
+                        name = name_attr(attr.value(), unit, self.sections, self.units, 16)?;
+                    }
+                }
+                _ => {}
+            }
+            if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+                match attr.name() {
+                    gimli::DW_AT_call_file => {
+                        if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                            call_file = Some(fi);
+                        }
+                    }
+                    gimli::DW_AT_call_line => {
+                        call_line =
+                            attr.udata_value()
+                                .and_then(|x| if x == 0 { None } else { Some(x) });
+                    }
+                    gimli::DW_AT_call_column => {
+                        call_column = attr.udata_value();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+            let file = match call_file {
+                Some(fi) => match unit.parse_lines(self.sections)? {
+                    Some(lines) => lines.files.get(fi as usize).map(String::as_str),
+                    None => None,
+                },
                 _ => None,
             };
 
-            let line = entry
-                .attr(gimli::DW_AT_call_line)?
-                .and_then(|x| x.udata_value())
-                .and_then(|x| if x == 0 { None } else { Some(x) });
-            let column = entry
-                .attr(gimli::DW_AT_call_column)?
-                .and_then(|x| x.udata_value());
-
-            self.next = Some(Location { file, line, column });
+            self.next = Some(Location {
+                file,
+                line: call_line,
+                column: call_column,
+            });
         }
 
         Ok(Some(Frame {
