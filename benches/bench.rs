@@ -5,6 +5,7 @@ extern crate memmap;
 extern crate object;
 extern crate test;
 
+use std::borrow::Cow;
 use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
@@ -28,10 +29,29 @@ fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
     f(&file)
 }
 
+fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
+    let load_section = |id: gimli::SectionId| -> Result<Cow<'a, [u8]>, gimli::Error> {
+        Ok(object
+            .section_data_by_name(id.name())
+            .unwrap_or(Cow::Borrowed(&[][..])))
+    };
+    let load_section_sup = |_| Ok(Cow::Borrowed(&[][..]));
+    gimli::Dwarf::load(&load_section, &load_section_sup).unwrap()
+}
+
+fn dwarf_borrow<'a>(
+    dwarf: &'a gimli::Dwarf<Cow<[u8]>>,
+) -> gimli::Dwarf<gimli::EndianSlice<'a, gimli::LittleEndian>> {
+    let borrow_section: &dyn for<'b> Fn(
+        &'b Cow<[u8]>,
+    ) -> gimli::EndianSlice<'b, gimli::LittleEndian> =
+        &|section| gimli::EndianSlice::new(&*section, gimli::LittleEndian);
+    dwarf.borrow(&borrow_section)
+}
+
 /// Obtain a list of addresses contained within the text section of the `target` executable.
 fn get_test_addresses(target: &object::File) -> Vec<u64> {
-    let addresses: Vec<_> =
-        target
+    let addresses: Vec<_> = target
         .symbols()
         .map(|(_, s)| s)
         .filter(|s| s.kind() == object::SymbolKind::Text && s.address() != 0 && s.size() != 0)
@@ -50,7 +70,7 @@ fn get_test_addresses(target: &object::File) -> Vec<u64> {
 }
 
 #[bench]
-fn context_new(b: &mut test::Bencher) {
+fn context_new_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -61,7 +81,20 @@ fn context_new(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_parse_lines(b: &mut test::Bencher) {
+fn context_new_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            addr2line::Context::from_dwarf(dwarf).unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_new_parse_lines_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -73,7 +106,21 @@ fn context_new_parse_lines(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_parse_functions(b: &mut test::Bencher) {
+fn context_new_parse_lines_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            let context = addr2line::Context::from_dwarf(dwarf).unwrap();
+            context.parse_lines().unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_new_parse_functions_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -85,7 +132,21 @@ fn context_new_parse_functions(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_query_location(b: &mut test::Bencher) {
+fn context_new_parse_functions_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            let context = addr2line::Context::from_dwarf(dwarf).unwrap();
+            context.parse_functions().unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_query_location_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -106,7 +167,30 @@ fn context_query_location(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_query_with_functions(b: &mut test::Bencher) {
+fn context_query_location_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
+        let dwarf = dwarf_load(file);
+        let dwarf = dwarf_borrow(&dwarf);
+        let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
+        // Ensure nothing is lazily loaded.
+        for addr in &addresses {
+            test::black_box(ctx.find_location(*addr)).ok();
+        }
+
+        b.iter(|| {
+            for addr in &addresses {
+                test::black_box(ctx.find_location(*addr)).ok();
+            }
+        });
+    });
+}
+
+#[bench]
+fn context_query_with_functions_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -127,7 +211,30 @@ fn context_query_with_functions(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_and_query_location(b: &mut test::Bencher) {
+fn context_query_with_functions_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
+        let dwarf = dwarf_load(file);
+        let dwarf = dwarf_borrow(&dwarf);
+        let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
+        // Ensure nothing is lazily loaded.
+        for addr in &addresses {
+            test::black_box(ctx.find_frames(*addr)).ok();
+        }
+
+        b.iter(|| {
+            for addr in &addresses {
+                test::black_box(ctx.find_frames(*addr)).ok();
+            }
+        });
+    });
+}
+
+#[bench]
+fn context_new_and_query_location_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -143,7 +250,25 @@ fn context_new_and_query_location(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_and_query_with_functions(b: &mut test::Bencher) {
+fn context_new_and_query_location_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
+            for addr in addresses.iter().take(100) {
+                test::black_box(ctx.find_location(*addr)).ok();
+            }
+        });
+    });
+}
+
+#[bench]
+fn context_new_and_query_with_functions_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -151,6 +276,23 @@ fn context_new_and_query_with_functions(b: &mut test::Bencher) {
 
         b.iter(|| {
             let ctx = addr2line::Context::new(file).unwrap();
+            for addr in addresses.iter().take(100) {
+                test::black_box(ctx.find_frames(*addr)).ok();
+            }
+        });
+    });
+}
+#[bench]
+fn context_new_and_query_with_functions_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        let addresses = get_test_addresses(file);
+
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
             for addr in addresses.iter().take(100) {
                 test::black_box(ctx.find_frames(*addr)).ok();
             }
