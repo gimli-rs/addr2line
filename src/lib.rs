@@ -474,23 +474,33 @@ where
                                 let mut size = None;
                                 let mut ranges = None;
                                 for spec in abbrev.attributes() {
-                                    let attr = entries.read_attribute(*spec)?;
-                                    match attr.name() {
-                                        gimli::DW_AT_low_pc => {
-                                            if let gimli::AttributeValue::Addr(val) = attr.value() {
-                                                low_pc = Some(val);
+                                    match entries.read_attribute(*spec) {
+                                        Ok(ref attr) => match attr.name() {
+                                            gimli::DW_AT_low_pc => {
+                                                if let gimli::AttributeValue::Addr(val) =
+                                                    attr.value()
+                                                {
+                                                    low_pc = Some(val);
+                                                }
                                             }
-                                        }
-                                        gimli::DW_AT_high_pc => match attr.value() {
-                                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
-                                            gimli::AttributeValue::Udata(val) => size = Some(val),
+                                            gimli::DW_AT_high_pc => match attr.value() {
+                                                gimli::AttributeValue::Addr(val) => {
+                                                    high_pc = Some(val)
+                                                }
+                                                gimli::AttributeValue::Udata(val) => {
+                                                    size = Some(val)
+                                                }
+                                                _ => {}
+                                            },
+                                            gimli::DW_AT_ranges => {
+                                                ranges = sections.attr_ranges_offset(
+                                                    &self.dw_unit,
+                                                    attr.value(),
+                                                )?;
+                                            }
                                             _ => {}
                                         },
-                                        gimli::DW_AT_ranges => {
-                                            ranges = sections
-                                                .attr_ranges_offset(&self.dw_unit, attr.value())?;
-                                        }
-                                        _ => {}
+                                        Err(e) => return Err(e),
                                     }
                                 }
 
@@ -515,7 +525,10 @@ where
                             }
                             _ => {
                                 for spec in abbrev.attributes() {
-                                    entries.read_attribute(*spec)?;
+                                    match entries.read_attribute(*spec) {
+                                        Ok(_) => {}
+                                        Err(e) => return Err(e),
+                                    }
                                 }
                             }
                         }
@@ -660,22 +673,24 @@ where
     let mut name = None;
     let mut next = None;
     for spec in abbrev.attributes() {
-        let attr = entries.read_attribute(*spec)?;
-        match attr.name() {
-            gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
-                    return Ok(Some(val));
+        match entries.read_attribute(*spec) {
+            Ok(ref attr) => match attr.name() {
+                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                    if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                        return Ok(Some(val));
+                    }
                 }
-            }
-            gimli::DW_AT_name => {
-                if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
-                    name = Some(val);
+                gimli::DW_AT_name => {
+                    if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                        name = Some(val);
+                    }
                 }
-            }
-            gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
-                next = Some(attr.value());
-            }
-            _ => {}
+                gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                    next = Some(attr.value());
+                }
+                _ => {}
+            },
+            Err(e) => return Err(e),
         }
     }
 
@@ -731,42 +746,52 @@ where
         let mut call_line = None;
         let mut call_column = None;
         for spec in abbrev.attributes() {
-            let attr = entries.read_attribute(*spec)?;
-            match attr.name() {
-                gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    if let Ok(val) = self.sections.attr_string(&unit.dw_unit, attr.value()) {
-                        name = Some(val);
+            match entries.read_attribute(*spec) {
+                Ok(ref attr) => {
+                    match attr.name() {
+                        gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                            if let Ok(val) = self.sections.attr_string(&unit.dw_unit, attr.value())
+                            {
+                                name = Some(val);
+                            }
+                        }
+                        gimli::DW_AT_name => {
+                            if name.is_none() {
+                                name = self.sections.attr_string(&unit.dw_unit, attr.value()).ok();
+                            }
+                        }
+                        gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                            if name.is_none() {
+                                name =
+                                    name_attr(attr.value(), unit, self.sections, self.units, 16)?;
+                            }
+                        }
+                        _ => {}
                     }
-                }
-                gimli::DW_AT_name => {
-                    if name.is_none() {
-                        name = self.sections.attr_string(&unit.dw_unit, attr.value()).ok();
-                    }
-                }
-                gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
-                    if name.is_none() {
-                        name = name_attr(attr.value(), unit, self.sections, self.units, 16)?;
-                    }
-                }
-                _ => {}
-            }
-            if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-                match attr.name() {
-                    gimli::DW_AT_call_file => {
-                        if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
-                            call_file = Some(fi);
+                    if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+                        match attr.name() {
+                            gimli::DW_AT_call_file => {
+                                if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                                    call_file = Some(fi);
+                                }
+                            }
+                            gimli::DW_AT_call_line => {
+                                call_line = attr.udata_value().and_then(|x| {
+                                    if x == 0 {
+                                        None
+                                    } else {
+                                        Some(x)
+                                    }
+                                });
+                            }
+                            gimli::DW_AT_call_column => {
+                                call_column = attr.udata_value();
+                            }
+                            _ => {}
                         }
                     }
-                    gimli::DW_AT_call_line => {
-                        call_line =
-                            attr.udata_value()
-                                .and_then(|x| if x == 0 { None } else { Some(x) });
-                    }
-                    gimli::DW_AT_call_column => {
-                        call_column = attr.udata_value();
-                    }
-                    _ => {}
                 }
+                Err(e) => return Err(e),
             }
         }
 
