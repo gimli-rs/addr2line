@@ -48,10 +48,11 @@ extern crate smallvec;
 
 #[cfg(feature = "std")]
 mod alloc {
-    pub use std::{borrow, rc, string, vec};
+    pub use std::{borrow, boxed, rc, string, vec};
 }
 
 use alloc::borrow::Cow;
+use alloc::boxed::Box;
 #[cfg(feature = "object")]
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
@@ -352,14 +353,14 @@ impl<R: gimli::Reader> Context<R> {
 }
 
 struct Lines {
-    files: Vec<String>,
-    sequences: Vec<LineSequence>,
+    files: Box<[String]>,
+    sequences: Box<[LineSequence]>,
 }
 
 struct LineSequence {
     start: u64,
     end: u64,
-    rows: Vec<LineRow>,
+    rows: Box<[LineRow]>,
 }
 
 struct LineRow {
@@ -406,7 +407,11 @@ where
                             let mut rows = Vec::new();
                             mem::swap(&mut rows, &mut sequence_rows);
                             if start != 0 {
-                                sequences.push(LineSequence { start, end, rows });
+                                sequences.push(LineSequence {
+                                    start,
+                                    end,
+                                    rows: rows.into_boxed_slice(),
+                                });
                             }
                         }
                         continue;
@@ -446,7 +451,10 @@ where
                     index += 1;
                 }
 
-                Ok(Lines { files, sequences })
+                Ok(Lines {
+                    files: files.into_boxed_slice(),
+                    sequences: sequences.into_boxed_slice(),
+                })
             })
             .as_ref()
             .map(Some)
