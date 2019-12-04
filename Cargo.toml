@@ -18,7 +18,6 @@ travis-ci = { repository = "gimli-rs/addr2line" }
 gimli = { version = "0.19", default-features = false, features = ["read"], git = "https://github.com/gimli-rs/gimli.git", rev = "1b7706bc87938916b4df4cda0c7d1346e938fe86" }
 fallible-iterator = { version = "0.2", default-features = false }
 object = { version = "0.16", default-features = false, features = ["read"], optional = true }
-intervaltree = { version = "0.2", default-features = false }
 smallvec = { version = "1", default-features = false }
 lazycell = "1"
 rustc-demangle = { version = "0.1", optional = true }
@@ -39,7 +38,7 @@ codegen-units = 1
 
 [features]
 default = ["rustc-demangle", "cpp_demangle", "std-object"]
-std = ["gimli/std", "intervaltree/std"]
+std = ["gimli/std"]
 std-object = ["std", "object", "object/std"]
 alloc = ["gimli/alloc"]
 

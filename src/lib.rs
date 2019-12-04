@@ -38,7 +38,6 @@ extern crate core as std;
 extern crate cpp_demangle;
 pub extern crate fallible_iterator;
 pub extern crate gimli;
-extern crate intervaltree;
 extern crate lazycell;
 #[cfg(feature = "object")]
 pub extern crate object;
@@ -59,11 +58,11 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use std::cmp::Ordering;
+use std::iter;
 use std::mem;
 use std::u64;
 
 use fallible_iterator::FallibleIterator;
-use intervaltree::{Element, IntervalTree};
 use lazycell::LazyCell;
 use smallvec::SmallVec;
 
@@ -315,10 +314,31 @@ impl<R: gimli::Reader> Context<R> {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
-                let funcs = unit.parse_functions(&self.sections)?;
-                let mut res: SmallVec<[_; 16]> =
-                    funcs.query_point(probe).map(|x| &x.value).collect();
-                res.sort_by_key(|x| -x.depth);
+                let functions = unit.parse_functions(&self.sections)?;
+                let mut res: SmallVec<[_; 16]> = SmallVec::new();
+                if let Ok(address) = functions.addresses.binary_search_by(|address| {
+                    if probe < address.range.begin {
+                        Ordering::Greater
+                    } else if probe >= address.range.end {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                }) {
+                    let mut function_index = functions.addresses[address].function;
+                    loop {
+                        let function = &functions.functions[function_index];
+                        res.push(function);
+                        if let Some(inlined) = function.inlined.iter().find(|inlined| {
+                            probe >= inlined.range.begin && probe < inlined.range.end
+                        }) {
+                            function_index = inlined.function;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 (unit_id, loc, res)
             }
             None => (0, None, SmallVec::new()),
@@ -328,7 +348,7 @@ impl<R: gimli::Reader> Context<R> {
             unit_id,
             units: &self.units,
             sections: &self.sections,
-            funcs: funcs.into_iter(),
+            funcs: funcs.into_iter().rev(),
             next: loc,
         })
     }
@@ -370,12 +390,6 @@ struct LineRow {
     column: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
-struct Func<T> {
-    entry_off: gimli::UnitOffset<T>,
-    depth: isize,
-}
-
 struct ResUnit<R>
 where
     R: gimli::Reader,
@@ -383,7 +397,7 @@ where
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<IntervalTree<u64, Func<R::Offset>>, Error>>,
+    funcs: LazyCell<Result<Functions<R::Offset>, Error>>,
 }
 
 impl<R> ResUnit<R>
@@ -461,91 +475,9 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(
-        &self,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<&IntervalTree<u64, Func<R::Offset>>, Error> {
+    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<&Functions<R::Offset>, Error> {
         self.funcs
-            .borrow_with(|| {
-                let mut results = Vec::new();
-                let mut entries = self.dw_unit.entries_raw(None)?;
-                while !entries.is_empty() {
-                    let value = Func {
-                        entry_off: entries.next_offset(),
-                        depth: entries.next_depth(),
-                    };
-                    if let Some(abbrev) = entries.read_abbreviation()? {
-                        match abbrev.tag() {
-                            gimli::DW_TAG_subprogram | gimli::DW_TAG_inlined_subroutine => {
-                                let mut low_pc = None;
-                                let mut high_pc = None;
-                                let mut size = None;
-                                let mut ranges = None;
-                                for spec in abbrev.attributes() {
-                                    match entries.read_attribute(*spec) {
-                                        Ok(ref attr) => match attr.name() {
-                                            gimli::DW_AT_low_pc => {
-                                                if let gimli::AttributeValue::Addr(val) =
-                                                    attr.value()
-                                                {
-                                                    low_pc = Some(val);
-                                                }
-                                            }
-                                            gimli::DW_AT_high_pc => match attr.value() {
-                                                gimli::AttributeValue::Addr(val) => {
-                                                    high_pc = Some(val)
-                                                }
-                                                gimli::AttributeValue::Udata(val) => {
-                                                    size = Some(val)
-                                                }
-                                                _ => {}
-                                            },
-                                            gimli::DW_AT_ranges => {
-                                                ranges = sections.attr_ranges_offset(
-                                                    &self.dw_unit,
-                                                    attr.value(),
-                                                )?;
-                                            }
-                                            _ => {}
-                                        },
-                                        Err(e) => return Err(e),
-                                    }
-                                }
-
-                                let mut add_range = |range: std::ops::Range<_>| {
-                                    // Ignore invalid DWARF so that a query of 0 does not give
-                                    // a long list of matches.
-                                    // TODO: don't ignore if there is a section at this address
-                                    if range.start != 0 && range.start < range.end {
-                                        results.push(Element { range, value });
-                                    }
-                                };
-                                if let Some(offset) = ranges {
-                                    let mut ranges = sections.ranges(&self.dw_unit, offset)?;
-                                    while let Some(range) = ranges.next()? {
-                                        add_range(range.begin..range.end);
-                                    }
-                                } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
-                                    add_range(begin..end);
-                                } else if let (Some(begin), Some(size)) = (low_pc, size) {
-                                    add_range(begin..(begin + size));
-                                }
-                            }
-                            _ => {
-                                for spec in abbrev.attributes() {
-                                    match entries.read_attribute(*spec) {
-                                        Ok(_) => {}
-                                        Err(e) => return Err(e),
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let tree: IntervalTree<_, _> = results.into_iter().collect();
-                Ok(tree)
-            })
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -713,6 +645,191 @@ where
     Ok(None)
 }
 
+/// A single address range for a function.
+///
+/// It is possible for a function to have multiple address ranges; this
+/// is handled by having multiple `FunctionAddress` entries with the same
+/// `function` field.
+struct FunctionAddress {
+    range: gimli::Range,
+    /// An index into `Functions::functions`.
+    function: usize,
+}
+
+struct Functions<T> {
+    /// List of all `DW_TAG_subprogram` and `DW_TAG_inlined_subroutine` details.
+    functions: Box<[Function<T>]>,
+    /// List of `DW_TAG_subprogram` address ranges in the unit.
+    addresses: Box<[FunctionAddress]>,
+}
+
+struct Function<T> {
+    offset: gimli::UnitOffset<T>,
+    /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
+    // TODO: this is often empty, so we could save more memory by storing the
+    // length in the allocated memory.
+    inlined: Box<[FunctionAddress]>,
+}
+
+impl<T: gimli::ReaderOffset> Functions<T> {
+    fn parse<R: gimli::Reader<Offset = T>>(
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<Functions<T>, Error> {
+        let mut functions = Vec::new();
+        let mut addresses = Vec::new();
+        // These are ignored.
+        let mut inlined = Vec::new();
+        let mut entries = unit.entries_raw(None)?;
+        while !entries.is_empty() {
+            let offset = entries.next_offset();
+            let depth = entries.next_depth();
+            if let Some(abbrev) = entries.read_abbreviation()? {
+                if abbrev.tag() == gimli::DW_TAG_subprogram {
+                    Function::parse(
+                        &mut entries,
+                        abbrev,
+                        offset,
+                        depth,
+                        unit,
+                        sections,
+                        &mut functions,
+                        &mut addresses,
+                        &mut inlined,
+                    )?;
+                } else {
+                    for spec in abbrev.attributes() {
+                        match entries.read_attribute(*spec) {
+                            Ok(_) => {}
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+            }
+        }
+        addresses.sort_by_key(|x| x.range.begin);
+        debug_assert!(addresses
+            .windows(2)
+            .all(|w| w[0].range.end <= w[1].range.begin));
+
+        Ok(Functions {
+            functions: functions.into_boxed_slice(),
+            addresses: addresses.into_boxed_slice(),
+        })
+    }
+}
+
+impl<T: gimli::ReaderOffset> Function<T> {
+    fn parse<R: gimli::Reader<Offset = T>>(
+        entries: &mut gimli::EntriesRaw<R>,
+        abbrev: &gimli::Abbreviation,
+        offset: gimli::UnitOffset<R::Offset>,
+        depth: isize,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+        functions: &mut Vec<Function<T>>,
+        addresses: &mut Vec<FunctionAddress>,
+        inlined: &mut Vec<FunctionAddress>,
+    ) -> Result<(), Error> {
+        let mut low_pc = None;
+        let mut high_pc = None;
+        let mut size = None;
+        let mut ranges = None;
+        for spec in abbrev.attributes() {
+            match entries.read_attribute(*spec) {
+                Ok(ref attr) => match attr.name() {
+                    gimli::DW_AT_low_pc => {
+                        if let gimli::AttributeValue::Addr(val) = attr.value() {
+                            low_pc = Some(val);
+                        }
+                    }
+                    gimli::DW_AT_high_pc => match attr.value() {
+                        gimli::AttributeValue::Addr(val) => high_pc = Some(val),
+                        gimli::AttributeValue::Udata(val) => size = Some(val),
+                        _ => {}
+                    },
+                    gimli::DW_AT_ranges => {
+                        ranges = sections.attr_ranges_offset(unit, attr.value())?;
+                    }
+                    _ => {}
+                },
+                Err(e) => return Err(e),
+            }
+        }
+
+        let mut local_inlined = Vec::new();
+        loop {
+            let next_depth = entries.next_depth();
+            if next_depth <= depth {
+                break;
+            }
+            let next_offset = entries.next_offset();
+            if let Some(abbrev) = entries.read_abbreviation()? {
+                if abbrev.tag() == gimli::DW_TAG_subprogram
+                    || abbrev.tag() == gimli::DW_TAG_inlined_subroutine
+                {
+                    Function::parse(
+                        entries,
+                        abbrev,
+                        next_offset,
+                        next_depth,
+                        unit,
+                        sections,
+                        functions,
+                        addresses,
+                        &mut local_inlined,
+                    )?;
+                } else {
+                    for spec in abbrev.attributes() {
+                        match entries.read_attribute(*spec) {
+                            Ok(_) => {}
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+            }
+        }
+
+        let function_index = functions.len();
+        functions.push(Function {
+            offset,
+            inlined: local_inlined.into_boxed_slice(),
+        });
+
+        let addresses = if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+            inlined
+        } else {
+            addresses
+        };
+        let mut add_range = |range: gimli::Range| {
+            // Ignore invalid DWARF so that a query of 0 does not give
+            // a long list of matches.
+            // TODO: don't ignore if there is a section at this address
+            if range.begin != 0 && range.begin < range.end {
+                addresses.push(FunctionAddress {
+                    range,
+                    function: function_index,
+                });
+            }
+        };
+        if let Some(offset) = ranges {
+            let mut ranges = sections.ranges(unit, offset)?;
+            while let Some(range) = ranges.next()? {
+                add_range(range);
+            }
+        } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
+            add_range(gimli::Range { begin, end });
+        } else if let (Some(begin), Some(size)) = (low_pc, size) {
+            add_range(gimli::Range {
+                begin,
+                end: begin + size,
+            });
+        }
+
+        Ok(())
+    }
+}
+
 /// An iterator over function frames.
 pub struct FrameIter<'ctx, R>
 where
@@ -721,7 +838,7 @@ where
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: smallvec::IntoIter<[&'ctx Func<R::Offset>; 16]>,
+    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R::Offset>; 16]>>,
     next: Option<Location<'ctx>>,
 }
 
@@ -744,7 +861,7 @@ where
 
         let unit = &self.units[self.unit_id];
 
-        let mut entries = unit.dw_unit.entries_raw(Some(func.entry_off))?;
+        let mut entries = unit.dw_unit.entries_raw(Some(func.offset))?;
         let abbrev = entries
             .read_abbreviation()?
             .expect("DIE we read a while ago is no longer readable??");
