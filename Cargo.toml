@@ -49,3 +49,6 @@ harness = false
 
 [[test]]
 name = "correctness"
+
+[[test]]
+name = "parse"
