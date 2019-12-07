@@ -58,3 +58,14 @@ fn zero_function() {
         assert!(ctx.find_frames(probe).unwrap().next().unwrap().is_none());
     }
 }
+
+#[test]
+fn iter_lines_function() {
+    let file = File::open("/proc/self/exe").unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = &object::File::parse(&*map).unwrap();
+    let ctx = Context::new(file).unwrap();
+    let info = ctx.copy_line_infos();
+    //check that we include at least the current file in the mapping
+    assert!(info.iter().any(|line| line.file.ends_with(file!())));
+}

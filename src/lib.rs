@@ -370,6 +370,39 @@ impl<R: gimli::Reader> Context<R> {
         }
         Ok(())
     }
+
+    /// Returns a copy of the whole Source Map.
+    pub fn copy_line_infos(&self) -> Vec<LineInfo> {
+        let mut res = vec![];
+        for unit in self.units.iter() {
+            if let Ok(Some(lines)) = unit.parse_lines(&self.sections) {
+                for seq in lines.sequences.iter() {
+                    for row in seq.rows.iter() {
+                        let inf = LineInfo {
+                            address: row.address,
+                            file: &lines.files[row.file_index as usize],
+                            line: row.line,
+                            column: row.column,
+                        };
+                        res.push(inf);
+                    }
+                }
+            }
+        }
+        return res;
+    }
+}
+
+///Contains source mapping information for the given bytes starting at the given address
+pub struct LineInfo<'a> {
+    ///the start address of this source mapping
+    pub address: u64,
+    ///the filename of the file where this source line resides
+    pub file: &'a str,
+    ///the line number that emmited these bytes
+    pub line: Option<u64>,
+    ///the column that emitted these bytes
+    pub column: Option<u64>,
 }
 
 struct Lines {
