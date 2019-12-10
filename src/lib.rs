@@ -386,8 +386,8 @@ struct LineSequence {
 struct LineRow {
     address: u64,
     file_index: u64,
-    line: Option<u64>,
-    column: Option<u64>,
+    line: u32,
+    column: u32,
 }
 
 struct ResUnit<R>
@@ -433,10 +433,10 @@ where
 
                     let address = row.address();
                     let file_index = row.file_index();
-                    let line = row.line();
+                    let line = row.line().unwrap_or(0) as u32;
                     let column = match row.column() {
-                        gimli::ColumnType::LeftEdge => None,
-                        gimli::ColumnType::Column(x) => Some(x),
+                        gimli::ColumnType::LeftEdge => 0,
+                        gimli::ColumnType::Column(x) => x as u32,
                     };
 
                     if let Some(last_row) = sequence_rows.last_mut() {
@@ -520,8 +520,12 @@ where
         let file = lines.files.get(row.file_index as usize).map(String::as_str);
         Ok(Some(Location {
             file,
-            line: row.line,
-            column: row.column,
+            line: if row.line != 0 { Some(row.line) } else { None },
+            column: if row.column != 0 {
+                Some(row.column)
+            } else {
+                None
+            },
         }))
     }
 
@@ -905,12 +909,12 @@ where
                                     if x == 0 {
                                         None
                                     } else {
-                                        Some(x)
+                                        Some(x as u32)
                                     }
                                 });
                             }
                             gimli::DW_AT_call_column => {
-                                call_column = attr.udata_value();
+                                call_column = attr.udata_value().map(|x| x as u32);
                             }
                             _ => {}
                         }
@@ -1033,7 +1037,7 @@ pub struct Location<'a> {
     /// The file name.
     pub file: Option<&'a str>,
     /// The line number.
-    pub line: Option<u64>,
+    pub line: Option<u32>,
     /// The column number.
-    pub column: Option<u64>,
+    pub column: Option<u32>,
 }
