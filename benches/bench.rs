@@ -199,12 +199,18 @@ fn context_query_with_functions_rc(b: &mut test::Bencher) {
         let ctx = addr2line::Context::new(file).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            test::black_box(ctx.find_frames(*addr)).ok();
+            let mut frames = ctx.find_frames(*addr).unwrap();
+            while let Ok(Some(ref frame)) = frames.next() {
+                test::black_box(frame);
+            }
         }
 
         b.iter(|| {
             for addr in &addresses {
-                test::black_box(ctx.find_frames(*addr)).ok();
+                let mut frames = ctx.find_frames(*addr).unwrap();
+                while let Ok(Some(ref frame)) = frames.next() {
+                    test::black_box(frame);
+                }
             }
         });
     });
@@ -222,12 +228,18 @@ fn context_query_with_functions_slice(b: &mut test::Bencher) {
         let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            test::black_box(ctx.find_frames(*addr)).ok();
+            let mut frames = ctx.find_frames(*addr).unwrap();
+            while let Ok(Some(ref frame)) = frames.next() {
+                test::black_box(frame);
+            }
         }
 
         b.iter(|| {
             for addr in &addresses {
-                test::black_box(ctx.find_frames(*addr)).ok();
+                let mut frames = ctx.find_frames(*addr).unwrap();
+                while let Ok(Some(ref frame)) = frames.next() {
+                    test::black_box(frame);
+                }
             }
         });
     });
@@ -277,7 +289,10 @@ fn context_new_and_query_with_functions_rc(b: &mut test::Bencher) {
         b.iter(|| {
             let ctx = addr2line::Context::new(file).unwrap();
             for addr in addresses.iter().take(100) {
-                test::black_box(ctx.find_frames(*addr)).ok();
+                let mut frames = ctx.find_frames(*addr).unwrap();
+                while let Ok(Some(ref frame)) = frames.next() {
+                    test::black_box(frame);
+                }
             }
         });
     });
@@ -294,7 +309,10 @@ fn context_new_and_query_with_functions_slice(b: &mut test::Bencher) {
             let dwarf = dwarf_borrow(&dwarf);
             let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
             for addr in addresses.iter().take(100) {
-                test::black_box(ctx.find_frames(*addr)).ok();
+                let mut frames = ctx.find_frames(*addr).unwrap();
+                while let Ok(Some(ref frame)) = frames.next() {
+                    test::black_box(frame);
+                }
             }
         });
     });
