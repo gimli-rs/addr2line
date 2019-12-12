@@ -314,7 +314,7 @@ impl<R: gimli::Reader> Context<R> {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
-                let functions = unit.parse_functions(&self.sections)?;
+                let functions = unit.parse_functions(&self.sections, &self.units)?;
                 let mut res: SmallVec<[_; 16]> = SmallVec::new();
                 if let Ok(address) = functions.addresses.binary_search_by(|address| {
                     if probe < address.range.begin {
@@ -366,7 +366,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
         for unit in &self.units {
-            unit.parse_functions(&self.sections)?;
+            unit.parse_functions(&self.sections, &self.units)?;
         }
         Ok(())
     }
@@ -386,8 +386,8 @@ struct LineSequence {
 struct LineRow {
     address: u64,
     file_index: u64,
-    line: Option<u64>,
-    column: Option<u64>,
+    line: u32,
+    column: u32,
 }
 
 struct ResUnit<R>
@@ -397,7 +397,7 @@ where
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<Functions<R::Offset>, Error>>,
+    funcs: LazyCell<Result<Functions<R>, Error>>,
 }
 
 impl<R> ResUnit<R>
@@ -433,10 +433,10 @@ where
 
                     let address = row.address();
                     let file_index = row.file_index();
-                    let line = row.line();
+                    let line = row.line().unwrap_or(0) as u32;
                     let column = match row.column() {
-                        gimli::ColumnType::LeftEdge => None,
-                        gimli::ColumnType::Column(x) => Some(x),
+                        gimli::ColumnType::LeftEdge => 0,
+                        gimli::ColumnType::Column(x) => x as u32,
                     };
 
                     if let Some(last_row) = sequence_rows.last_mut() {
@@ -475,9 +475,13 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<&Functions<R::Offset>, Error> {
+    fn parse_functions(
+        &self,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+    ) -> Result<&Functions<R>, Error> {
         self.funcs
-            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections, units))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -520,8 +524,12 @@ where
         let file = lines.files.get(row.file_index as usize).map(String::as_str);
         Ok(Some(Location {
             file,
-            line: row.line,
-            column: row.column,
+            line: if row.line != 0 { Some(row.line) } else { None },
+            column: if row.column != 0 {
+                Some(row.column)
+            } else {
+                None
+            },
         }))
     }
 
@@ -572,7 +580,7 @@ fn path_push(path: &mut String, p: &str) {
 
 fn name_attr<'abbrev, 'unit, R>(
     attr: gimli::AttributeValue<R>,
-    unit: &ResUnit<R>,
+    unit: &gimli::Unit<R>,
     sections: &gimli::Dwarf<R>,
     units: &[ResUnit<R>],
     recursion_limit: usize,
@@ -585,7 +593,7 @@ where
     }
 
     let mut entries = match attr {
-        gimli::AttributeValue::UnitRef(offset) => unit.dw_unit.entries_raw(Some(offset))?,
+        gimli::AttributeValue::UnitRef(offset) => unit.entries_raw(Some(offset))?,
         gimli::AttributeValue::DebugInfoRef(dr) => {
             if let Some((unit, offset)) = units
                 .iter()
@@ -616,12 +624,12 @@ where
         match entries.read_attribute(*spec) {
             Ok(ref attr) => match attr.name() {
                 gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                    if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    if let Ok(val) = sections.attr_string(unit, attr.value()) {
                         return Ok(Some(val));
                     }
                 }
                 gimli::DW_AT_name => {
-                    if let Ok(val) = sections.attr_string(&unit.dw_unit, attr.value()) {
+                    if let Ok(val) = sections.attr_string(unit, attr.value()) {
                         name = Some(val);
                     }
                 }
@@ -656,43 +664,46 @@ struct FunctionAddress {
     function: usize,
 }
 
-struct Functions<T> {
+struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` and `DW_TAG_inlined_subroutine` details.
-    functions: Box<[Function<T>]>,
+    functions: Box<[Function<R>]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     addresses: Box<[FunctionAddress]>,
 }
 
-struct Function<T> {
-    offset: gimli::UnitOffset<T>,
+struct Function<R: gimli::Reader> {
+    name: Option<R>,
+    call_file: u64,
+    call_line: u32,
+    call_column: u32,
     /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
     // TODO: this is often empty, so we could save more memory by storing the
     // length in the allocated memory.
     inlined: Box<[FunctionAddress]>,
 }
 
-impl<T: gimli::ReaderOffset> Functions<T> {
-    fn parse<R: gimli::Reader<Offset = T>>(
+impl<R: gimli::Reader> Functions<R> {
+    fn parse(
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Functions<T>, Error> {
+        units: &[ResUnit<R>],
+    ) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
         // These are ignored.
         let mut inlined = Vec::new();
         let mut entries = unit.entries_raw(None)?;
         while !entries.is_empty() {
-            let offset = entries.next_offset();
             let depth = entries.next_depth();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
                     Function::parse(
                         &mut entries,
                         abbrev,
-                        offset,
                         depth,
                         unit,
                         sections,
+                        units,
                         &mut functions,
                         &mut addresses,
                         &mut inlined,
@@ -719,15 +730,15 @@ impl<T: gimli::ReaderOffset> Functions<T> {
     }
 }
 
-impl<T: gimli::ReaderOffset> Function<T> {
-    fn parse<R: gimli::Reader<Offset = T>>(
+impl<R: gimli::Reader> Function<R> {
+    fn parse(
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
-        offset: gimli::UnitOffset<R::Offset>,
         depth: isize,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
-        functions: &mut Vec<Function<T>>,
+        units: &[ResUnit<R>],
+        functions: &mut Vec<Function<R>>,
         addresses: &mut Vec<FunctionAddress>,
         inlined: &mut Vec<FunctionAddress>,
     ) -> Result<(), Error> {
@@ -735,24 +746,61 @@ impl<T: gimli::ReaderOffset> Function<T> {
         let mut high_pc = None;
         let mut size = None;
         let mut ranges = None;
+        let mut name = None;
+        let mut call_file = 0;
+        let mut call_line = 0;
+        let mut call_column = 0;
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
-                Ok(ref attr) => match attr.name() {
-                    gimli::DW_AT_low_pc => {
-                        if let gimli::AttributeValue::Addr(val) = attr.value() {
-                            low_pc = Some(val);
+                Ok(ref attr) => {
+                    match attr.name() {
+                        gimli::DW_AT_low_pc => {
+                            if let gimli::AttributeValue::Addr(val) = attr.value() {
+                                low_pc = Some(val);
+                            }
+                        }
+                        gimli::DW_AT_high_pc => match attr.value() {
+                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
+                            gimli::AttributeValue::Udata(val) => size = Some(val),
+                            _ => {}
+                        },
+                        gimli::DW_AT_ranges => {
+                            ranges = sections.attr_ranges_offset(unit, attr.value())?;
+                        }
+                        gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                            if let Ok(val) = sections.attr_string(unit, attr.value()) {
+                                name = Some(val);
+                            }
+                        }
+                        gimli::DW_AT_name => {
+                            if name.is_none() {
+                                name = sections.attr_string(unit, attr.value()).ok();
+                            }
+                        }
+                        gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                            if name.is_none() {
+                                name = name_attr(attr.value(), unit, sections, units, 16)?;
+                            }
+                        }
+                        _ => {}
+                    };
+                    if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+                        match attr.name() {
+                            gimli::DW_AT_call_file => {
+                                if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                                    call_file = fi;
+                                }
+                            }
+                            gimli::DW_AT_call_line => {
+                                call_line = attr.udata_value().unwrap_or(0) as u32;
+                            }
+                            gimli::DW_AT_call_column => {
+                                call_column = attr.udata_value().unwrap_or(0) as u32;
+                            }
+                            _ => {}
                         }
                     }
-                    gimli::DW_AT_high_pc => match attr.value() {
-                        gimli::AttributeValue::Addr(val) => high_pc = Some(val),
-                        gimli::AttributeValue::Udata(val) => size = Some(val),
-                        _ => {}
-                    },
-                    gimli::DW_AT_ranges => {
-                        ranges = sections.attr_ranges_offset(unit, attr.value())?;
-                    }
-                    _ => {}
-                },
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -763,7 +811,6 @@ impl<T: gimli::ReaderOffset> Function<T> {
             if next_depth <= depth {
                 break;
             }
-            let next_offset = entries.next_offset();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram
                     || abbrev.tag() == gimli::DW_TAG_inlined_subroutine
@@ -771,10 +818,10 @@ impl<T: gimli::ReaderOffset> Function<T> {
                     Function::parse(
                         entries,
                         abbrev,
-                        next_offset,
                         next_depth,
                         unit,
                         sections,
+                        units,
                         functions,
                         addresses,
                         &mut local_inlined,
@@ -792,7 +839,10 @@ impl<T: gimli::ReaderOffset> Function<T> {
 
         let function_index = functions.len();
         functions.push(Function {
-            offset,
+            name,
+            call_file,
+            call_line,
+            call_column,
             inlined: local_inlined.into_boxed_slice(),
         });
 
@@ -838,7 +888,7 @@ where
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R::Offset>; 16]>>,
+    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R>; 16]>>,
     next: Option<Location<'ctx>>,
 }
 
@@ -861,83 +911,31 @@ where
 
         let unit = &self.units[self.unit_id];
 
-        let mut entries = unit.dw_unit.entries_raw(Some(func.offset))?;
-        let abbrev = entries
-            .read_abbreviation()?
-            .expect("DIE we read a while ago is no longer readable??");
-
-        let mut name = None;
-        let mut call_file = None;
-        let mut call_line = None;
-        let mut call_column = None;
-        for spec in abbrev.attributes() {
-            match entries.read_attribute(*spec) {
-                Ok(ref attr) => {
-                    match attr.name() {
-                        gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                            if let Ok(val) = self.sections.attr_string(&unit.dw_unit, attr.value())
-                            {
-                                name = Some(val);
-                            }
-                        }
-                        gimli::DW_AT_name => {
-                            if name.is_none() {
-                                name = self.sections.attr_string(&unit.dw_unit, attr.value()).ok();
-                            }
-                        }
-                        gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
-                            if name.is_none() {
-                                name =
-                                    name_attr(attr.value(), unit, self.sections, self.units, 16)?;
-                            }
-                        }
-                        _ => {}
-                    }
-                    if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-                        match attr.name() {
-                            gimli::DW_AT_call_file => {
-                                if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
-                                    call_file = Some(fi);
-                                }
-                            }
-                            gimli::DW_AT_call_line => {
-                                call_line = attr.udata_value().and_then(|x| {
-                                    if x == 0 {
-                                        None
-                                    } else {
-                                        Some(x)
-                                    }
-                                });
-                            }
-                            gimli::DW_AT_call_column => {
-                                call_column = attr.udata_value();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-            let file = match call_file {
-                Some(fi) => match unit.parse_lines(self.sections)? {
-                    Some(lines) => lines.files.get(fi as usize).map(String::as_str),
-                    None => None,
+        if self.funcs.len() != 0 {
+            let mut next = Location {
+                file: None,
+                line: if func.call_line != 0 {
+                    Some(func.call_line)
+                } else {
+                    None
                 },
-                _ => None,
+                column: if func.call_column != 0 {
+                    Some(func.call_column)
+                } else {
+                    None
+                },
             };
+            if func.call_file != 0 {
+                if let Some(lines) = unit.parse_lines(self.sections)? {
+                    next.file = lines.files.get(func.call_file as usize).map(String::as_str);
+                }
+            }
 
-            self.next = Some(Location {
-                file,
-                line: call_line,
-                column: call_column,
-            });
+            self.next = Some(next);
         }
 
         Ok(Some(Frame {
-            function: name.map(|name| FunctionName {
+            function: func.name.clone().map(|name| FunctionName {
                 name,
                 language: unit.lang,
             }),
@@ -1033,7 +1031,7 @@ pub struct Location<'a> {
     /// The file name.
     pub file: Option<&'a str>,
     /// The line number.
-    pub line: Option<u64>,
+    pub line: Option<u32>,
     /// The column number.
-    pub column: Option<u64>,
+    pub column: Option<u32>,
 }
