@@ -23,16 +23,10 @@
 //! wrapper also uses symbol table information provided by the `object` crate.
 #![deny(missing_docs)]
 #![no_std]
-#![cfg_attr(not(feature = "std"), feature(alloc))]
 
-#[cfg(feature = "std")]
+#[allow(unused_imports)]
 #[macro_use]
-extern crate std;
-
-#[cfg(not(feature = "std"))]
 extern crate alloc;
-#[cfg(not(feature = "std"))]
-extern crate core as std;
 
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
@@ -45,11 +39,6 @@ pub extern crate object;
 extern crate rustc_demangle;
 extern crate smallvec;
 
-#[cfg(feature = "std")]
-mod alloc {
-    pub use std::{borrow, boxed, rc, string, vec};
-}
-
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 #[cfg(feature = "object")]
@@ -57,10 +46,10 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use std::cmp::Ordering;
-use std::iter;
-use std::mem;
-use std::u64;
+use core::cmp::Ordering;
+use core::iter;
+use core::mem;
+use core::u64;
 
 use fallible_iterator::FallibleIterator;
 use lazycell::LazyCell;
@@ -72,7 +61,7 @@ type Error = gimli::Error;
 ///
 /// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
 /// when performing lookups for many addresses in the same executable.
-pub struct Context<R = gimli::EndianRcSlice<gimli::RunTimeEndian>>
+pub struct Context<R>
 where
     R: gimli::Reader,
 {
@@ -81,6 +70,11 @@ where
     sections: gimli::Dwarf<R>,
 }
 
+/// The type of `Context` that supports the `new` method.
+#[cfg(feature = "std-object")]
+pub type ObjectContext = Context<gimli::EndianRcSlice<gimli::RunTimeEndian>>;
+
+#[cfg(feature = "std-object")]
 impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// Construct a new `Context`.
     ///
@@ -90,7 +84,6 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     ///
     /// Performance sensitive applications may want to use `Context::from_sections`
     /// with a more specialised `gimli::Reader` implementation.
-    #[cfg(feature = "object")]
     pub fn new<'data, 'file, O: object::Object<'data, 'file>>(
         file: &'file O,
     ) -> Result<Self, Error> {

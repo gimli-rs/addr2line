@@ -55,7 +55,7 @@ fn parse_base_rc() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
-        addr2line::Context::new(file).unwrap();
+        addr2line::ObjectContext::new(file).unwrap();
     });
 }
 
@@ -75,7 +75,7 @@ fn parse_lines_rc() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
-        let context = addr2line::Context::new(file).unwrap();
+        let context = addr2line::ObjectContext::new(file).unwrap();
         context.parse_lines().unwrap();
     });
 }
@@ -97,7 +97,7 @@ fn parse_functions_rc() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
-        let context = addr2line::Context::new(file).unwrap();
+        let context = addr2line::ObjectContext::new(file).unwrap();
         context.parse_functions().unwrap();
     });
 }
