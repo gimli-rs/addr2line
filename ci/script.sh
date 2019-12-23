@@ -14,15 +14,11 @@ case "$GIMLI_JOB" in
         ;;
 
     "features")
+        cargo build --no-default-features
         cargo build --no-default-features --features "std"
         cargo build --no-default-features --features "std cpp_demangle"
         cargo build --no-default-features --features "std rustc-demangle"
         cargo build --no-default-features --features "std-object"
-        ;;
-
-    "nightly_features")
-        cargo build --no-default-features --features "alloc"
-        cargo build --no-default-features --features "alloc object"
         ;;
 
     "doc")

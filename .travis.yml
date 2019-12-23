@@ -40,6 +40,3 @@ matrix:
     # Benching should only happen on nightly.
     - rust: nightly
       env: GIMLI_JOB="bench"
-    # Some features require nightly.
-    - rust: nightly
-      env: GIMLI_JOB="nightly_features"
