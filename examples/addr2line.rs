@@ -63,7 +63,7 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
     } else if llvm {
         println!("??:0:0");
     } else {
-        println!("??:0");
+        println!("??:?");
     }
 }
 
@@ -218,7 +218,7 @@ fn main() {
                     }
 
                     if pretty {
-                        print!(" ");
+                        print!(" at ");
                     } else {
                         println!();
                     }
@@ -227,7 +227,7 @@ fn main() {
                 if llvm {
                     println!("??:0:0");
                 } else {
-                    println!("??:0");
+                    println!("??:?");
                 }
             }
         } else {
