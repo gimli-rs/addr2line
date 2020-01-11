@@ -1,3 +1,51 @@
+## 0.11.0 (2020/01/11)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+* [#130](https://github.com/gimli-rs/addr2line/pull/130)
+  Changed `Location::file` from `Option<String>` to `Option<&str>`.
+  This required adding lifetime parameters to `Location` and other structs that
+  contain it.
+
+* [#152](https://github.com/gimli-rs/addr2line/pull/152)
+  Changed `Location::line` and `Location::column` from `Option<u64>`to `Option<u32>`.
+
+* [#156](https://github.com/gimli-rs/addr2line/pull/156)
+  Deleted `alloc` feature, and fixed `no-std` builds with stable rust.
+  Removed default `Reader` parameter for `Context`, and added `ObjectContext` instead.
+
+### Added
+
+* [#134](https://github.com/gimli-rs/addr2line/pull/134)
+  Added `Context::from_dwarf`.
+
+### Changed
+
+* [#133](https://github.com/gimli-rs/addr2line/pull/133)
+  Fixed handling of units that can't be parsed.
+
+* [#155](https://github.com/gimli-rs/addr2line/pull/155)
+  Fixed `addr2line` output to match binutils.
+
+* [#130](https://github.com/gimli-rs/addr2line/pull/130)
+  Improved `.debug_line` parsing performance.
+
+* [#148](https://github.com/gimli-rs/addr2line/pull/148)
+  [#150](https://github.com/gimli-rs/addr2line/pull/150)
+  [#151](https://github.com/gimli-rs/addr2line/pull/151)
+  [#152](https://github.com/gimli-rs/addr2line/pull/152)
+  Improved `.debug_info` parsing performance.
+
+* [#137](https://github.com/gimli-rs/addr2line/pull/137)
+  [#138](https://github.com/gimli-rs/addr2line/pull/138)
+  [#139](https://github.com/gimli-rs/addr2line/pull/139)
+  [#140](https://github.com/gimli-rs/addr2line/pull/140)
+  [#146](https://github.com/gimli-rs/addr2line/pull/146)
+  Improved benchmarks.
+
+
 ## 0.10.0 (2019/07/07)
 
 ### Breaking changes
