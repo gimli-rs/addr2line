@@ -99,9 +99,12 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
         {
+            use object::ObjectSection;
+
             let data = file
-                .section_data_by_name(S::section_name())
-                .unwrap_or(Cow::Borrowed(&[]));
+                .section_by_name(S::section_name())
+                .and_then(|section| section.data().ok())
+                .unwrap_or(&[]);
             S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
