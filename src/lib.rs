@@ -99,9 +99,12 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
         {
+            use object::ObjectSection;
+
             let data = file
-                .section_data_by_name(S::section_name())
-                .unwrap_or(Cow::Borrowed(&[]));
+                .section_by_name(S::section_name())
+                .and_then(|section| section.data().ok())
+                .unwrap_or(&[]);
             S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
@@ -266,7 +269,12 @@ impl<R: gimli::Reader> Context<R> {
         })
     }
 
-    fn find_unit(&self, probe: u64) -> Option<usize> {
+    /// The dwarf sections associated with this `Context`.
+    pub fn dwarf(&self) -> &gimli::Dwarf<R> {
+        &self.sections
+    }
+
+    fn find_unit_id(&self, probe: u64) -> Option<usize> {
         let idx = self.unit_ranges.binary_search_by(|r| {
             if probe < r.0.begin {
                 Ordering::Greater
@@ -285,9 +293,14 @@ impl<R: gimli::Reader> Context<R> {
         Some(unit_id)
     }
 
+    /// Find the DWARF unit corresponding to the given virtual memory address.
+    pub fn find_dwarf_unit(&self, probe: u64) -> Option<&gimli::Unit<R>> {
+        self.find_unit_id(probe).map(|unit_id| &self.units[unit_id].dw_unit)
+    }
+
     /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
-        match self.find_unit(probe) {
+        match self.find_unit_id(probe) {
             Some(unit_id) => self.units[unit_id].find_location(probe, &self.sections),
             None => Ok(None),
         }
@@ -303,7 +316,7 @@ impl<R: gimli::Reader> Context<R> {
     /// to the innermost inline function.  Subsequent frames contain the caller and call
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit_id, loc, funcs) = match self.find_unit(probe) {
+        let (unit_id, loc, funcs) = match self.find_unit_id(probe) {
             Some(unit_id) => {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
@@ -665,6 +678,7 @@ struct Functions<R: gimli::Reader> {
 }
 
 struct Function<R: gimli::Reader> {
+    dw_die_offset: gimli::UnitOffset<R::Offset>,
     name: Option<R>,
     call_file: u64,
     call_line: u32,
@@ -687,10 +701,12 @@ impl<R: gimli::Reader> Functions<R> {
         let mut inlined = Vec::new();
         let mut entries = unit.entries_raw(None)?;
         while !entries.is_empty() {
+            let dw_die_offset = entries.next_offset();
             let depth = entries.next_depth();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
                     Function::parse(
+                        dw_die_offset,
                         &mut entries,
                         abbrev,
                         depth,
@@ -725,6 +741,7 @@ impl<R: gimli::Reader> Functions<R> {
 
 impl<R: gimli::Reader> Function<R> {
     fn parse(
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
@@ -800,6 +817,7 @@ impl<R: gimli::Reader> Function<R> {
 
         let mut local_inlined = Vec::new();
         loop {
+            let dw_die_offset = entries.next_offset();
             let next_depth = entries.next_depth();
             if next_depth <= depth {
                 break;
@@ -809,6 +827,7 @@ impl<R: gimli::Reader> Function<R> {
                     || abbrev.tag() == gimli::DW_TAG_inlined_subroutine
                 {
                     Function::parse(
+                        dw_die_offset,
                         entries,
                         abbrev,
                         next_depth,
@@ -832,6 +851,7 @@ impl<R: gimli::Reader> Function<R> {
 
         let function_index = functions.len();
         functions.push(Function {
+            dw_die_offset,
             name,
             call_file,
             call_line,
@@ -896,6 +916,7 @@ where
             (loc, Some(func)) => (loc, func),
             (Some(loc), None) => {
                 return Ok(Some(Frame {
+                    dw_die_offset: None,
                     function: None,
                     location: Some(loc),
                 }))
@@ -928,6 +949,7 @@ where
         }
 
         Ok(Some(Frame {
+            dw_die_offset: Some(func.dw_die_offset),
             function: func.name.clone().map(|name| FunctionName {
                 name,
                 language: unit.lang,
@@ -952,6 +974,8 @@ where
 
 /// A function frame.
 pub struct Frame<'ctx, R: gimli::Reader> {
+    /// The DWARF unit offset corresponding to the DIE of the function.
+    pub dw_die_offset: Option<gimli::UnitOffset<R::Offset>>,
     /// The name of the function.
     pub function: Option<FunctionName<R>>,
     /// The source location corresponding to this frame.
