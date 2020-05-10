@@ -30,14 +30,13 @@ extern crate alloc;
 
 #[cfg(feature = "cpp_demangle")]
 extern crate cpp_demangle;
+#[cfg(feature = "fallible-iterator")]
 pub extern crate fallible_iterator;
 pub extern crate gimli;
-extern crate lazycell;
 #[cfg(feature = "object")]
 pub extern crate object;
 #[cfg(feature = "rustc-demangle")]
 extern crate rustc_demangle;
-extern crate smallvec;
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -51,9 +50,20 @@ use core::iter;
 use core::mem;
 use core::u64;
 
-use fallible_iterator::FallibleIterator;
-use lazycell::LazyCell;
-use smallvec::SmallVec;
+use crate::lazy::LazyCell;
+
+#[cfg(feature = "smallvec")]
+mod maybe_small {
+    pub type Vec<T> = smallvec::SmallVec<[T; 16]>;
+    pub type IntoIter<T> = smallvec::IntoIter<[T; 16]>;
+}
+#[cfg(not(feature = "smallvec"))]
+mod maybe_small {
+    pub type Vec<T> = alloc::vec::Vec<T>;
+    pub type IntoIter<T> = alloc::vec::IntoIter<T>;
+}
+
+mod lazy;
 
 type Error = gimli::Error;
 
@@ -295,7 +305,8 @@ impl<R: gimli::Reader> Context<R> {
 
     /// Find the DWARF unit corresponding to the given virtual memory address.
     pub fn find_dwarf_unit(&self, probe: u64) -> Option<&gimli::Unit<R>> {
-        self.find_unit_id(probe).map(|unit_id| &self.units[unit_id].dw_unit)
+        self.find_unit_id(probe)
+            .map(|unit_id| &self.units[unit_id].dw_unit)
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
@@ -321,7 +332,7 @@ impl<R: gimli::Reader> Context<R> {
                 let unit = &self.units[unit_id];
                 let loc = unit.find_location(probe, &self.sections)?;
                 let functions = unit.parse_functions(&self.sections, &self.units)?;
-                let mut res: SmallVec<[_; 16]> = SmallVec::new();
+                let mut res = maybe_small::Vec::new();
                 if let Ok(address) = functions.addresses.binary_search_by(|address| {
                     if probe < address.range.begin {
                         Ordering::Greater
@@ -347,7 +358,7 @@ impl<R: gimli::Reader> Context<R> {
                 }
                 (unit_id, loc, res)
             }
-            None => (0, None, SmallVec::new()),
+            None => (0, None, maybe_small::Vec::new()),
         };
 
         Ok(FrameIter {
@@ -901,7 +912,7 @@ where
     unit_id: usize,
     units: &'ctx Vec<ResUnit<R>>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: iter::Rev<smallvec::IntoIter<[&'ctx Function<R>; 16]>>,
+    funcs: iter::Rev<maybe_small::IntoIter<&'ctx Function<R>>>,
     next: Option<Location<'ctx>>,
 }
 
@@ -959,7 +970,8 @@ where
     }
 }
 
-impl<'ctx, R> FallibleIterator for FrameIter<'ctx, R>
+#[cfg(feature = "fallible-iterator")]
+impl<'ctx, R> fallible_iterator::FallibleIterator for FrameIter<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {

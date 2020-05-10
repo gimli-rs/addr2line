@@ -19,6 +19,8 @@ case "$GIMLI_JOB" in
         cargo build --no-default-features --features "std cpp_demangle"
         cargo build --no-default-features --features "std rustc-demangle"
         cargo build --no-default-features --features "std-object"
+        cargo build --no-default-features --features "fallible-iterator"
+        cargo build --no-default-features --features "smallvec"
         ;;
 
     "doc")
