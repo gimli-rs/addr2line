@@ -1,3 +1,23 @@
+## 0.12.0 (2020/05/12)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+* Added more optional features: `smallvec` and `fallible-iterator`.
+  [#160](https://github.com/gimli-rs/addr2line/pull/160)
+
+### Added
+
+*  Added `Context::dwarf` and `Context::find_dwarf_unit`.
+  [#159](https://github.com/gimli-rs/addr2line/pull/159)
+
+### Changed
+
+* Removed `lazycell` dependency.
+  [#160](https://github.com/gimli-rs/addr2line/pull/160)
+
+
 ## 0.11.0 (2020/01/11)
 
 ### Breaking changes
