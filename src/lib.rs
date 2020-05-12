@@ -113,8 +113,8 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
 
             let data = file
                 .section_by_name(S::section_name())
-                .and_then(|section| section.data().ok())
-                .unwrap_or(&[]);
+                .and_then(|section| section.uncompressed_data().ok())
+                .unwrap_or(Cow::Borrowed(&[]));
             S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 

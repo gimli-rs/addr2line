@@ -10,7 +10,7 @@ use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
 
-use object::Object;
+use object::{Object, ObjectSection};
 
 fn release_fixture_path() -> PathBuf {
     let mut path = PathBuf::new();
@@ -31,12 +31,10 @@ fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
 
 fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
     let load_section = |id: gimli::SectionId| -> Result<Cow<'a, [u8]>, gimli::Error> {
-        use object::ObjectSection;
-        let data = object
+        Ok(object
             .section_by_name(id.name())
-            .and_then(|section| section.data().ok())
-            .unwrap_or(&[][..]);
-        Ok(Cow::Borrowed(data))
+            .map(|section| section.uncompressed_data().unwrap())
+            .unwrap_or(Cow::Borrowed(&[][..])))
     };
     let load_section_sup = |_| Ok(Cow::Borrowed(&[][..]));
     gimli::Dwarf::load(&load_section, &load_section_sup).unwrap()
