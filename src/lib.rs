@@ -75,9 +75,15 @@ pub struct Context<R>
 where
     R: gimli::Reader,
 {
-    unit_ranges: Vec<(gimli::Range, usize)>,
+    unit_ranges: Vec<UnitRange>,
     units: Vec<ResUnit<R>>,
     sections: gimli::Dwarf<R>,
+}
+
+struct UnitRange {
+    unit_id: usize,
+    max_end: u64,
+    range: gimli::Range,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -228,7 +234,11 @@ impl<R: gimli::Reader> Context<R> {
 
                 let mut add_range = |range: gimli::Range| {
                     if range.begin < range.end {
-                        unit_ranges.push((range, unit_id));
+                        unit_ranges.push(UnitRange {
+                            range,
+                            unit_id,
+                            max_end: 0,
+                        });
                     }
                 };
                 if let Some(offset) = ranges {
@@ -255,7 +265,15 @@ impl<R: gimli::Reader> Context<R> {
         }
 
         // Sort this for faster lookup in `find_unit_id_and_address` below.
-        unit_ranges.sort_by_key(|x| x.0.begin);
+        unit_ranges.sort_by_key(|i| i.range.begin);
+
+        // Calculate the `max_end` field now that we've determined the order of
+        // CUs.
+        let mut max = 0;
+        for i in unit_ranges.iter_mut() {
+            max = max.max(i.range.end);
+            i.max_end = max;
+        }
 
         Ok(Context {
             units: res_units,
@@ -269,55 +287,63 @@ impl<R: gimli::Reader> Context<R> {
         &self.sections
     }
 
-    // Finds the CGU id (index in `self.units`) for the function address given.
-    // The index of the address in the CGU's address table is also returned
+    // Finds the CU id (index in `self.units`) for the function address given.
+    // The index of the address in the CU's address table is also returned
     // because this is calculated here to ensure the function address actually
-    // resides in the functions of the CGU.
+    // resides in the functions of the CU.
     fn find_unit_id_and_address(&self, probe: u64) -> Option<(usize, usize)> {
-        // First up find the first position in the array which could have our
-        // function address.
-        let pos = match self.unit_ranges.binary_search_by_key(&probe, |r| r.0.begin) {
+        // First up find the position in the array which could have our function
+        // address.
+        let pos = match self
+            .unit_ranges
+            .binary_search_by_key(&probe, |i| i.range.begin)
+        {
             // Although unlikely, we could find an exact match.
-            Ok(i) => i,
-            // `probe` is smaller than all CGU start addresses, so it's not
-            // contained anywhere.
-            Err(0) => return None,
+            Ok(i) => i + 1,
             // No exact match was found, but this probe would fit at slot `i`.
-            // This means that slot `i-1` is the highest start address which is
-            // underneath `probe`, which is the CGU we'd like to start
-            // searching.
-            Err(i) => i - 1,
+            // This means that slot `i` is bigger than `probe`, along with all
+            // indices greater than `i`, so we need to search all previous
+            // entries.
+            Err(i) => i,
         };
 
-        for (range, unit_id) in self.unit_ranges[pos..].iter() {
-            // CGUs are sorted by `begin`, so once we hit a CGU that's beyond
-            // our `probe` then we know we can stop searching and bail out of
-            // this loop.
-            if probe < range.begin {
+        // Once we have our index we iterate backwards from that position
+        // looking for a matching CU.
+        for i in self.unit_ranges[..pos].iter().rev() {
+            // We know that this CU's start is beneath the probe already because
+            // of our sorted array.
+            debug_assert!(i.range.begin <= probe);
+
+            // Each entry keeps track of the maximum end address seen so far,
+            // starting from the beginning of the array of unit ranges. We're
+            // iterating in reverse so if our probe is beyond the maximum range
+            // of this entry, then it's guaranteed to not fit in any prior
+            // entries, so we break out.
+            if probe > i.max_end {
                 break;
             }
 
-            // If this CGU doesn't actually contain this address, move to the
-            // next CGU.
-            if probe > range.end {
+            // If this CU doesn't actually contain this address, move to the
+            // next CU.
+            if probe > i.range.end {
                 continue;
             }
 
-            // There might be multiple CGUs whose range contains this address.
+            // There might be multiple CUs whose range contains this address.
             // Weak symbols have shown up in the wild which cause this to happen
             // but otherwise this happened in rust-lang/backtrace-rs#327 too. In
             // any case we assume that might happen, and as a result we need to
-            // find a CGU which actually contains this function.
+            // find a CU which actually contains this function.
             //
             // Consequently we consult the function address table here, and only
-            // if there's actually a function in this CGU which contains this
+            // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            let funcs = match self.units[*unit_id].parse_functions(&self.sections, &self.units) {
+            let funcs = match self.units[i.unit_id].parse_functions(&self.sections, &self.units) {
                 Ok(func) => func,
                 Err(_) => continue,
             };
             if let Some(addr) = funcs.find_address(probe) {
-                return Some((*unit_id, addr));
+                return Some((i.unit_id, addr));
             }
         }
 

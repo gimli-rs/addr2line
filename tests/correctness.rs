@@ -6,6 +6,7 @@ extern crate memmap;
 extern crate object;
 
 use addr2line::Context;
+use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use object::Object;
 use std::fs::File;
@@ -51,13 +52,13 @@ fn correctness() {
     let test = |sym: u64, expected_prefix: &str| {
         let ip = sym.wrapping_sub(bias.unwrap());
 
-        let mut frames = ctx.find_frames(ip).unwrap();
-        let frame = frames.next().unwrap().unwrap();
+        let frames = ctx.find_frames(ip).unwrap();
+        let frame = frames.last().unwrap().unwrap();
         let name = frame.function.as_ref().unwrap().demangle().unwrap();
         // Old rust versions generate DWARF with wrong linkage name,
         // so only check the start.
         if !name.starts_with(expected_prefix) {
-            panic!("incorrect name '{}'", name);
+            panic!("incorrect name '{}', expected {:?}", name, expected_prefix);
         }
     };
 
@@ -70,10 +71,14 @@ fn correctness() {
 }
 
 mod small {
-    pub fn test_function() {}
+    pub fn test_function() {
+        println!("y");
+    }
 }
 
-fn test_function() {}
+fn test_function() {
+    println!("x");
+}
 
 #[test]
 fn zero_sequence() {
