@@ -136,6 +136,9 @@ fn make_tests() -> Vec<TestDescAndFn> {
 }
 
 fn main() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     let args: Vec<_> = env::args().collect();
     test::test_main(&args, make_tests());
 }

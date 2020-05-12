@@ -4,13 +4,8 @@ set -ex
 
 case "$GIMLI_JOB" in
     "build")
-        if [ "$TRAVIS_OS_NAME" = "linux" ]; then
-            cargo test
-            cargo test --release
-        else
-            cargo build
-            cargo build --release
-        fi
+        cargo test
+        cargo test --release
         ;;
 
     "features")
