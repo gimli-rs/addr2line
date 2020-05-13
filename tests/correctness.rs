@@ -5,15 +5,41 @@ extern crate gimli;
 extern crate memmap;
 extern crate object;
 
+use addr2line::Context;
+use fallible_iterator::FallibleIterator;
+use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
+use object::Object;
 use std::fs::File;
 
-use addr2line::Context;
-use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
+fn find_debuginfo() -> memmap::Mmap {
+    let path = std::env::current_exe().unwrap();
+    let file = File::open(&path).unwrap();
+    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let file = &object::File::parse(&*map).unwrap();
+    if let Ok(uuid) = file.mach_uuid() {
+        for candidate in path.parent().unwrap().read_dir().unwrap() {
+            let path = candidate.unwrap().path();
+            if !path.to_str().unwrap().ends_with(".dSYM") {
+                continue;
+            }
+            for candidate in path.join("Contents/Resources/DWARF").read_dir().unwrap() {
+                let path = candidate.unwrap().path();
+                let file = File::open(&path).unwrap();
+                let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+                let file = &object::File::parse(&*map).unwrap();
+                if file.mach_uuid().unwrap() == uuid {
+                    return map;
+                }
+            }
+        }
+    }
+
+    return map;
+}
 
 #[test]
 fn correctness() {
-    let file = File::open("/proc/self/exe").unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
 
@@ -23,24 +49,40 @@ fn correctness() {
         IterationControl::Break
     });
 
-    let ip = (test_function as u64).wrapping_sub(bias.unwrap());
+    let test = |sym: u64, expected_prefix: &str| {
+        let ip = sym.wrapping_sub(bias.unwrap());
 
-    let mut frames = ctx.find_frames(ip).unwrap();
-    let frame = frames.next().unwrap().unwrap();
-    let name = frame.function.as_ref().unwrap().demangle().unwrap();
-    // Old rust versions generate DWARF with wrong linkage name,
-    // so only check the start.
-    if !name.starts_with("correctness::test_function") {
-        panic!("incorrect name '{}'", name);
+        let frames = ctx.find_frames(ip).unwrap();
+        let frame = frames.last().unwrap().unwrap();
+        let name = frame.function.as_ref().unwrap().demangle().unwrap();
+        // Old rust versions generate DWARF with wrong linkage name,
+        // so only check the start.
+        if !name.starts_with(expected_prefix) {
+            panic!("incorrect name '{}', expected {:?}", name, expected_prefix);
+        }
+    };
+
+    test(test_function as u64, "correctness::test_function");
+    test(
+        small::test_function as u64,
+        "correctness::small::test_function",
+    );
+    test(aux::foo as u64, "aux::foo");
+}
+
+mod small {
+    pub fn test_function() {
+        println!("y");
     }
 }
 
-fn test_function() {}
+fn test_function() {
+    println!("x");
+}
 
 #[test]
 fn zero_sequence() {
-    let file = File::open("/proc/self/exe").unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
     for probe in 0..10 {
@@ -50,8 +92,7 @@ fn zero_sequence() {
 
 #[test]
 fn zero_function() {
-    let file = File::open("/proc/self/exe").unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
     for probe in 0..10 {
