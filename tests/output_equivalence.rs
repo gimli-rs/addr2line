@@ -60,7 +60,9 @@ fn run_test(flags: Option<&str>) {
     let me = env::current_exe().unwrap();
     let mut exe = me.clone();
     assert!(exe.pop());
-    assert!(exe.pop());
+    if exe.file_name().unwrap().to_str().unwrap() == "deps" {
+        assert!(exe.pop());
+    }
     exe.push("examples");
     exe.push("addr2line");
 
