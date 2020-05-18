@@ -776,10 +776,16 @@ impl<R: gimli::Reader> Functions<R> {
                 }
             }
         }
+
+        // The binary search requires the addresses to be sorted.
+        //
+        // It also requires them to be non-overlapping.  In practice, overlapping
+        // function ranges are unlikely, so we don't try to handle that yet.
+        //
+        // It's possible for multiple functions to have the same address range if the
+        // compiler can detect and remove functions with identical code.  In that case
+        // we'll nondeterministically return one of them.
         addresses.sort_by_key(|x| x.range.begin);
-        debug_assert!(addresses
-            .windows(2)
-            .all(|w| w[0].range.end <= w[1].range.begin));
 
         Ok(Functions {
             functions: functions.into_boxed_slice(),
