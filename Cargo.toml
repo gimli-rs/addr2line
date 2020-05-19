@@ -28,7 +28,7 @@ clap = "2"
 backtrace = "0.3.13"
 findshlibs = "0.5"
 rustc-test = "0.3"
-aux = { path = "tests/aux" }
+auxiliary = { path = "tests/auxiliary" }
 
 [profile.release]
 debug = true
