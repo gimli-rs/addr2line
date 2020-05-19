@@ -2,6 +2,9 @@
 
 ### Fixed
 
+* Handle units with overlapping address ranges.
+  [#163](https://github.com/gimli-rs/addr2line/pull/163)
+
 * Don't assert for functions with overlapping address ranges.
   [#168](https://github.com/gimli-rs/addr2line/pull/168)
 
