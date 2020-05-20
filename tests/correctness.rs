@@ -67,7 +67,7 @@ fn correctness() {
         small::test_function as u64,
         "correctness::small::test_function",
     );
-    test(aux::foo as u64, "aux::foo");
+    test(auxiliary::foo as u64, "auxiliary::foo");
 }
 
 mod small {
