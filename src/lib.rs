@@ -189,6 +189,7 @@ impl<R: gimli::Reader> Context<R> {
         let mut units = sections.units();
         while let Some(header) = units.next()? {
             let unit_id = res_units.len();
+            let offset = header.offset();
             let dw_unit = match sections.unit(header) {
                 Ok(dw_unit) => dw_unit,
                 Err(_) => continue,
@@ -257,6 +258,7 @@ impl<R: gimli::Reader> Context<R> {
             }
 
             res_units.push(ResUnit {
+                offset,
                 dw_unit,
                 lang,
                 lines: LazyCell::new(),
@@ -449,6 +451,7 @@ struct ResUnit<R>
 where
     R: gimli::Reader,
 {
+    offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
@@ -650,19 +653,13 @@ where
     let mut entries = match attr {
         gimli::AttributeValue::UnitRef(offset) => unit.entries_raw(Some(offset))?,
         gimli::AttributeValue::DebugInfoRef(dr) => {
-            if let Some((unit, offset)) = units
-                .iter()
-                .filter_map(|unit| {
-                    gimli::UnitSectionOffset::DebugInfoOffset(dr)
-                        .to_unit_offset(&unit.dw_unit)
-                        .map(|uo| (&unit.dw_unit, uo))
-                })
-                .next()
-            {
-                unit.entries_raw(Some(offset))?
-            } else {
-                return Err(gimli::Error::NoEntryAtGivenOffset);
-            }
+            let unit = match units.binary_search_by_key(&dr.0, |unit| unit.offset.0) {
+                // There is never a DIE at the unit offset or before the first unit.
+                Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
+                Err(i) => &units[i - 1],
+            };
+            unit.dw_unit
+                .entries_raw(Some(gimli::UnitOffset(dr.0 - unit.offset.0)))?
         }
         _ => return Ok(None),
     };
