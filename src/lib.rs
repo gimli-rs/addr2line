@@ -266,7 +266,10 @@ impl<R: gimli::Reader> Context<R> {
     // because this is calculated here to ensure the function address actually
     // resides in the functions of the CU.
     // Returns Option<(unit ID, index in self.functions.functions)
-    fn find_unit_id_and_function(&self, probe: u64) -> Option<(usize, Rc<OuterFunction<R>>)> {
+    fn find_unit_id_and_function(
+        &self,
+        probe: u64,
+    ) -> Option<(usize, gimli::UnitOffset<R::Offset>)> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
@@ -313,10 +316,10 @@ impl<R: gimli::Reader> Context<R> {
             // Consequently we consult the function address table here, and only
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            if let Ok(Some(function)) =
-                self.units[i.unit_id].find_function(&self.sections, &self.units, probe)
+            if let Ok(Some(function_offset)) =
+                self.units[i.unit_id].find_function(&self.sections, probe)
             {
-                return Some((i.unit_id, function));
+                return Some((i.unit_id, function_offset));
             }
         }
 
@@ -347,13 +350,21 @@ impl<R: gimli::Reader> Context<R> {
     /// to the innermost inline function.  Subsequent frames contain the caller and call
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit_id, function) = match self.find_unit_id_and_function(probe) {
-            Some(unit_id_and_function) => unit_id_and_function,
+        let (unit_id, function_offset) = match self.find_unit_id_and_function(probe) {
+            Some(unit_id_and_offset) => unit_id_and_offset,
             None => return Ok(FrameIter(FrameIterState::Empty())),
         };
 
         let unit = &self.units[unit_id];
         let loc = unit.find_location(probe, &self.sections)?;
+        let function = unit.get_parsed_function(&self.sections, &self.units, function_offset)?;
+        let function = match function {
+            Some(function) => function,
+            None => {
+                return Ok(FrameIter(FrameIterState::LocationOnly(loc)));
+            }
+        };
+
         // Build the list of inline functions that contain probe. res is ordered from outside to inside.
         // The indexes are into the function.inline_functions vec.
         let mut res = maybe_small::Vec::new();
@@ -512,7 +523,7 @@ where
             .map_err(Error::clone)
     }
 
-    fn with_parsed_functions<S, F: FnMut(&mut Functions<R>) -> S>(
+    fn with_parsed_function_list<S, F: FnMut(&mut Functions<R>) -> S>(
         &self,
         sections: &gimli::Dwarf<R>,
         mut f: F,
@@ -530,18 +541,28 @@ where
     }
 
     fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<(), Error> {
-        self.with_parsed_functions(sections, |_| {})?;
+        self.with_parsed_function_list(sections, |_| {})?;
         Ok(())
     }
 
     fn find_function(
         &self,
         sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
         probe: u64,
+    ) -> Result<Option<gimli::UnitOffset<R::Offset>>, Error> {
+        self.with_parsed_function_list(sections, |funcs| {
+            funcs.find_function(probe)
+        })
+    }
+
+    fn get_parsed_function(
+        &self,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
     ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
-        self.with_parsed_functions(sections, |funcs| {
-            funcs.find_function(&self.dw_unit, sections, units, probe)
+        self.with_parsed_function_list(sections, |funcs| {
+            funcs.get_parsed_function(&self.dw_unit, sections, units, dw_die_offset)
         })?
     }
 
@@ -803,11 +824,8 @@ impl<R: gimli::Reader> Functions<R> {
     // Returns the index in self.functions based on an address range that covers probe.
     fn find_function(
         &mut self,
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
         probe: u64,
-    ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
+    ) -> Option<gimli::UnitOffset<R::Offset>> {
         if let Ok(address_range_index) = self.function_address_ranges.binary_search_by(|address| {
             if probe < address.range.begin {
                 Ordering::Greater
@@ -818,18 +836,18 @@ impl<R: gimli::Reader> Functions<R> {
             }
         }) {
             let dw_die_offset = self.function_address_ranges[address_range_index].dw_die_offset;
-            Ok(self.parse_outer_function(dw_die_offset, unit, sections, units)?)
+            Some(dw_die_offset)
         } else {
-            Ok(None)
+            None
         }
     }
 
-    fn parse_outer_function(
+    fn get_parsed_function(
         &mut self,
-        dw_die_offset: gimli::UnitOffset<R::Offset>,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
     ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
         if let Some(fun) = self.functions.get(&dw_die_offset) {
             return Ok(fun.clone());
@@ -1141,6 +1159,7 @@ where
     R: gimli::Reader + 'ctx,
 {
     Empty(),
+    LocationOnly(Option<Location<'ctx>>),
     Frames(FrameIterFrames<'ctx, R>),
 }
 
@@ -1163,6 +1182,15 @@ where
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let frames = match &mut self.0 {
             FrameIterState::Empty() => return Ok(None),
+            FrameIterState::LocationOnly(loc) => {
+                let location = loc.take();
+                self.0 = FrameIterState::Empty();
+                return Ok(Some(Frame {
+                    dw_die_offset: None,
+                    function: None,
+                    location,
+                }));
+            }
             FrameIterState::Frames(frames) => frames,
         };
         let FrameIterFrames {
