@@ -728,13 +728,20 @@ struct Functions<R: gimli::Reader> {
 struct Function<R: gimli::Reader> {
     dw_die_offset: gimli::UnitOffset<R::Offset>,
     name: Option<R>,
-    call_file: u64,
-    call_line: u32,
-    call_column: u32,
+    call: FunctionCall,
     /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
     // TODO: this is often empty, so we could save more memory by storing the
     // length in the allocated memory.
     inlined: Box<[FunctionAddressRange]>,
+}
+
+enum FunctionCall {
+    OuterFunction(),
+    InlinedFunction {
+        file_index: Option<u64>,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
 }
 
 impl<R: gimli::Reader> Functions<R> {
@@ -746,13 +753,12 @@ impl<R: gimli::Reader> Functions<R> {
         let mut functions = Vec::new();
         let mut function_address_ranges = Vec::new();
         let mut entries = unit.entries_raw(None)?;
-        let mut inlined_address_ranges_ignored = Vec::new();
         while !entries.is_empty() {
             let dw_die_offset = entries.next_offset();
             let depth = entries.next_depth();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
-                    Function::parse(
+                    Function::parse_subprogram(
                         dw_die_offset,
                         &mut entries,
                         abbrev,
@@ -762,7 +768,6 @@ impl<R: gimli::Reader> Functions<R> {
                         units,
                         &mut functions,
                         &mut function_address_ranges,
-                        &mut inlined_address_ranges_ignored,
                     )?;
                 } else {
                     for spec in abbrev.attributes() {
@@ -859,7 +864,7 @@ impl<R: gimli::Reader> RangeComponents<R> {
 }
 
 impl<R: gimli::Reader> Function<R> {
-    fn parse(
+    fn parse_subprogram(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
@@ -869,13 +874,9 @@ impl<R: gimli::Reader> Function<R> {
         units: &[ResUnit<R>],
         functions: &mut Vec<Function<R>>,
         address_ranges: &mut Vec<FunctionAddressRange>,
-        parent_inlined_address_ranges: &mut Vec<FunctionAddressRange>,
     ) -> Result<(), Error> {
         let mut range_components: RangeComponents<R> = Default::default();
         let mut name = None;
-        let mut call_file = 0;
-        let mut call_line = 0;
-        let mut call_column = 0;
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => {
@@ -887,23 +888,6 @@ impl<R: gimli::Reader> Function<R> {
                         unit,
                         units,
                     )?;
-
-                    if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-                        match attr.name() {
-                            gimli::DW_AT_call_file => {
-                                if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
-                                    call_file = fi;
-                                }
-                            }
-                            gimli::DW_AT_call_line => {
-                                call_line = attr.udata_value().unwrap_or(0) as u32;
-                            }
-                            gimli::DW_AT_call_column => {
-                                call_column = attr.udata_value().unwrap_or(0) as u32;
-                            }
-                            _ => {}
-                        }
-                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -917,10 +901,8 @@ impl<R: gimli::Reader> Function<R> {
                 break;
             }
             if let Some(child_abbrev) = entries.read_abbreviation()? {
-                if child_abbrev.tag() == gimli::DW_TAG_subprogram
-                    || child_abbrev.tag() == gimli::DW_TAG_inlined_subroutine
-                {
-                    Function::parse(
+                if child_abbrev.tag() == gimli::DW_TAG_subprogram {
+                    Function::parse_subprogram(
                         child_dw_die_offset,
                         entries,
                         child_abbrev,
@@ -930,6 +912,19 @@ impl<R: gimli::Reader> Function<R> {
                         units,
                         functions,
                         address_ranges,
+                    )?;
+                    continue;
+                }
+                if child_abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+                    Function::parse_inlined_subroutine(
+                        child_dw_die_offset,
+                        entries,
+                        child_abbrev,
+                        next_depth,
+                        unit,
+                        sections,
+                        units,
+                        functions,
                         &mut inlined_address_ranges,
                     )?;
                     continue;
@@ -950,21 +945,126 @@ impl<R: gimli::Reader> Function<R> {
         functions.push(Function {
             dw_die_offset,
             name,
-            call_file,
-            call_line,
-            call_column,
+            call: FunctionCall::OuterFunction(),
             inlined: inlined_address_ranges.into_boxed_slice(),
         });
 
-        // If this function is an inlined function, push our ranges into the list
-        // of inline ranges of our parent function.
-        // Otherwise, push our ranges into the list of root function ranges.
-        let function_address_ranges = if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-            parent_inlined_address_ranges
-        } else {
-            address_ranges
-        };
-        range_components.add_ranges(function_address_ranges, function_index, sections, unit)?;
+        range_components.add_ranges(address_ranges, function_index, sections, unit)?;
+
+        Ok(())
+    }
+
+    fn parse_inlined_subroutine(
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
+        entries: &mut gimli::EntriesRaw<R>,
+        abbrev: &gimli::Abbreviation,
+        depth: isize,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+        functions: &mut Vec<Function<R>>,
+        parent_inlined_address_ranges: &mut Vec<FunctionAddressRange>,
+    ) -> Result<(), Error> {
+        let mut range_components: RangeComponents<R> = Default::default();
+        let mut name = None;
+        let mut call_file_index = 0;
+        let mut call_line = 0;
+        let mut call_column = 0;
+        for spec in abbrev.attributes() {
+            match entries.read_attribute(*spec) {
+                Ok(ref attr) => {
+                    Self::parse_attr(
+                        attr,
+                        &mut range_components,
+                        &mut name,
+                        sections,
+                        unit,
+                        units,
+                    )?;
+
+                    match attr.name() {
+                        gimli::DW_AT_call_file => {
+                            if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
+                                call_file_index = fi;
+                            }
+                        }
+                        gimli::DW_AT_call_line => {
+                            call_line = attr.udata_value().unwrap_or(0) as u32;
+                        }
+                        gimli::DW_AT_call_column => {
+                            call_column = attr.udata_value().unwrap_or(0) as u32;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        let mut inlined_address_ranges = Vec::new();
+        loop {
+            let child_dw_die_offset = entries.next_offset();
+            let next_depth = entries.next_depth();
+            if next_depth <= depth {
+                break;
+            }
+            if let Some(child_abbrev) = entries.read_abbreviation()? {
+                if child_abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+                    Function::parse_inlined_subroutine(
+                        child_dw_die_offset,
+                        entries,
+                        child_abbrev,
+                        next_depth,
+                        unit,
+                        sections,
+                        units,
+                        functions,
+                        &mut inlined_address_ranges,
+                    )?;
+                    continue;
+                }
+
+                // Consume the abbrev attributes if we end up ignoring this abbrev,
+                // as required by the entries iterator API.
+                for spec in child_abbrev.attributes() {
+                    match entries.read_attribute(*spec) {
+                        Ok(_) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+
+        let function_index = functions.len();
+        functions.push(Function {
+            dw_die_offset,
+            name,
+            call: FunctionCall::InlinedFunction {
+                file_index: if call_file_index != 0 {
+                    Some(call_file_index)
+                } else {
+                    None
+                },
+                line: if call_line != 0 {
+                    Some(call_line)
+                } else {
+                    None
+                },
+                column: if call_column != 0 {
+                    Some(call_column)
+                } else {
+                    None
+                },
+            },
+            inlined: inlined_address_ranges.into_boxed_slice(),
+        });
+
+        range_components.add_ranges(
+            parent_inlined_address_ranges,
+            function_index,
+            sections,
+            unit,
+        )?;
 
         Ok(())
     }
@@ -1046,26 +1146,22 @@ where
         let unit = &self.units[self.unit_id];
 
         if self.funcs.len() != 0 {
-            let mut next = Location {
-                file: None,
-                line: if func.call_line != 0 {
-                    Some(func.call_line)
-                } else {
-                    None
-                },
-                column: if func.call_column != 0 {
-                    Some(func.call_column)
-                } else {
-                    None
-                },
-            };
-            if func.call_file != 0 {
-                if let Some(lines) = unit.parse_lines(self.sections)? {
-                    next.file = lines.files.get(func.call_file as usize).map(String::as_str);
+            self.next = match func.call {
+                FunctionCall::InlinedFunction {
+                    line,
+                    column,
+                    file_index,
+                } => {
+                    let mut file = None;
+                    if let Some(file_index) = file_index {
+                        if let Some(lines) = unit.parse_lines(self.sections)? {
+                            file = lines.files.get(file_index as usize).map(String::as_str);
+                        }
+                    }
+                    Some(Location { file, line, column })
                 }
-            }
-
-            self.next = Some(next);
+                _ => None,
+            };
         }
 
         Ok(Some(Frame {
