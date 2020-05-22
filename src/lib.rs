@@ -205,26 +205,11 @@ impl<R: gimli::Reader> Context<R> {
                     _ => continue, // wtf?
                 };
 
-                let mut low_pc = None;
-                let mut high_pc = None;
-                let mut size = None;
-                let mut ranges = None;
+                let mut range_components: RangeComponents<R> = Default::default();
                 for spec in abbrev.attributes() {
                     let attr = entries.read_attribute(*spec)?;
+                    range_components.parse_range_attr(&attr, &sections, &dw_unit)?;
                     match attr.name() {
-                        gimli::DW_AT_low_pc => {
-                            if let gimli::AttributeValue::Addr(val) = attr.value() {
-                                low_pc = Some(val);
-                            }
-                        }
-                        gimli::DW_AT_high_pc => match attr.value() {
-                            gimli::AttributeValue::Addr(val) => high_pc = Some(val),
-                            gimli::AttributeValue::Udata(val) => size = Some(val),
-                            _ => {}
-                        },
-                        gimli::DW_AT_ranges => {
-                            ranges = sections.attr_ranges_offset(&dw_unit, attr.value())?;
-                        }
                         gimli::DW_AT_language => {
                             if let gimli::AttributeValue::Language(val) = attr.value() {
                                 lang = Some(val);
@@ -234,28 +219,13 @@ impl<R: gimli::Reader> Context<R> {
                     }
                 }
 
-                let mut add_range = |range: gimli::Range| {
-                    if range.begin < range.end {
-                        unit_ranges.push(UnitRange {
-                            range,
-                            unit_id,
-                            max_end: 0,
-                        });
-                    }
-                };
-                if let Some(offset) = ranges {
-                    let mut ranges = sections.ranges(&dw_unit, offset)?;
-                    while let Some(range) = ranges.next()? {
-                        add_range(range);
-                    }
-                } else if let (Some(begin), Some(end)) = (low_pc, high_pc) {
-                    add_range(gimli::Range { begin, end });
-                } else if let (Some(begin), Some(size)) = (low_pc, size) {
-                    add_range(gimli::Range {
-                        begin,
-                        end: begin + size,
+                range_components.for_each_range(&sections, &dw_unit, |range| {
+                    unit_ranges.push(UnitRange {
+                        range,
+                        unit_id,
+                        max_end: 0,
                     });
-                }
+                })?;
             }
 
             res_units.push(ResUnit {
@@ -782,24 +752,19 @@ impl<R: gimli::Reader> Functions<R> {
                     for spec in abbrev.attributes() {
                         match entries.read_attribute(*spec) {
                             Ok(ref attr) => {
-                                Function::parse_range_attr(
-                                    attr,
-                                    &mut range_components,
-                                    sections,
-                                    unit,
-                                )?;
+                                range_components.parse_range_attr(attr, sections, unit)?;
                             }
                             Err(e) => return Err(e),
                         }
                     }
 
                     let function_index = functions.len();
-                    let have_ranges = range_components.add_ranges(
-                        &mut function_address_ranges,
-                        function_index,
-                        sections,
-                        unit,
-                    )?;
+                    let have_ranges = range_components.for_each_range(sections, unit, |range| {
+                        function_address_ranges.push(FunctionAddressRange {
+                            range,
+                            function: function_index,
+                        });
+                    })?;
                     if have_ranges {
                         functions.push(Function {
                             dw_die_offset,
@@ -908,12 +873,36 @@ impl<R: gimli::Reader> Default for RangeComponents<R> {
 }
 
 impl<R: gimli::Reader> RangeComponents<R> {
-    fn add_ranges(
-        &self,
-        ranges: &mut Vec<FunctionAddressRange>,
-        function: usize,
+    fn parse_range_attr(
+        &mut self,
+        attr: &gimli::read::Attribute<R>,
         sections: &gimli::Dwarf<R>,
         unit: &gimli::Unit<R>,
+    ) -> Result<(), Error> {
+        match attr.name() {
+            gimli::DW_AT_low_pc => {
+                if let gimli::AttributeValue::Addr(val) = attr.value() {
+                    self.low_pc = Some(val);
+                }
+            }
+            gimli::DW_AT_high_pc => match attr.value() {
+                gimli::AttributeValue::Addr(val) => self.high_pc = Some(val),
+                gimli::AttributeValue::Udata(val) => self.size = Some(val),
+                _ => {}
+            },
+            gimli::DW_AT_ranges => {
+                self.range_list_offset = sections.attr_ranges_offset(unit, attr.value())?;
+            }
+            _ => {}
+        };
+        Ok(())
+    }
+
+    fn for_each_range<F: FnMut(gimli::Range)>(
+        &self,
+        sections: &gimli::Dwarf<R>,
+        unit: &gimli::Unit<R>,
+        mut f: F,
     ) -> Result<bool, Error> {
         let mut added_any = false;
         let mut add_range = |range: gimli::Range| {
@@ -921,7 +910,7 @@ impl<R: gimli::Reader> RangeComponents<R> {
             // a long list of matches.
             // TODO: don't ignore if there is a section at this address
             if range.begin != 0 && range.begin < range.end {
-                ranges.push(FunctionAddressRange { range, function });
+                f(range);
                 added_any = true
             }
         };
@@ -1022,7 +1011,7 @@ impl<R: gimli::Reader> Function<R> {
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => {
-                    Self::parse_range_attr(attr, &mut range_components, sections, unit)?;
+                    range_components.parse_range_attr(attr, sections, unit)?;
                     Self::parse_name_attr(attr, &mut name, sections, unit, units)?;
 
                     match attr.name() {
@@ -1102,39 +1091,13 @@ impl<R: gimli::Reader> Function<R> {
             inlined: Some(inlined_address_ranges.into_boxed_slice()),
         });
 
-        range_components.add_ranges(
-            parent_inlined_address_ranges,
-            function_index,
-            sections,
-            unit,
-        )?;
+        range_components.for_each_range(sections, unit, |range| {
+            parent_inlined_address_ranges.push(FunctionAddressRange {
+                range,
+                function: function_index,
+            });
+        })?;
 
-        Ok(())
-    }
-
-    fn parse_range_attr(
-        attr: &gimli::read::Attribute<R>,
-        range_components: &mut RangeComponents<R>,
-        sections: &gimli::Dwarf<R>,
-        unit: &gimli::Unit<R>,
-    ) -> Result<(), Error> {
-        match attr.name() {
-            gimli::DW_AT_low_pc => {
-                if let gimli::AttributeValue::Addr(val) = attr.value() {
-                    range_components.low_pc = Some(val);
-                }
-            }
-            gimli::DW_AT_high_pc => match attr.value() {
-                gimli::AttributeValue::Addr(val) => range_components.high_pc = Some(val),
-                gimli::AttributeValue::Udata(val) => range_components.size = Some(val),
-                _ => {}
-            },
-            gimli::DW_AT_ranges => {
-                range_components.range_list_offset =
-                    sections.attr_ranges_offset(unit, attr.value())?;
-            }
-            _ => {}
-        };
         Ok(())
     }
 
