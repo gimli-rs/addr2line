@@ -40,12 +40,13 @@ extern crate rustc_demangle;
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 #[cfg(feature = "object")]
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use core::cell::{Ref, RefCell};
+use core::cell::RefCell;
 use core::cmp::Ordering;
 use core::iter;
 use core::mem;
@@ -219,7 +220,7 @@ impl<R: gimli::Reader> Context<R> {
                     }
                 }
 
-                range_components.for_each_range(&sections, &dw_unit, |range| {
+                range_components.for_each_range(&sections, &dw_unit, true, |range| {
                     unit_ranges.push(UnitRange {
                         range,
                         unit_id,
@@ -265,7 +266,7 @@ impl<R: gimli::Reader> Context<R> {
     // because this is calculated here to ensure the function address actually
     // resides in the functions of the CU.
     // Returns Option<(unit ID, index in self.functions.functions)
-    fn find_unit_id_and_function(&self, probe: u64) -> Option<(usize, usize)> {
+    fn find_unit_id_and_function(&self, probe: u64) -> Option<(usize, Rc<OuterFunction<R>>)> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
@@ -312,10 +313,10 @@ impl<R: gimli::Reader> Context<R> {
             // Consequently we consult the function address table here, and only
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            if let Ok(Some(function_index)) =
-                self.units[i.unit_id].find_function(&self.sections, probe)
+            if let Ok(Some(function)) =
+                self.units[i.unit_id].find_function(&self.sections, &self.units, probe)
             {
-                return Some((i.unit_id, function_index));
+                return Some((i.unit_id, function));
             }
         }
 
@@ -346,42 +347,37 @@ impl<R: gimli::Reader> Context<R> {
     /// to the innermost inline function.  Subsequent frames contain the caller and call
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit, loc, funcs) = match self.find_unit_id_and_function(probe) {
-            Some((unit_id, function_index)) => {
-                let unit = &self.units[unit_id];
-                let loc = unit.find_location(probe, &self.sections)?;
-                let functions =
-                    unit.ensure_function_inlines(&self.sections, &self.units, function_index)?;
-                let functions = functions.as_ref().unwrap();
-                // Build the list of functions that contain probe. res is ordered from outside to inside.
-                let mut res = maybe_small::Vec::new();
-                // Starting from the outer function, walk down the path of inlined functions that contain probe.
-                let mut function_index = function_index;
-                loop {
-                    let function = &functions.functions[function_index];
-                    res.push(function_index);
-                    if let Some(inlined) =
-                        function.inlined.as_ref().unwrap().iter().find(|inlined| {
-                            probe >= inlined.range.begin && probe < inlined.range.end
-                        })
-                    {
-                        function_index = inlined.function;
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-                (Some(unit), loc, res)
-            }
-            None => (None, None, maybe_small::Vec::new()),
+        let (unit_id, function) = match self.find_unit_id_and_function(probe) {
+            Some(unit_id_and_function) => unit_id_and_function,
+            None => return Ok(FrameIter(FrameIterState::Empty())),
         };
 
-        Ok(FrameIter {
+        let unit = &self.units[unit_id];
+        let loc = unit.find_location(probe, &self.sections)?;
+        // Build the list of inline functions that contain probe. res is ordered from outside to inside.
+        // The indexes are into the function.inline_functions vec.
+        let mut res = maybe_small::Vec::new();
+        // Walk down the path of inline functions that contain probe.
+        loop {
+            let current_depth = res.len();
+            if let Some(inlined) = function.inline_ranges.iter().find(|inlined| {
+                inlined.call_depth == current_depth
+                    && probe >= inlined.range.begin
+                    && probe < inlined.range.end
+            }) {
+                res.push(inlined.function);
+                continue;
+            } else {
+                break;
+            }
+        }
+        Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
             unit,
             sections: &self.sections,
-            funcs: funcs.into_iter().rev(),
-            next: loc,
-        })
+            outer_function: function,
+            inline_function_indexes: res.into_iter().rev(),
+            next_location: loc,
+        })))
     }
 
     /// Initialize all line data structures. This is used for benchmarks.
@@ -505,15 +501,15 @@ where
             .map_err(Error::clone)
     }
 
-    fn with_parsed_functions<S, F: FnMut(&Functions<R>) -> S>(
+    fn with_parsed_functions<S, F: FnMut(&mut Functions<R>) -> S>(
         &self,
         sections: &gimli::Dwarf<R>,
         mut f: F,
     ) -> Result<S, Error> {
         loop {
             {
-                let funcs = self.funcs.borrow();
-                if let Some(funcs) = &*funcs {
+                let mut funcs = self.funcs.borrow_mut();
+                if let Some(funcs) = &mut *funcs {
                     return Ok(f(funcs));
                 }
             }
@@ -530,28 +526,12 @@ where
     fn find_function(
         &self,
         sections: &gimli::Dwarf<R>,
-        probe: u64,
-    ) -> Result<Option<usize>, Error> {
-        self.with_parsed_functions(sections, |funcs| funcs.find_function(probe))
-    }
-
-    // Panics if neither parse_functions nor find_function has been called before.
-    fn ensure_function_inlines(
-        &self,
-        sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        function_index: usize,
-    ) -> Result<Ref<Option<Functions<R>>>, Error> {
-        {
-            let mut funcs = self.funcs.borrow_mut();
-            funcs.as_mut().unwrap().ensure_inlines_for_function(
-                function_index,
-                &self.dw_unit,
-                sections,
-                units,
-            )?;
-        }
-        Ok(self.funcs.borrow())
+        probe: u64,
+    ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
+        self.with_parsed_functions(sections, |funcs| {
+            funcs.find_function(&self.dw_unit, sections, units, probe)
+        })?
     }
 
     fn find_location(
@@ -720,41 +700,46 @@ where
 /// It is possible for a function to have multiple address ranges; this
 /// is handled by having multiple `FunctionAddressRange` entries with the same
 /// `function` field.
-struct FunctionAddressRange {
+struct OuterFunctionAddressRange<R: gimli::Reader> {
     range: gimli::Range,
-    /// An index into `Functions::functions`.
-    function: usize,
+    /// The function's offset.
+    dw_die_offset: gimli::UnitOffset<R::Offset>,
 }
 
 struct Functions<R: gimli::Reader> {
-    /// List of all `DW_TAG_subprogram` and `DW_TAG_inlined_subroutine` details.
-    functions: Vec<Function<R>>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
-    function_address_ranges: Box<[FunctionAddressRange]>,
+    function_address_ranges: Box<[OuterFunctionAddressRange<R>]>,
+    /// Map of all `DW_TAG_subprogram` details, keyed by dw_die_offset.
+    functions: BTreeMap<gimli::UnitOffset<R::Offset>, Option<Rc<OuterFunction<R>>>>,
 }
 
-struct Function<R: gimli::Reader> {
+struct OuterFunction<R: gimli::Reader> {
     dw_die_offset: gimli::UnitOffset<R::Offset>,
     name: Option<R>,
-    call: FunctionCall,
-    /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
+    /// List of `DW_TAG_inlined_subroutine` functions and address ranges in this function.
     // TODO: this is often empty, so we could save more memory by storing the
     // length in the allocated memory.
-    inlined: Option<Box<[FunctionAddressRange]>>,
+    inline_functions: Vec<InlinedFunction<R>>,
+    inline_ranges: Box<[InlinedFunctionAddressRange]>,
 }
 
-enum FunctionCall {
-    OuterFunction(),
-    InlinedFunction {
-        file_index: Option<u64>,
-        line: Option<u32>,
-        column: Option<u32>,
-    },
+struct InlinedFunctionAddressRange {
+    range: gimli::Range,
+    call_depth: usize,
+    /// An index into `OuterFunction::inline_functions`.
+    function: usize,
+}
+
+struct InlinedFunction<R: gimli::Reader> {
+    dw_die_offset: gimli::UnitOffset<R::Offset>,
+    name: Option<R>,
+    call_file_index: Option<u64>,
+    call_line: Option<u32>,
+    call_column: Option<u32>,
 }
 
 impl<R: gimli::Reader> Functions<R> {
     fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
-        let mut functions = Vec::new();
         let mut function_address_ranges = Vec::new();
         let mut entries = unit.entries_raw(None)?;
         while !entries.is_empty() {
@@ -771,21 +756,12 @@ impl<R: gimli::Reader> Functions<R> {
                         }
                     }
 
-                    let function_index = functions.len();
-                    let have_ranges = range_components.for_each_range(sections, unit, |range| {
-                        function_address_ranges.push(FunctionAddressRange {
+                    range_components.for_each_range(sections, unit, false, |range| {
+                        function_address_ranges.push(OuterFunctionAddressRange {
                             range,
-                            function: function_index,
+                            dw_die_offset,
                         });
                     })?;
-                    if have_ranges {
-                        functions.push(Function {
-                            dw_die_offset,
-                            name: None,
-                            call: FunctionCall::OuterFunction(),
-                            inlined: None,
-                        });
-                    }
                 } else {
                     for spec in abbrev.attributes() {
                         match entries.read_attribute(*spec) {
@@ -808,13 +784,19 @@ impl<R: gimli::Reader> Functions<R> {
         function_address_ranges.sort_by_key(|x| x.range.begin);
 
         Ok(Functions {
-            functions,
+            functions: BTreeMap::new(),
             function_address_ranges: function_address_ranges.into_boxed_slice(),
         })
     }
 
     // Returns the index in self.functions based on an address range that covers probe.
-    fn find_function(&self, probe: u64) -> Option<usize> {
+    fn find_function(
+        &mut self,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+        probe: u64,
+    ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
         if let Ok(address_range_index) = self.function_address_ranges.binary_search_by(|address| {
             if probe < address.range.begin {
                 Ordering::Greater
@@ -824,46 +806,26 @@ impl<R: gimli::Reader> Functions<R> {
                 Ordering::Equal
             }
         }) {
-            Some(self.function_address_ranges[address_range_index].function)
+            let dw_die_offset = self.function_address_ranges[address_range_index].dw_die_offset;
+            Ok(self.parse_outer_function(dw_die_offset, unit, sections, units)?)
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn ensure_inlines_for_function(
+    fn parse_outer_function(
         &mut self,
-        function_index: usize,
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-    ) -> Result<(), Error> {
-        let dw_die_offset = {
-            let function = &self.functions[function_index];
-            if function.inlined.is_some() {
-                return Ok(());
-            }
-            function.dw_die_offset
-        };
-
-        let mut entries = unit.entries_raw(Some(dw_die_offset))?;
-        while !entries.is_empty() {
-            assert_eq!(entries.next_offset(), dw_die_offset);
-            let depth = entries.next_depth();
-            let abbrev = entries.read_abbreviation()?.unwrap();
-            assert_eq!(abbrev.tag(), gimli::DW_TAG_subprogram);
-            Function::parse_subprogram_inlines(
-                &mut entries,
-                abbrev,
-                depth,
-                unit,
-                sections,
-                units,
-                &mut self.functions,
-                function_index,
-            )?;
-            break;
+    ) -> Result<Option<Rc<OuterFunction<R>>>, Error> {
+        if let Some(fun) = self.functions.get(&dw_die_offset) {
+            return Ok(fun.clone());
         }
-        Ok(())
+        let function = OuterFunction::parse(dw_die_offset, unit, sections, units)?;
+        self.functions.insert(dw_die_offset, function.clone());
+        Ok(function)
     }
 }
 
@@ -915,6 +877,7 @@ impl<R: gimli::Reader> RangeComponents<R> {
         &self,
         sections: &gimli::Dwarf<R>,
         unit: &gimli::Unit<R>,
+        allow_at_zero: bool,
         mut f: F,
     ) -> Result<bool, Error> {
         let mut added_any = false;
@@ -922,7 +885,7 @@ impl<R: gimli::Reader> RangeComponents<R> {
             // Ignore invalid DWARF so that a query of 0 does not give
             // a long list of matches.
             // TODO: don't ignore if there is a section at this address
-            if range.begin != 0 && range.begin < range.end {
+            if (allow_at_zero || range.begin != 0) && range.begin < range.end {
                 f(range);
                 added_any = true
             }
@@ -944,17 +907,23 @@ impl<R: gimli::Reader> RangeComponents<R> {
     }
 }
 
-impl<R: gimli::Reader> Function<R> {
-    fn parse_subprogram_inlines(
-        entries: &mut gimli::EntriesRaw<R>,
-        abbrev: &gimli::Abbreviation,
-        depth: isize,
+impl<R: gimli::Reader> OuterFunction<R> {
+    fn parse(
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        function_index: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Rc<Self>>, Error> {
+        let mut entries = unit.entries_raw(Some(dw_die_offset))?;
+        if entries.is_empty() {
+            return Ok(None);
+        }
+
+        debug_assert_eq!(entries.next_offset(), dw_die_offset);
+        let depth = entries.next_depth();
+        let abbrev = entries.read_abbreviation()?.unwrap();
+        debug_assert_eq!(abbrev.tag(), gimli::DW_TAG_subprogram);
+
         let mut name = None;
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
@@ -965,7 +934,8 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
 
-        let mut inlined_address_ranges = Vec::new();
+        let mut inline_functions = Vec::new();
+        let mut inline_address_ranges = Vec::new();
         loop {
             let child_dw_die_offset = entries.next_offset();
             let next_depth = entries.next_depth();
@@ -974,16 +944,17 @@ impl<R: gimli::Reader> Function<R> {
             }
             if let Some(child_abbrev) = entries.read_abbreviation()? {
                 if child_abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-                    Function::parse_inlined_subroutine(
+                    Self::parse_inlined_subroutine(
                         child_dw_die_offset,
-                        entries,
+                        &mut entries,
                         child_abbrev,
                         next_depth,
+                        0,
                         unit,
                         sections,
                         units,
-                        functions,
-                        &mut inlined_address_ranges,
+                        &mut inline_functions,
+                        &mut inline_address_ranges,
                     )?;
                     continue;
                 }
@@ -999,10 +970,17 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
 
-        functions[function_index].inlined = Some(inlined_address_ranges.into_boxed_slice());
-        functions[function_index].name = name;
+        inline_address_ranges.sort_by(|r1, r2| match r1.range.begin.cmp(&r2.range.begin) {
+            Ordering::Equal => r1.call_depth.cmp(&r2.call_depth),
+            ord => ord,
+        });
 
-        Ok(())
+        Ok(Some(Rc::new(Self {
+            dw_die_offset,
+            name,
+            inline_functions,
+            inline_ranges: inline_address_ranges.into_boxed_slice(),
+        })))
     }
 
     fn parse_inlined_subroutine(
@@ -1010,11 +988,12 @@ impl<R: gimli::Reader> Function<R> {
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
+        call_depth: usize,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        parent_inlined_address_ranges: &mut Vec<FunctionAddressRange>,
+        inline_functions: &mut Vec<InlinedFunction<R>>,
+        inline_address_ranges: &mut Vec<InlinedFunctionAddressRange>,
     ) -> Result<(), Error> {
         let mut range_components: RangeComponents<R> = Default::default();
         let mut name = None;
@@ -1046,7 +1025,6 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
 
-        let mut inlined_address_ranges = Vec::new();
         loop {
             let child_dw_die_offset = entries.next_offset();
             let next_depth = entries.next_depth();
@@ -1055,16 +1033,17 @@ impl<R: gimli::Reader> Function<R> {
             }
             if let Some(child_abbrev) = entries.read_abbreviation()? {
                 if child_abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
-                    Function::parse_inlined_subroutine(
+                    Self::parse_inlined_subroutine(
                         child_dw_die_offset,
                         entries,
                         child_abbrev,
                         next_depth,
+                        call_depth + 1,
                         unit,
                         sections,
                         units,
-                        functions,
-                        &mut inlined_address_ranges,
+                        inline_functions,
+                        inline_address_ranges,
                     )?;
                     continue;
                 }
@@ -1080,34 +1059,32 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
 
-        let function_index = functions.len();
-        functions.push(Function {
+        let inline_function_index = inline_functions.len();
+        inline_functions.push(InlinedFunction {
             dw_die_offset,
             name,
-            call: FunctionCall::InlinedFunction {
-                file_index: if call_file_index != 0 {
-                    Some(call_file_index)
-                } else {
-                    None
-                },
-                line: if call_line != 0 {
-                    Some(call_line)
-                } else {
-                    None
-                },
-                column: if call_column != 0 {
-                    Some(call_column)
-                } else {
-                    None
-                },
+            call_file_index: if call_file_index != 0 {
+                Some(call_file_index)
+            } else {
+                None
             },
-            inlined: Some(inlined_address_ranges.into_boxed_slice()),
+            call_line: if call_line != 0 {
+                Some(call_line)
+            } else {
+                None
+            },
+            call_column: if call_column != 0 {
+                Some(call_column)
+            } else {
+                None
+            },
         });
 
-        range_components.for_each_range(sections, unit, |range| {
-            parent_inlined_address_ranges.push(FunctionAddressRange {
+        range_components.for_each_range(sections, unit, false, |range| {
+            inline_address_ranges.push(InlinedFunctionAddressRange {
                 range,
-                function: function_index,
+                function: inline_function_index,
+                call_depth,
             });
         })?;
 
@@ -1144,14 +1121,27 @@ impl<R: gimli::Reader> Function<R> {
 }
 
 /// An iterator over function frames.
-pub struct FrameIter<'ctx, R>
+pub struct FrameIter<'ctx, R>(FrameIterState<'ctx, R>)
+where
+    R: gimli::Reader + 'ctx;
+
+enum FrameIterState<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {
-    unit: Option<&'ctx ResUnit<R>>,
+    Empty(),
+    Frames(FrameIterFrames<'ctx, R>),
+}
+
+struct FrameIterFrames<'ctx, R>
+where
+    R: gimli::Reader + 'ctx,
+{
+    unit: &'ctx ResUnit<R>,
     sections: &'ctx gimli::Dwarf<R>,
-    funcs: iter::Rev<maybe_small::IntoIter<usize>>,
-    next: Option<Location<'ctx>>,
+    outer_function: Rc<OuterFunction<R>>,
+    inline_function_indexes: iter::Rev<maybe_small::IntoIter<usize>>,
+    next_location: Option<Location<'ctx>>,
 }
 
 impl<'ctx, R> FrameIter<'ctx, R>
@@ -1160,46 +1150,57 @@ where
 {
     /// Advances the iterator and returns the next frame.
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
-        let (loc, func_index) = match (self.next.take(), self.funcs.next()) {
+        let frames = match &mut self.0 {
+            FrameIterState::Empty() => return Ok(None),
+            FrameIterState::Frames(frames) => frames,
+        };
+        let FrameIterFrames {
+            outer_function,
+            inline_function_indexes,
+            next_location,
+            ..
+        } = frames;
+        let (loc, inline_func_index) = match (next_location.take(), inline_function_indexes.next())
+        {
             (None, None) => return Ok(None),
-            (loc, Some(func_index)) => (loc, func_index),
+            (loc, Some(inline_func_index)) => (loc, inline_func_index),
             (Some(loc), None) => {
                 return Ok(Some(Frame {
-                    dw_die_offset: None,
-                    function: None,
+                    dw_die_offset: Some(outer_function.dw_die_offset),
+                    function: outer_function.name.clone().map(|name| FunctionName {
+                        name,
+                        language: frames.unit.lang,
+                    }),
                     location: Some(loc),
                 }))
             }
         };
 
-        let unit = self.unit.unwrap();
-        let funcs = unit.funcs.borrow();
-        let func = &funcs.as_ref().unwrap().functions[func_index];
+        let &InlinedFunction {
+            dw_die_offset,
+            ref name,
+            call_file_index,
+            call_line,
+            call_column,
+        } = &outer_function.inline_functions[inline_func_index];
 
-        if self.funcs.len() != 0 {
-            self.next = match func.call {
-                FunctionCall::InlinedFunction {
-                    line,
-                    column,
-                    file_index,
-                } => {
-                    let mut file = None;
-                    if let Some(file_index) = file_index {
-                        if let Some(lines) = unit.parse_lines(self.sections)? {
-                            file = lines.files.get(file_index as usize).map(String::as_str);
-                        }
-                    }
-                    Some(Location { file, line, column })
-                }
-                _ => None,
-            };
+        let mut file = None;
+        if let Some(file_index) = call_file_index {
+            if let Some(lines) = frames.unit.parse_lines(frames.sections)? {
+                file = lines.files.get(file_index as usize).map(String::as_str);
+            }
         }
+        *next_location = Some(Location {
+            file,
+            line: call_line,
+            column: call_column,
+        });
 
         Ok(Some(Frame {
-            dw_die_offset: Some(func.dw_die_offset),
-            function: func.name.clone().map(|name| FunctionName {
+            dw_die_offset: Some(dw_die_offset),
+            function: name.clone().map(|name| FunctionName {
                 name,
-                language: unit.lang,
+                language: frames.unit.lang,
             }),
             location: loc,
         }))
