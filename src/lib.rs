@@ -293,6 +293,7 @@ impl<R: gimli::Reader> Context<R> {
     // The index of the address in the CU's address table is also returned
     // because this is calculated here to ensure the function address actually
     // resides in the functions of the CU.
+    // Returns Option<(unit ID, index in self.functions.address_ranges)
     fn find_unit_id_and_address(&self, probe: u64) -> Option<(usize, usize)> {
         // First up find the position in the array which could have our function
         // address.
@@ -344,8 +345,8 @@ impl<R: gimli::Reader> Context<R> {
                 Ok(func) => func,
                 Err(_) => continue,
             };
-            if let Some(addr) = funcs.find_address(probe) {
-                return Some((i.unit_id, addr));
+            if let Some(addr_range_index) = funcs.find_address_range(probe) {
+                return Some((i.unit_id, addr_range_index));
             }
         }
 
@@ -378,12 +379,13 @@ impl<R: gimli::Reader> Context<R> {
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
         let (unit_id, loc, funcs) =
             match self.find_unit_id_and_address(probe) {
-                Some((unit_id, address)) => {
+                Some((unit_id, address_range_index)) => {
                     let unit = &self.units[unit_id];
                     let loc = unit.find_location(probe, &self.sections)?;
                     let functions = unit.parse_functions(&self.sections, &self.units)?;
                     let mut res = maybe_small::Vec::new();
-                    let mut function_index = functions.addresses[address].function;
+                    let mut function_index =
+                        functions.function_address_ranges[address_range_index].function;
                     loop {
                         let function = &functions.functions[function_index];
                         res.push(function);
@@ -706,9 +708,9 @@ where
 /// A single address range for a function.
 ///
 /// It is possible for a function to have multiple address ranges; this
-/// is handled by having multiple `FunctionAddress` entries with the same
+/// is handled by having multiple `FunctionAddressRange` entries with the same
 /// `function` field.
-struct FunctionAddress {
+struct FunctionAddressRange {
     range: gimli::Range,
     /// An index into `Functions::functions`.
     function: usize,
@@ -718,7 +720,7 @@ struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` and `DW_TAG_inlined_subroutine` details.
     functions: Box<[Function<R>]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
-    addresses: Box<[FunctionAddress]>,
+    function_address_ranges: Box<[FunctionAddressRange]>,
 }
 
 struct Function<R: gimli::Reader> {
@@ -730,7 +732,7 @@ struct Function<R: gimli::Reader> {
     /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
     // TODO: this is often empty, so we could save more memory by storing the
     // length in the allocated memory.
-    inlined: Box<[FunctionAddress]>,
+    inlined: Box<[FunctionAddressRange]>,
 }
 
 impl<R: gimli::Reader> Functions<R> {
@@ -740,7 +742,7 @@ impl<R: gimli::Reader> Functions<R> {
         units: &[ResUnit<R>],
     ) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
-        let mut addresses = Vec::new();
+        let mut function_address_ranges = Vec::new();
         // These are ignored.
         let mut inlined = Vec::new();
         let mut entries = unit.entries_raw(None)?;
@@ -758,7 +760,7 @@ impl<R: gimli::Reader> Functions<R> {
                         sections,
                         units,
                         &mut functions,
-                        &mut addresses,
+                        &mut function_address_ranges,
                         &mut inlined,
                     )?;
                 } else {
@@ -772,7 +774,7 @@ impl<R: gimli::Reader> Functions<R> {
             }
         }
 
-        // The binary search requires the addresses to be sorted.
+        // The binary search requires the function_address_ranges to be sorted.
         //
         // It also requires them to be non-overlapping.  In practice, overlapping
         // function ranges are unlikely, so we don't try to handle that yet.
@@ -780,16 +782,17 @@ impl<R: gimli::Reader> Functions<R> {
         // It's possible for multiple functions to have the same address range if the
         // compiler can detect and remove functions with identical code.  In that case
         // we'll nondeterministically return one of them.
-        addresses.sort_by_key(|x| x.range.begin);
+        function_address_ranges.sort_by_key(|x| x.range.begin);
 
         Ok(Functions {
             functions: functions.into_boxed_slice(),
-            addresses: addresses.into_boxed_slice(),
+            function_address_ranges: function_address_ranges.into_boxed_slice(),
         })
     }
 
-    fn find_address(&self, probe: u64) -> Option<usize> {
-        self.addresses
+    // Returns the index in self.function_address_ranges that covers probe.
+    fn find_address_range(&self, probe: u64) -> Option<usize> {
+        self.function_address_ranges
             .binary_search_by(|address| {
                 if probe < address.range.begin {
                     Ordering::Greater
@@ -813,8 +816,8 @@ impl<R: gimli::Reader> Function<R> {
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
         functions: &mut Vec<Function<R>>,
-        addresses: &mut Vec<FunctionAddress>,
-        inlined: &mut Vec<FunctionAddress>,
+        function_address_ranges: &mut Vec<FunctionAddressRange>,
+        inlined: &mut Vec<FunctionAddressRange>,
     ) -> Result<(), Error> {
         let mut low_pc = None;
         let mut high_pc = None;
@@ -899,7 +902,7 @@ impl<R: gimli::Reader> Function<R> {
                         sections,
                         units,
                         functions,
-                        addresses,
+                        function_address_ranges,
                         &mut local_inlined,
                     )?;
                 } else {
@@ -923,17 +926,17 @@ impl<R: gimli::Reader> Function<R> {
             inlined: local_inlined.into_boxed_slice(),
         });
 
-        let addresses = if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
+        let function_address_ranges = if abbrev.tag() == gimli::DW_TAG_inlined_subroutine {
             inlined
         } else {
-            addresses
+            function_address_ranges
         };
         let mut add_range = |range: gimli::Range| {
             // Ignore invalid DWARF so that a query of 0 does not give
             // a long list of matches.
             // TODO: don't ignore if there is a section at this address
             if range.begin != 0 && range.begin < range.end {
-                addresses.push(FunctionAddress {
+                function_address_ranges.push(FunctionAddressRange {
                     range,
                     function: function_index,
                 });
