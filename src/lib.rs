@@ -358,15 +358,26 @@ impl<R: gimli::Reader> Context<R> {
         // The indexes are into the function.inline_functions vec.
         let mut res = maybe_small::Vec::new();
         // Walk down the path of inline functions that contain probe.
+        let mut inline_ranges = &function.inline_ranges[..];
         loop {
             let current_depth = res.len();
-            if let Some(inlined) = function.inline_ranges.iter().find(|inlined| {
-                inlined.call_depth == current_depth
-                    && probe >= inlined.range.begin
-                    && probe < inlined.range.end
-            }) {
-                res.push(inlined.function);
-                continue;
+            let search = inline_ranges.binary_search_by(|range| {
+                // "range.cmp((probe, current_depth))"
+                if range.call_depth > current_depth {
+                    Ordering::Greater
+                } else if range.call_depth < current_depth {
+                    Ordering::Less
+                } else if range.range.begin > probe {
+                    Ordering::Greater
+                } else if range.range.end <= probe {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            });
+            if let Ok(index) = search {
+                res.push(inline_ranges[index].function);
+                inline_ranges = &inline_ranges[index + 1..];
             } else {
                 break;
             }
@@ -970,8 +981,8 @@ impl<R: gimli::Reader> OuterFunction<R> {
             }
         }
 
-        inline_address_ranges.sort_by(|r1, r2| match r1.range.begin.cmp(&r2.range.begin) {
-            Ordering::Equal => r1.call_depth.cmp(&r2.call_depth),
+        inline_address_ranges.sort_by(|r1, r2| match r1.call_depth.cmp(&r2.call_depth) {
+            Ordering::Equal => r1.range.begin.cmp(&r2.range.begin),
             ord => ord,
         });
 
