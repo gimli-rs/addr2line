@@ -383,7 +383,9 @@ impl<R: gimli::Reader> Context<R> {
                     let unit = &self.units[unit_id];
                     let loc = unit.find_location(probe, &self.sections)?;
                     let functions = unit.parse_functions(&self.sections, &self.units)?;
+                    // Build the list of functions that contain probe. res is ordered from outside to inside.
                     let mut res = maybe_small::Vec::new();
+                    // Starting from the outer function, walk down the path of inlined functions that contain probe.
                     let mut function_index =
                         functions.function_address_ranges[address_range_index].function;
                     loop {
