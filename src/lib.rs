@@ -341,7 +341,7 @@ impl<R: gimli::Reader> Context<R> {
             // Consequently we consult the function address table here, and only
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            let funcs = match self.units[i.unit_id].parse_functions(&self.sections, &self.units) {
+            let funcs = match self.units[i.unit_id].parse_functions(&self.sections) {
                 Ok(func) => func,
                 Err(_) => continue,
             };
@@ -428,7 +428,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
         for unit in &self.units {
-            unit.parse_functions(&self.sections, &self.units)?;
+            unit.parse_functions(&self.sections)?;
         }
         Ok(())
     }
@@ -539,7 +539,6 @@ where
     fn parse_functions(
         &self,
         sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
     ) -> Result<Ref<Option<Functions<R>>>, Error> {
         {
             let funcs = self.funcs.borrow();
@@ -548,7 +547,7 @@ where
             }
         }
         self.funcs
-            .replace(Some(Functions::parse(&self.dw_unit, sections, units)?));
+            .replace(Some(Functions::parse(&self.dw_unit, sections)?));
         Ok(self.funcs.borrow())
     }
 
@@ -770,30 +769,44 @@ enum FunctionCall {
 }
 
 impl<R: gimli::Reader> Functions<R> {
-    fn parse(
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
-    ) -> Result<Functions<R>, Error> {
+    fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut function_address_ranges = Vec::new();
         let mut entries = unit.entries_raw(None)?;
         while !entries.is_empty() {
             let dw_die_offset = entries.next_offset();
-            let depth = entries.next_depth();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
-                    Function::parse_subprogram(
-                        dw_die_offset,
-                        &mut entries,
-                        abbrev,
-                        depth,
-                        unit,
-                        sections,
-                        units,
-                        &mut functions,
+                    let mut range_components: RangeComponents<R> = Default::default();
+                    for spec in abbrev.attributes() {
+                        match entries.read_attribute(*spec) {
+                            Ok(ref attr) => {
+                                Function::parse_range_attr(
+                                    attr,
+                                    &mut range_components,
+                                    sections,
+                                    unit,
+                                )?;
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+
+                    let function_index = functions.len();
+                    let have_ranges = range_components.add_ranges(
                         &mut function_address_ranges,
+                        function_index,
+                        sections,
+                        unit,
                     )?;
+                    if have_ranges {
+                        functions.push(Function {
+                            dw_die_offset,
+                            name: None,
+                            call: FunctionCall::OuterFunction(),
+                            inlined: None,
+                        });
+                    }
                 } else {
                     for spec in abbrev.attributes() {
                         match entries.read_attribute(*spec) {
@@ -929,79 +942,6 @@ impl<R: gimli::Reader> RangeComponents<R> {
 }
 
 impl<R: gimli::Reader> Function<R> {
-    fn parse_subprogram(
-        dw_die_offset: gimli::UnitOffset<R::Offset>,
-        entries: &mut gimli::EntriesRaw<R>,
-        abbrev: &gimli::Abbreviation,
-        depth: isize,
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        address_ranges: &mut Vec<FunctionAddressRange>,
-    ) -> Result<(), Error> {
-        let mut range_components: RangeComponents<R> = Default::default();
-        for spec in abbrev.attributes() {
-            match entries.read_attribute(*spec) {
-                Ok(ref attr) => {
-                    Self::parse_range_attr(
-                        attr,
-                        &mut range_components,
-                        sections,
-                        unit,
-                    )?;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        loop {
-            let child_dw_die_offset = entries.next_offset();
-            let next_depth = entries.next_depth();
-            if next_depth <= depth {
-                break;
-            }
-            if let Some(child_abbrev) = entries.read_abbreviation()? {
-                if child_abbrev.tag() == gimli::DW_TAG_subprogram {
-                    Function::parse_subprogram(
-                        child_dw_die_offset,
-                        entries,
-                        child_abbrev,
-                        next_depth,
-                        unit,
-                        sections,
-                        units,
-                        functions,
-                        address_ranges,
-                    )?;
-                    continue;
-                }
-
-                // Consume the abbrev attributes if we end up ignoring this abbrev,
-                // as required by the entries iterator API.
-                for spec in child_abbrev.attributes() {
-                    match entries.read_attribute(*spec) {
-                        Ok(_) => {}
-                        Err(e) => return Err(e),
-                    }
-                }
-            }
-        }
-
-        let function_index = functions.len();
-        let have_ranges = range_components.add_ranges(address_ranges, function_index, sections, unit)?;
-        if have_ranges {
-            functions.push(Function {
-                dw_die_offset,
-                name: None,
-                call: FunctionCall::OuterFunction(),
-                inlined: None,
-            });
-        }
-
-        Ok(())
-    }
-
     fn parse_subprogram_inlines(
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
@@ -1016,13 +956,7 @@ impl<R: gimli::Reader> Function<R> {
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => {
-                    Self::parse_name_attr(
-                        attr,
-                        &mut name,
-                        sections,
-                        unit,
-                        units,
-                    )?;
+                    Self::parse_name_attr(attr, &mut name, sections, unit, units)?;
                 }
                 Err(e) => return Err(e),
             }
@@ -1087,19 +1021,8 @@ impl<R: gimli::Reader> Function<R> {
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => {
-                    Self::parse_range_attr(
-                        attr,
-                        &mut range_components,
-                        sections,
-                        unit,
-                    )?;
-                    Self::parse_name_attr(
-                        attr,
-                        &mut name,
-                        sections,
-                        unit,
-                        units,
-                    )?;
+                    Self::parse_range_attr(attr, &mut range_components, sections, unit)?;
+                    Self::parse_name_attr(attr, &mut name, sections, unit, units)?;
 
                     match attr.name() {
                         gimli::DW_AT_call_file => {
