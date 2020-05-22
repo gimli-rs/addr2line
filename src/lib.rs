@@ -312,11 +312,9 @@ impl<R: gimli::Reader> Context<R> {
             // Consequently we consult the function address table here, and only
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            let funcs = match self.units[i.unit_id].parse_functions(&self.sections) {
-                Ok(func) => func,
-                Err(_) => continue,
-            };
-            if let Some(function_index) = funcs.as_ref().unwrap().find_function(probe) {
+            if let Ok(Some(function_index)) =
+                self.units[i.unit_id].find_function(&self.sections, probe)
+            {
                 return Some((i.unit_id, function_index));
             }
         }
@@ -507,22 +505,37 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(
+    fn with_parsed_functions<S, F: FnMut(&Functions<R>) -> S>(
         &self,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Ref<Option<Functions<R>>>, Error> {
-        {
-            let funcs = self.funcs.borrow();
-            if funcs.is_some() {
-                return Ok(funcs);
+        mut f: F,
+    ) -> Result<S, Error> {
+        loop {
+            {
+                let funcs = self.funcs.borrow();
+                if let Some(funcs) = &*funcs {
+                    return Ok(f(funcs));
+                }
             }
+            self.funcs
+                .replace(Some(Functions::parse(&self.dw_unit, sections)?));
         }
-        self.funcs
-            .replace(Some(Functions::parse(&self.dw_unit, sections)?));
-        Ok(self.funcs.borrow())
     }
 
-    // Panics if parse_functions hasn't been called before.
+    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<(), Error> {
+        self.with_parsed_functions(sections, |_| {})?;
+        Ok(())
+    }
+
+    fn find_function(
+        &self,
+        sections: &gimli::Dwarf<R>,
+        probe: u64,
+    ) -> Result<Option<usize>, Error> {
+        self.with_parsed_functions(sections, |funcs| funcs.find_function(probe))
+    }
+
+    // Panics if neither parse_functions nor find_function has been called before.
     fn ensure_function_inlines(
         &self,
         sections: &gimli::Dwarf<R>,
