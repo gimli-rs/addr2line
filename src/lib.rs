@@ -362,8 +362,11 @@ impl<R: gimli::Reader> Context<R> {
         let mut inline_ranges = &function.inline_ranges[..];
         loop {
             let current_depth = res.len();
+            // Look up (probe, current_depth) in inline_ranges.
+            // inline_ranges is sorted in "breadth-first traversal order", i.e.
+            // by call_depth first, and then by range.begin. See the comment at
+            // the sort call for more information about why.
             let search = inline_ranges.binary_search_by(|range| {
-                // "range.cmp((probe, current_depth))"
                 if range.call_depth > current_depth {
                     Ordering::Greater
                 } else if range.call_depth < current_depth {
@@ -986,9 +989,28 @@ impl<R: gimli::Reader> OuterFunction<R> {
             }
         }
 
-        inline_address_ranges.sort_by(|r1, r2| match r1.call_depth.cmp(&r2.call_depth) {
-            Ordering::Equal => r1.range.begin.cmp(&r2.range.begin),
-            ord => ord,
+        // Sort ranges in "breadth-first traversal order", i.e. first by call_depth
+        // and then by range.begin. This allows finding the range containing an
+        // address at a certain depth using binary search.
+        // Note: Using DFS order, i.e. ordering by range.begin first and then by
+        // call_depth, would not work! Consider the two examples
+        // "[0..10 at depth 0], [0..2 at depth 1], [6..8 at depth 1]"  and
+        // "[0..5 at depth 0], [0..2 at depth 1], [5..10 at depth 0], [6..8 at depth 1]".
+        // In this example, if you want to look up address 7 at depth 0, and you
+        // encounter [0..2 at depth 1], are you before or after the target range?
+        // You don't know.
+        inline_address_ranges.sort_by(|r1, r2| {
+            if r1.call_depth < r2.call_depth {
+                Ordering::Less
+            } else if r1.call_depth > r2.call_depth {
+                Ordering::Greater
+            } else if r1.range.begin < r2.range.begin {
+                Ordering::Less
+            } else if r1.range.begin > r2.range.begin {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
         });
 
         Ok(Rc::new(Self {
