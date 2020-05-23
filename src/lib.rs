@@ -463,11 +463,13 @@ where
                             let end = row.address();
                             let mut rows = Vec::new();
                             mem::swap(&mut rows, &mut sequence_rows);
-                            sequences.push(LineSequence {
-                                start,
-                                end,
-                                rows: rows.into_boxed_slice(),
-                            });
+                            if start != 0 {
+                                sequences.push(LineSequence {
+                                    start,
+                                    end,
+                                    rows: rows.into_boxed_slice(),
+                                });
+                            }
                         }
                         continue;
                     }
