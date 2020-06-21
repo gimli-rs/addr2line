@@ -1,3 +1,11 @@
+## 0.12.2 (2020/06/21)
+
+### Fixed
+
+* Avoid linear search for `DW_FORM_ref_addr`.
+  [#175](https://github.com/gimli-rs/addr2line/pull/175)
+
+
 ## 0.12.1 (2020/05/19)
 
 ### Fixed
