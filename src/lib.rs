@@ -293,7 +293,7 @@ impl<R: gimli::Reader> Context<R> {
     // The index of the address in the CU's address table is also returned
     // because this is calculated here to ensure the function address actually
     // resides in the functions of the CU.
-    fn find_unit_id_and_address(&self, probe: u64) -> Option<(usize, usize)> {
+    fn find_unit_and_address(&self, probe: u64) -> Option<(&ResUnit<R>, usize)> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
@@ -340,12 +340,13 @@ impl<R: gimli::Reader> Context<R> {
             // Consequently we consult the function address table here, and only
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
-            let funcs = match self.units[i.unit_id].parse_functions(&self.sections, &self.units) {
+            let unit = &self.units[i.unit_id];
+            let funcs = match unit.parse_functions(&self.sections, &self.units) {
                 Ok(func) => func,
                 Err(_) => continue,
             };
             if let Some(addr) = funcs.find_address(probe) {
-                return Some((i.unit_id, addr));
+                return Some((unit, addr));
             }
         }
 
@@ -354,14 +355,14 @@ impl<R: gimli::Reader> Context<R> {
 
     /// Find the DWARF unit corresponding to the given virtual memory address.
     pub fn find_dwarf_unit(&self, probe: u64) -> Option<&gimli::Unit<R>> {
-        self.find_unit_id_and_address(probe)
-            .map(|(unit_id, _)| &self.units[unit_id].dw_unit)
+        self.find_unit_and_address(probe)
+            .map(|(unit, _)| &unit.dw_unit)
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
-        match self.find_unit_id_and_address(probe) {
-            Some((unit_id, _)) => self.units[unit_id].find_location(probe, &self.sections),
+        match self.find_unit_and_address(probe) {
+            Some((unit, _)) => unit.find_location(probe, &self.sections),
             None => Ok(None),
         }
     }
@@ -376,38 +377,36 @@ impl<R: gimli::Reader> Context<R> {
     /// to the innermost inline function.  Subsequent frames contain the caller and call
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit_id, loc, funcs) =
-            match self.find_unit_id_and_address(probe) {
-                Some((unit_id, address)) => {
-                    let unit = &self.units[unit_id];
-                    let loc = unit.find_location(probe, &self.sections)?;
-                    let functions = unit.parse_functions(&self.sections, &self.units)?;
-                    let mut res = maybe_small::Vec::new();
-                    let mut function_index = functions.addresses[address].function;
-                    loop {
-                        let function = &functions.functions[function_index];
-                        res.push(function);
-                        if let Some(inlined) = function.inlined.iter().find(|inlined| {
-                            probe >= inlined.range.begin && probe < inlined.range.end
-                        }) {
-                            function_index = inlined.function;
-                            continue;
-                        } else {
-                            break;
-                        }
-                    }
-                    (unit_id, loc, res)
-                }
-                None => (0, None, maybe_small::Vec::new()),
-            };
+        let (unit, address) = match self.find_unit_and_address(probe) {
+            Some(x) => x,
+            None => return Ok(FrameIter(FrameIterState::Empty)),
+        };
 
-        Ok(FrameIter {
-            unit_id,
-            units: &self.units,
+        let loc = unit.find_location(probe, &self.sections)?;
+        let functions = unit.parse_functions(&self.sections, &self.units)?;
+        let mut funcs = maybe_small::Vec::new();
+        let mut function_index = functions.addresses[address].function;
+        loop {
+            let function = &functions.functions[function_index];
+            funcs.push(function);
+            if let Some(inlined) = function
+                .inlined
+                .iter()
+                .find(|inlined| probe >= inlined.range.begin && probe < inlined.range.end)
+            {
+                function_index = inlined.function;
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
+            unit,
             sections: &self.sections,
             funcs: funcs.into_iter().rev(),
             next: loc,
-        })
+        })))
     }
 
     /// Initialize all line data structures. This is used for benchmarks.
@@ -960,12 +959,23 @@ impl<R: gimli::Reader> Function<R> {
 }
 
 /// An iterator over function frames.
-pub struct FrameIter<'ctx, R>
+pub struct FrameIter<'ctx, R>(FrameIterState<'ctx, R>)
+where
+    R: gimli::Reader + 'ctx;
+
+enum FrameIterState<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {
-    unit_id: usize,
-    units: &'ctx Vec<ResUnit<R>>,
+    Empty,
+    Frames(FrameIterFrames<'ctx, R>),
+}
+
+struct FrameIterFrames<'ctx, R>
+where
+    R: gimli::Reader + 'ctx,
+{
+    unit: &'ctx ResUnit<R>,
     sections: &'ctx gimli::Dwarf<R>,
     funcs: iter::Rev<maybe_small::IntoIter<&'ctx Function<R>>>,
     next: Option<Location<'ctx>>,
@@ -977,7 +987,12 @@ where
 {
     /// Advances the iterator and returns the next frame.
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
-        let (loc, func) = match (self.next.take(), self.funcs.next()) {
+        let frames = match &mut self.0 {
+            FrameIterState::Empty => return Ok(None),
+            FrameIterState::Frames(frames) => frames,
+        };
+
+        let (loc, func) = match (frames.next.take(), frames.funcs.next()) {
             (None, None) => return Ok(None),
             (loc, Some(func)) => (loc, func),
             (Some(loc), None) => {
@@ -989,9 +1004,7 @@ where
             }
         };
 
-        let unit = &self.units[self.unit_id];
-
-        if self.funcs.len() != 0 {
+        if frames.funcs.len() != 0 {
             let mut next = Location {
                 file: None,
                 line: if func.call_line != 0 {
@@ -1006,19 +1019,19 @@ where
                 },
             };
             if func.call_file != 0 {
-                if let Some(lines) = unit.parse_lines(self.sections)? {
+                if let Some(lines) = frames.unit.parse_lines(frames.sections)? {
                     next.file = lines.files.get(func.call_file as usize).map(String::as_str);
                 }
             }
 
-            self.next = Some(next);
+            frames.next = Some(next);
         }
 
         Ok(Some(Frame {
             dw_die_offset: Some(func.dw_die_offset),
             function: func.name.clone().map(|name| FunctionName {
                 name,
-                language: unit.lang,
+                language: frames.unit.lang,
             }),
             location: loc,
         }))
