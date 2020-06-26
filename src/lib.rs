@@ -324,7 +324,7 @@ impl<R: gimli::Reader> Context<R> {
             // if there's actually a function in this CU which contains this
             // address do we return this unit.
             let unit = &self.units[i.unit_id];
-            let funcs = match unit.parse_functions(&self.sections, &self.units) {
+            let funcs = match unit.parse_functions(&self.sections) {
                 Ok(func) => func,
                 Err(_) => continue,
             };
@@ -366,9 +366,14 @@ impl<R: gimli::Reader> Context<R> {
         };
 
         let loc = unit.find_location(probe, &self.sections)?;
-        let functions = unit.parse_functions(&self.sections, &self.units)?;
+        let functions = unit.parse_functions(&self.sections)?;
         let function_index = functions.addresses[address].function;
         let function = &functions.functions[function_index];
+        let function = function
+            .1
+            .borrow_with(|| Function::parse(function.0, &unit.dw_unit, &self.sections, &self.units))
+            .as_ref()
+            .map_err(Error::clone)?;
 
         // Build the list of inlined functions that contain `probe`.
         // `inlined_functions` is ordered from outside to inside.
@@ -424,7 +429,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
         for unit in &self.units {
-            unit.parse_functions(&self.sections, &self.units)?;
+            unit.parse_functions(&self.sections)?;
         }
         Ok(())
     }
@@ -433,7 +438,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_inlined_functions(&self) -> Result<(), Error> {
         for unit in &self.units {
-            unit.parse_functions(&self.sections, &self.units)?;
+            unit.parse_inlined_functions(&self.sections, &self.units)?;
         }
         Ok(())
     }
@@ -543,15 +548,23 @@ where
             .map_err(Error::clone)
     }
 
-    fn parse_functions(
+    fn parse_functions(&self, sections: &gimli::Dwarf<R>) -> Result<&Functions<R>, Error> {
+        self.funcs
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
+            .as_ref()
+            .map_err(Error::clone)
+    }
+
+    fn parse_inlined_functions(
         &self,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-    ) -> Result<&Functions<R>, Error> {
+    ) -> Result<(), Error> {
         self.funcs
-            .borrow_with(|| Functions::parse(&self.dw_unit, sections, units))
+            .borrow_with(|| Functions::parse(&self.dw_unit, sections))
             .as_ref()
-            .map_err(Error::clone)
+            .map_err(Error::clone)?
+            .parse_inlined_functions(&self.dw_unit, sections, units)
     }
 
     fn find_location(
@@ -717,7 +730,12 @@ where
 
 struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
-    functions: Box<[Function<R>]>,
+    functions: Box<
+        [(
+            gimli::UnitOffset<R::Offset>,
+            LazyCell<Result<Function<R>, Error>>,
+        )],
+    >,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     addresses: Box<[FunctionAddress]>,
 }
@@ -758,30 +776,53 @@ struct InlinedFunction<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Functions<R> {
-    fn parse(
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-        units: &[ResUnit<R>],
-    ) -> Result<Functions<R>, Error> {
+    fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
         let mut entries = unit.entries_raw(None)?;
         while !entries.is_empty() {
             let dw_die_offset = entries.next_offset();
-            let depth = entries.next_depth();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
-                    Function::parse(
-                        dw_die_offset,
-                        &mut entries,
-                        abbrev,
-                        depth,
-                        unit,
-                        sections,
-                        units,
-                        &mut functions,
-                        &mut addresses,
-                    )?;
+                    let mut ranges = RangeAttributes::default();
+                    for spec in abbrev.attributes() {
+                        match entries.read_attribute(*spec) {
+                            Ok(ref attr) => {
+                                match attr.name() {
+                                    gimli::DW_AT_low_pc => {
+                                        if let gimli::AttributeValue::Addr(val) = attr.value() {
+                                            ranges.low_pc = Some(val);
+                                        }
+                                    }
+                                    gimli::DW_AT_high_pc => match attr.value() {
+                                        gimli::AttributeValue::Addr(val) => {
+                                            ranges.high_pc = Some(val)
+                                        }
+                                        gimli::AttributeValue::Udata(val) => {
+                                            ranges.size = Some(val)
+                                        }
+                                        _ => {}
+                                    },
+                                    gimli::DW_AT_ranges => {
+                                        ranges.ranges_offset =
+                                            sections.attr_ranges_offset(unit, attr.value())?;
+                                    }
+                                    _ => {}
+                                };
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+
+                    let function_index = functions.len();
+                    if ranges.for_each_range(sections, unit, false, |range| {
+                        addresses.push(FunctionAddress {
+                            range,
+                            function: function_index,
+                        });
+                    })? {
+                        functions.push((dw_die_offset, LazyCell::new()));
+                    }
                 } else {
                     for spec in abbrev.attributes() {
                         match entries.read_attribute(*spec) {
@@ -822,40 +863,41 @@ impl<R: gimli::Reader> Functions<R> {
             })
             .ok()
     }
+
+    fn parse_inlined_functions(
+        &self,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+    ) -> Result<(), Error> {
+        for function in &*self.functions {
+            function
+                .1
+                .borrow_with(|| Function::parse(function.0, unit, sections, units))
+                .as_ref()
+                .map_err(Error::clone)?;
+        }
+        Ok(())
+    }
 }
 
 impl<R: gimli::Reader> Function<R> {
     fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
-        entries: &mut gimli::EntriesRaw<R>,
-        abbrev: &gimli::Abbreviation,
-        depth: isize,
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        addresses: &mut Vec<FunctionAddress>,
-    ) -> Result<(), Error> {
-        let mut ranges = RangeAttributes::default();
+    ) -> Result<Self, Error> {
+        let mut entries = unit.entries_raw(Some(dw_die_offset))?;
+        let depth = entries.next_depth();
+        let abbrev = entries.read_abbreviation()?.unwrap();
+        debug_assert_eq!(abbrev.tag(), gimli::DW_TAG_subprogram);
+
         let mut name = None;
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => {
                     match attr.name() {
-                        gimli::DW_AT_low_pc => {
-                            if let gimli::AttributeValue::Addr(val) = attr.value() {
-                                ranges.low_pc = Some(val);
-                            }
-                        }
-                        gimli::DW_AT_high_pc => match attr.value() {
-                            gimli::AttributeValue::Addr(val) => ranges.high_pc = Some(val),
-                            gimli::AttributeValue::Udata(val) => ranges.size = Some(val),
-                            _ => {}
-                        },
-                        gimli::DW_AT_ranges => {
-                            ranges.ranges_offset =
-                                sections.attr_ranges_offset(unit, attr.value())?;
-                        }
                         gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
                             if let Ok(val) = sections.attr_string(unit, attr.value()) {
                                 name = Some(val);
@@ -881,13 +923,11 @@ impl<R: gimli::Reader> Function<R> {
         let mut inlined_functions = Vec::new();
         let mut inlined_addresses = Vec::new();
         Function::parse_children(
-            entries,
+            &mut entries,
             depth,
             unit,
             sections,
             units,
-            functions,
-            addresses,
             &mut inlined_functions,
             &mut inlined_addresses,
             0,
@@ -917,22 +957,12 @@ impl<R: gimli::Reader> Function<R> {
             }
         });
 
-        let function_index = functions.len();
-        functions.push(Function {
+        Ok(Function {
             dw_die_offset,
             name,
             inlined_functions: inlined_functions.into_boxed_slice(),
             inlined_addresses: inlined_addresses.into_boxed_slice(),
-        });
-
-        ranges.for_each_range(sections, unit, false, |range| {
-            addresses.push(FunctionAddress {
-                range,
-                function: function_index,
-            });
-        })?;
-
-        Ok(())
+        })
     }
 
     fn parse_children(
@@ -941,8 +971,6 @@ impl<R: gimli::Reader> Function<R> {
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        addresses: &mut Vec<FunctionAddress>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
@@ -956,17 +984,7 @@ impl<R: gimli::Reader> Function<R> {
             if let Some(abbrev) = entries.read_abbreviation()? {
                 match abbrev.tag() {
                     gimli::DW_TAG_subprogram => {
-                        Function::parse(
-                            dw_die_offset,
-                            entries,
-                            abbrev,
-                            next_depth,
-                            unit,
-                            sections,
-                            units,
-                            functions,
-                            addresses,
-                        )?;
+                        Function::skip(entries, abbrev, next_depth)?;
                     }
                     gimli::DW_TAG_inlined_subroutine => {
                         InlinedFunction::parse(
@@ -977,8 +995,6 @@ impl<R: gimli::Reader> Function<R> {
                             unit,
                             sections,
                             units,
-                            functions,
-                            addresses,
                             inlined_functions,
                             inlined_addresses,
                             inlined_depth,
@@ -996,6 +1012,31 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
     }
+
+    fn skip(
+        entries: &mut gimli::EntriesRaw<R>,
+        abbrev: &gimli::Abbreviation,
+        depth: isize,
+    ) -> Result<(), Error> {
+        // TODO: use DW_AT_sibling
+        for spec in abbrev.attributes() {
+            match entries.read_attribute(*spec) {
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        while entries.next_depth() > depth {
+            if let Some(abbrev) = entries.read_abbreviation()? {
+                for spec in abbrev.attributes() {
+                    match entries.read_attribute(*spec) {
+                        Ok(_) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<R: gimli::Reader> InlinedFunction<R> {
@@ -1007,8 +1048,6 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         unit: &gimli::Unit<R>,
         sections: &gimli::Dwarf<R>,
         units: &[ResUnit<R>],
-        functions: &mut Vec<Function<R>>,
-        addresses: &mut Vec<FunctionAddress>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
@@ -1089,8 +1128,6 @@ impl<R: gimli::Reader> InlinedFunction<R> {
             unit,
             sections,
             units,
-            functions,
-            addresses,
             inlined_functions,
             inlined_addresses,
             inlined_depth + 1,
