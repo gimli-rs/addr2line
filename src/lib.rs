@@ -428,6 +428,15 @@ impl<R: gimli::Reader> Context<R> {
         }
         Ok(())
     }
+
+    /// Initialize all inlined function data structures. This is used for benchmarks.
+    #[doc(hidden)]
+    pub fn parse_inlined_functions(&self) -> Result<(), Error> {
+        for unit in &self.units {
+            unit.parse_functions(&self.sections, &self.units)?;
+        }
+        Ok(())
+    }
 }
 
 struct Lines {
