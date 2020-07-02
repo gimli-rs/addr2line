@@ -147,6 +147,32 @@ fn context_new_parse_functions_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
+fn context_new_parse_inlined_functions_rc(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let context = addr2line::Context::new(file).unwrap();
+            context.parse_inlined_functions().unwrap();
+        });
+    });
+}
+
+#[bench]
+fn context_new_parse_inlined_functions_slice(b: &mut test::Bencher) {
+    let target = release_fixture_path();
+
+    with_file(&target, |file| {
+        b.iter(|| {
+            let dwarf = dwarf_load(file);
+            let dwarf = dwarf_borrow(&dwarf);
+            let context = addr2line::Context::from_dwarf(dwarf).unwrap();
+            context.parse_inlined_functions().unwrap();
+        });
+    });
+}
+
+#[bench]
 fn context_query_location_rc(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
