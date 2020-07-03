@@ -1223,18 +1223,20 @@ where
             FrameIterState::Frames(frames) => frames,
         };
 
-        let (loc, func) = match (frames.next.take(), frames.inlined_functions.next()) {
-            (None, None) => return Ok(None),
-            (loc, Some(func)) => (loc, func),
-            (Some(loc), None) => {
-                return Ok(Some(Frame {
+        let loc = frames.next.take();
+        let func = match frames.inlined_functions.next() {
+            Some(func) => func,
+            None => {
+                let frame = Frame {
                     dw_die_offset: Some(frames.function.dw_die_offset),
                     function: frames.function.name.clone().map(|name| FunctionName {
                         name,
                         language: frames.unit.lang,
                     }),
-                    location: Some(loc),
-                }))
+                    location: loc,
+                };
+                self.0 = FrameIterState::Empty;
+                return Ok(Some(frame));
             }
         };
 
