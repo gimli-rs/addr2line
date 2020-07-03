@@ -231,7 +231,7 @@ impl<R: gimli::Reader> Context<R> {
                     }
                 }
 
-                ranges.for_each_range(&sections, &dw_unit, true, |range| {
+                ranges.for_each_range(&sections, &dw_unit, |range| {
                     unit_ranges.push(UnitRange {
                         range,
                         unit_id,
@@ -493,13 +493,11 @@ where
                             let end = row.address();
                             let mut rows = Vec::new();
                             mem::swap(&mut rows, &mut sequence_rows);
-                            if start != 0 {
-                                sequences.push(LineSequence {
-                                    start,
-                                    end,
-                                    rows: rows.into_boxed_slice(),
-                                });
-                            }
+                            sequences.push(LineSequence {
+                                start,
+                                end,
+                                rows: rows.into_boxed_slice(),
+                            });
                         }
                         continue;
                     }
@@ -815,7 +813,7 @@ impl<R: gimli::Reader> Functions<R> {
                     }
 
                     let function_index = functions.len();
-                    if ranges.for_each_range(sections, unit, false, |range| {
+                    if ranges.for_each_range(sections, unit, |range| {
                         addresses.push(FunctionAddress {
                             range,
                             function: function_index,
@@ -1114,7 +1112,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
             call_column,
         });
 
-        ranges.for_each_range(sections, unit, false, |range| {
+        ranges.for_each_range(sections, unit, |range| {
             inlined_addresses.push(InlinedFunctionAddress {
                 range,
                 call_depth: inlined_depth,
@@ -1158,15 +1156,11 @@ impl<R: gimli::Reader> RangeAttributes<R> {
         &self,
         sections: &gimli::Dwarf<R>,
         unit: &gimli::Unit<R>,
-        allow_at_zero: bool,
         mut f: F,
     ) -> Result<bool, Error> {
         let mut added_any = false;
         let mut add_range = |range: gimli::Range| {
-            // Ignore invalid DWARF so that a query of 0 does not give
-            // a long list of matches.
-            // TODO: don't ignore if there is a section at this address
-            if (allow_at_zero || range.begin != 0) && range.begin < range.end {
+            if range.begin < range.end {
                 f(range);
                 added_any = true
             }
