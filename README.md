@@ -6,10 +6,10 @@
 [![Coverage Status](https://coveralls.io/repos/github/gimli-rs/addr2line/badge.svg?branch=master)](https://coveralls.io/github/gimli-rs/addr2line?branch=master)
 
 A cross-platform library for retrieving per-address debug information
-from executables with DWARF debug symbols.
+from files with DWARF debug information.
 
 `addr2line` uses [`gimli`](https://github.com/gimli-rs/gimli) to parse
-the debug symbols of an executable, and exposes an interface for finding
+the debug information, and exposes an interface for finding
 the source file, line number, and wrapping function for instruction
 addresses within the target program. These lookups can either be
 performed programmatically through `Context::find_location` and
@@ -21,7 +21,6 @@ performed programmatically through `Context::find_location` and
 
  - Add the [`object` crate](https://crates.io/crates/object) to your `Cargo.toml`
  - Add the [`addr2line` crate](https://crates.io/crates/addr2line) to your `Cargo.toml`
- - Add `extern crate object` and `extern crate addr2line` to your main crate entry file
  - Load the file and parse it with [`object::File::parse`](https://docs.rs/object/*/object/struct.File.html#method.parse)
  - Pass the parsed file to [`addr2line::Context::new` ](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.new)
  - Use [`addr2line::Context::find_location`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_location)
@@ -30,22 +29,13 @@ performed programmatically through `Context::find_location` and
 
 # Performance
 
+`addr2line` optimizes for speed over memory by caching parsed information.
+The DWARF information is parsed lazily where possible.
+
 The library aims to perform similarly to equivalent existing tools such
 as `addr2line` from binutils, `eu-addr2line` from elfutils, and
-`llvm-symbolize` from the llvm project.
-
-Currently the library optimizes for memory over for speed when parsing
-line number sequences.  In particular, the algorithm used can be slow
-for large line sequences, but uses much less memory.  Note that LLVM
-generates one line sequence per function, but gcc can include multiple
-functions in each line sequence.
-
-We haven't done extensive
-benchmarking (yet), but the runtime and memory use results we observe
-for one relatively large Rust application are quite promising:
-
-![addr2line runtime](time.png)
-![addr2line memory](memory.png)
+`llvm-symbolize` from the llvm project, and in the past some benchmarking
+was done that indicates a comparable performance.
 
 ## License
 
