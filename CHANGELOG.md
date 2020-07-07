@@ -1,3 +1,21 @@
+## 0.13.0 (2020/07/07)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+* Added `rustc-dep-of-std` feature.
+  [#166](https://github.com/gimli-rs/addr2line/pull/166)
+
+### Changed
+
+* Improve performance by parsing function contents lazily.
+  [#178](https://github.com/gimli-rs/addr2line/pull/178)
+
+* Don't skip `.debug_info` and `.debug_line` entries with a zero address.
+  [#182](https://github.com/gimli-rs/addr2line/pull/182)
+
+
 ## 0.12.2 (2020/06/21)
 
 ### Fixed
