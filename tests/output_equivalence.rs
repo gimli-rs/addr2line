@@ -26,7 +26,7 @@ fn make_trace() -> Vec<String> {
 
     let mut base_addr = None;
     TargetSharedLibrary::each(|lib| {
-        base_addr = Some(lib.virtual_memory_bias().0);
+        base_addr = Some(lib.virtual_memory_bias().0 as isize);
         IterationControl::Break
     });
     let addrfix = -base_addr.unwrap();
