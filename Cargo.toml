@@ -20,7 +20,7 @@ fallible-iterator = { version = "0.2", default-features = false, optional = true
 object = { version = "0.20", default-features = false, features = ["read"], optional = true }
 smallvec = { version = "1", default-features = false, optional = true }
 rustc-demangle = { version = "0.1", optional = true }
-cpp_demangle = { version = "0.2", default-features = false, optional = true }
+cpp_demangle = { version = "0.3", default-features = false, optional = true }
 
 # Internal feature, only used when building as part of libstd, not part of the
 # stable interface of this crate.
@@ -32,7 +32,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 memmap = "0.7"
 clap = "2"
 backtrace = "0.3.13"
-findshlibs = "0.5"
+findshlibs = "0.7"
 rustc-test = "0.3"
 auxiliary = { path = "tests/auxiliary" }
 
