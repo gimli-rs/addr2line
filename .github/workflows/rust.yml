@@ -1,0 +1,78 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest"]
+        rust_channel: ["stable", "beta", "nightly", "1.38.0"]
+        include:
+          - rust_channel: "stable"
+            os: "macOS-latest"
+    runs-on: ${{matrix.os}}
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install rustup
+      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
+    - name: Install rust channel
+      run: |
+        rustup install ${{matrix.rust_channel}}
+        rustup default ${{matrix.rust_channel}}
+    - name: Test debug
+      run: cargo test --verbose
+    - name: Test release
+      run: cargo test --verbose --release
+
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo build --no-default-features
+      - run: cargo build --no-default-features --features std
+      - run: cargo build --no-default-features --features std,cpp_demangle
+      - run: cargo build --no-default-features --features std,rustc-demangle
+      - run: cargo build --no-default-features --features std-object
+      - run: cargo build --no-default-features --features fallible-iterator
+      - run: cargo build --no-default-features --features smallvec
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install rustup
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
+      - name: Install nightly rust
+        run: |
+          rustup install nightly
+          rustup default nightly
+      - run: cargo bench
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install rustup
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
+      - name: Install nightly rust
+        run: |
+          rustup install nightly
+          rustup default nightly
+      - name: Install cargo tarpaulin
+        run: RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install --force cargo-tarpaulin
+      - name: Build addr2line
+        run: cargo build --example addr2line
+      - name: Run cargo tarpaulin
+        # TODO: Hook this up to coveralls, so we actually get coverage reports.
+        run: cargo tarpaulin --verbose # --ciserver travis-ci --coveralls "$TRAVIS_JOB_ID";
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo doc
