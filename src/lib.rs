@@ -272,11 +272,17 @@ impl<R: gimli::Reader> Context<R> {
         &self.sections
     }
 
-    // Finds the CU for the function address given.
-    // The index in the CU's function address table (`Functions::addresses`)
-    // is also returned because this is calculated here to ensure the function
-    // address actually resides in the functions of the CU.
-    fn find_unit_and_address(&self, probe: u64) -> Option<(&ResUnit<R>, usize)> {
+    /// Finds the CUs for the function address given.
+    ///
+    /// There might be multiple CUs whose range contains this address.
+    /// Weak symbols have shown up in the wild which cause this to happen
+    /// but otherwise this can happen if the CU has non-contiguous functions
+    /// but only reports a single range.
+    ///
+    /// Consequently we return an iterator for all CUs which may contain the
+    /// address, and the caller must check if there is actually a function or
+    /// location in the CU for that address.
+    fn find_units(&self, probe: u64) -> impl Iterator<Item = &ResUnit<R>> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
@@ -294,60 +300,50 @@ impl<R: gimli::Reader> Context<R> {
 
         // Once we have our index we iterate backwards from that position
         // looking for a matching CU.
-        for i in self.unit_ranges[..pos].iter().rev() {
-            // We know that this CU's start is beneath the probe already because
-            // of our sorted array.
-            debug_assert!(i.range.begin <= probe);
+        self.unit_ranges[..pos]
+            .iter()
+            .rev()
+            .take_while(move |i| {
+                // We know that this CU's start is beneath the probe already because
+                // of our sorted array.
+                debug_assert!(i.range.begin <= probe);
 
-            // Each entry keeps track of the maximum end address seen so far,
-            // starting from the beginning of the array of unit ranges. We're
-            // iterating in reverse so if our probe is beyond the maximum range
-            // of this entry, then it's guaranteed to not fit in any prior
-            // entries, so we break out.
-            if probe > i.max_end {
-                break;
-            }
-
-            // If this CU doesn't actually contain this address, move to the
-            // next CU.
-            if probe > i.range.end {
-                continue;
-            }
-
-            // There might be multiple CUs whose range contains this address.
-            // Weak symbols have shown up in the wild which cause this to happen
-            // but otherwise this happened in rust-lang/backtrace-rs#327 too. In
-            // any case we assume that might happen, and as a result we need to
-            // find a CU which actually contains this function.
-            //
-            // Consequently we consult the function address table here, and only
-            // if there's actually a function in this CU which contains this
-            // address do we return this unit.
-            let unit = &self.units[i.unit_id];
-            let funcs = match unit.parse_functions(&self.sections) {
-                Ok(func) => func,
-                Err(_) => continue,
-            };
-            if let Some(addr) = funcs.find_address(probe) {
-                return Some((unit, addr));
-            }
-        }
-
-        None
+                // Each entry keeps track of the maximum end address seen so far,
+                // starting from the beginning of the array of unit ranges. We're
+                // iterating in reverse so if our probe is beyond the maximum range
+                // of this entry, then it's guaranteed to not fit in any prior
+                // entries, so we break out.
+                probe <= i.max_end
+            })
+            .filter_map(move |i| {
+                // If this CU doesn't actually contain this address, move to the
+                // next CU.
+                if probe > i.range.end {
+                    return None;
+                }
+                Some(&self.units[i.unit_id])
+            })
     }
 
     /// Find the DWARF unit corresponding to the given virtual memory address.
     pub fn find_dwarf_unit(&self, probe: u64) -> Option<&gimli::Unit<R>> {
-        self.find_unit_and_address(probe)
-            .map(|(unit, _)| &unit.dw_unit)
+        for unit in self.find_units(probe) {
+            match unit.find_function_or_location(probe, &self.sections, &self.units) {
+                Ok((Some(_), _)) | Ok((_, Some(_))) => return Some(&unit.dw_unit),
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
-        match self.find_unit_and_address(probe) {
-            Some((unit, _)) => unit.find_location(probe, &self.sections),
-            None => Ok(None),
+        for unit in self.find_units(probe) {
+            if let Some(location) = unit.find_location(probe, &self.sections)? {
+                return Ok(Some(location));
+            }
         }
+        Ok(None)
     }
 
     /// Return an iterator for the function frames corresponding to the given virtual
@@ -360,60 +356,25 @@ impl<R: gimli::Reader> Context<R> {
     /// to the innermost inline function.  Subsequent frames contain the caller and call
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
-        let (unit, address) = match self.find_unit_and_address(probe) {
-            Some(x) => x,
-            None => return Ok(FrameIter(FrameIterState::Empty)),
-        };
-
-        let loc = unit.find_location(probe, &self.sections)?;
-        let functions = unit.parse_functions(&self.sections)?;
-        let function_index = functions.addresses[address].function;
-        let function = &functions.functions[function_index];
-        let function = function
-            .1
-            .borrow_with(|| Function::parse(function.0, &unit.dw_unit, &self.sections, &self.units))
-            .as_ref()
-            .map_err(Error::clone)?;
-
-        // Build the list of inlined functions that contain `probe`.
-        // `inlined_functions` is ordered from outside to inside.
-        let mut inlined_functions = maybe_small::Vec::new();
-        let mut inlined_addresses = &function.inlined_addresses[..];
-        loop {
-            let current_depth = inlined_functions.len();
-            // Look up (probe, current_depth) in inline_ranges.
-            // `inlined_addresses` is sorted in "breadth-first traversal order", i.e.
-            // by `call_depth` first, and then by `range.begin`. See the comment at
-            // the sort call for more information about why.
-            let search = inlined_addresses.binary_search_by(|range| {
-                if range.call_depth > current_depth {
-                    Ordering::Greater
-                } else if range.call_depth < current_depth {
-                    Ordering::Less
-                } else if range.range.begin > probe {
-                    Ordering::Greater
-                } else if range.range.end <= probe {
-                    Ordering::Less
-                } else {
-                    Ordering::Equal
+        for unit in self.find_units(probe) {
+            match unit.find_function_or_location(probe, &self.sections, &self.units)? {
+                (Some(function), location) => {
+                    let inlined_functions = function.find_inlined_functions(probe);
+                    return Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
+                        unit,
+                        sections: &self.sections,
+                        function,
+                        inlined_functions,
+                        next: location,
+                    })));
                 }
-            });
-            if let Ok(index) = search {
-                let function_index = inlined_addresses[index].function;
-                inlined_functions.push(&function.inlined_functions[function_index]);
-                inlined_addresses = &inlined_addresses[index + 1..];
-            } else {
-                break;
+                (None, Some(location)) => {
+                    return Ok(FrameIter(FrameIterState::Location(Some(location))));
+                }
+                _ => {}
             }
         }
-
-        Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
-            unit,
-            sections: &self.sections,
-            function,
-            inlined_functions: inlined_functions.into_iter().rev(),
-            next: loc,
-        })))
+        Ok(FrameIter(FrameIterState::Empty))
     }
 
     /// Initialize all line data structures. This is used for benchmarks.
@@ -612,6 +573,34 @@ where
         }))
     }
 
+    fn find_function_or_location(
+        &self,
+        probe: u64,
+        sections: &gimli::Dwarf<R>,
+        units: &[ResUnit<R>],
+    ) -> Result<(Option<&Function<R>>, Option<Location<'_>>), Error> {
+        let functions = self.parse_functions(sections)?;
+        if functions.is_empty() {
+            // If there are no functions, then this unit may have line information only,
+            // so check for a location.
+            let location = self.find_location(probe, sections)?;
+            return Ok((None, location));
+        }
+        let address = match functions.find_address(probe) {
+            Some(function) => function,
+            None => return Ok((None, None)),
+        };
+        let function_index = functions.addresses[address].function;
+        let function = &functions.functions[function_index];
+        let function = function
+            .1
+            .borrow_with(|| Function::parse(function.0, &self.dw_unit, sections, units))
+            .as_ref()
+            .map_err(Error::clone)?;
+        let location = self.find_location(probe, sections)?;
+        Ok((Some(function), location))
+    }
+
     fn render_file(
         &self,
         file: &gimli::FileEntry<R, R::Offset>,
@@ -774,6 +763,10 @@ struct InlinedFunction<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Functions<R> {
+    fn is_empty(&self) -> bool {
+        self.functions.is_empty()
+    }
+
     fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
@@ -1035,6 +1028,44 @@ impl<R: gimli::Reader> Function<R> {
         }
         Ok(())
     }
+
+    /// Build the list of inlined functions that contain `probe`.
+    fn find_inlined_functions(
+        &self,
+        probe: u64,
+    ) -> iter::Rev<maybe_small::IntoIter<&InlinedFunction<R>>> {
+        // `inlined_functions` is ordered from outside to inside.
+        let mut inlined_functions = maybe_small::Vec::new();
+        let mut inlined_addresses = &self.inlined_addresses[..];
+        loop {
+            let current_depth = inlined_functions.len();
+            // Look up (probe, current_depth) in inline_ranges.
+            // `inlined_addresses` is sorted in "breadth-first traversal order", i.e.
+            // by `call_depth` first, and then by `range.begin`. See the comment at
+            // the sort call for more information about why.
+            let search = inlined_addresses.binary_search_by(|range| {
+                if range.call_depth > current_depth {
+                    Ordering::Greater
+                } else if range.call_depth < current_depth {
+                    Ordering::Less
+                } else if range.range.begin > probe {
+                    Ordering::Greater
+                } else if range.range.end <= probe {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            });
+            if let Ok(index) = search {
+                let function_index = inlined_addresses[index].function;
+                inlined_functions.push(&self.inlined_functions[function_index]);
+                inlined_addresses = &inlined_addresses[index + 1..];
+            } else {
+                break;
+            }
+        }
+        inlined_functions.into_iter().rev()
+    }
 }
 
 impl<R: gimli::Reader> InlinedFunction<R> {
@@ -1192,6 +1223,7 @@ where
     R: gimli::Reader + 'ctx,
 {
     Empty,
+    Location(Option<Location<'ctx>>),
     Frames(FrameIterFrames<'ctx, R>),
 }
 
@@ -1214,6 +1246,16 @@ where
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let frames = match &mut self.0 {
             FrameIterState::Empty => return Ok(None),
+            FrameIterState::Location(location) => {
+                // We can't move out of a mutable reference, so use `take` instead.
+                let location = location.take();
+                self.0 = FrameIterState::Empty;
+                return Ok(Some(Frame {
+                    dw_die_offset: None,
+                    function: None,
+                    location,
+                }));
+            }
             FrameIterState::Frames(frames) => frames,
         };
 
