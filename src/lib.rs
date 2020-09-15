@@ -490,8 +490,12 @@ where
                 sequences.sort_by_key(|x| x.start);
 
                 let mut files = Vec::new();
-                let mut index = 0;
                 let header = ilnp.header();
+                match header.file(0) {
+                    Some(file) => files.push(self.render_file(file, header, sections)?),
+                    None => files.push(String::from("")),  // DWARF version <= 4 may not have 0th index
+                }
+                let mut index = 1;
                 while let Some(file) = header.file(index) {
                     files.push(self.render_file(file, header, sections)?);
                     index += 1;
