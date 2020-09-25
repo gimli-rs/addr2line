@@ -493,7 +493,7 @@ where
                 let header = ilnp.header();
                 match header.file(0) {
                     Some(file) => files.push(self.render_file(file, header, sections)?),
-                    None => files.push(String::from("")),  // DWARF version <= 4 may not have 0th index
+                    None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
                 }
                 let mut index = 1;
                 while let Some(file) = header.file(index) {
@@ -650,7 +650,7 @@ fn path_push(path: &mut String, p: &str) {
     }
 }
 
-fn name_attr<'abbrev, 'unit, R>(
+fn name_attr<R>(
     attr: gimli::AttributeValue<R>,
     unit: &gimli::Unit<R>,
     sections: &gimli::Dwarf<R>,
@@ -664,20 +664,23 @@ where
         return Ok(None);
     }
 
-    let mut entries = match attr {
-        gimli::AttributeValue::UnitRef(offset) => unit.entries_raw(Some(offset))?,
+    let (unit, offset) = match attr {
+        gimli::AttributeValue::UnitRef(offset) => (unit, offset),
         gimli::AttributeValue::DebugInfoRef(dr) => {
-            let unit = match units.binary_search_by_key(&dr.0, |unit| unit.offset.0) {
+            let res_unit = match units.binary_search_by_key(&dr.0, |unit| unit.offset.0) {
                 // There is never a DIE at the unit offset or before the first unit.
                 Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
                 Err(i) => &units[i - 1],
             };
-            unit.dw_unit
-                .entries_raw(Some(gimli::UnitOffset(dr.0 - unit.offset.0)))?
+            (
+                &res_unit.dw_unit,
+                gimli::UnitOffset(dr.0 - res_unit.offset.0),
+            )
         }
         _ => return Ok(None),
     };
 
+    let mut entries = unit.entries_raw(Some(offset))?;
     let abbrev = if let Some(abbrev) = entries.read_abbreviation()? {
         abbrev
     } else {
