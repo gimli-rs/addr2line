@@ -211,7 +211,7 @@ fn main() {
 
             if !printed_anything {
                 if do_functions {
-                    if let Some(name) = symbols.get(probe).and_then(|x| x.name()) {
+                    if let Some(name) = symbols.get(probe).map(|x| x.name()) {
                         print_function(name, None, demangle);
                     } else {
                         print!("??");

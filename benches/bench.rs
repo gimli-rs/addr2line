@@ -10,7 +10,7 @@ use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
 
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, ObjectSymbol};
 
 fn release_fixture_path() -> PathBuf {
     let mut path = PathBuf::new();
@@ -54,7 +54,6 @@ fn dwarf_borrow<'a>(
 fn get_test_addresses(target: &object::File) -> Vec<u64> {
     let addresses: Vec<_> = target
         .symbols()
-        .map(|(_, s)| s)
         .filter(|s| s.kind() == object::SymbolKind::Text && s.address() != 0 && s.size() != 0)
         .take(200)
         .flat_map(|s| {
