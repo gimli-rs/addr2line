@@ -1,3 +1,21 @@
+## 0.14.0 (2020/10/27)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+### Fixed
+
+* Handle units that only have line information.
+  [#188](https://github.com/gimli-rs/addr2line/pull/188)
+
+* Handle DWARF units with version <= 4 and no `DW_AT_name`.
+  [#191](https://github.com/gimli-rs/addr2line/pull/191)
+
+* Fix handling of `DW_FORM_ref_addr`.
+  [#193](https://github.com/gimli-rs/addr2line/pull/193)
+
+
 ## 0.13.0 (2020/07/07)
 
 ### Breaking changes

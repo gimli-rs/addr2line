@@ -100,7 +100,7 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     ///
     /// Performance sensitive applications may want to use `Context::from_sections`
     /// with a more specialised `gimli::Reader` implementation.
-    pub fn new<'data, 'file, O: object::Object<'data, 'file>>(
+    pub fn new<'data: 'file, 'file, O: object::Object<'data, 'file>>(
         file: &'file O,
     ) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
@@ -109,7 +109,7 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'data, 'file, O, S, Endian>(file: &'file O, endian: Endian) -> S
+        fn load_section<'data: 'file, 'file, O, S, Endian>(file: &'file O, endian: Endian) -> S
         where
             O: object::Object<'data, 'file>,
             S: gimli::Section<gimli::EndianRcSlice<Endian>>,
@@ -179,6 +179,7 @@ impl<R: gimli::Reader> Context<R> {
                 default_section.clone().into(),
             ),
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
+            file_type: gimli::DwarfFileType::Main,
         })
     }
 
@@ -189,7 +190,10 @@ impl<R: gimli::Reader> Context<R> {
         let mut units = sections.units();
         while let Some(header) = units.next()? {
             let unit_id = res_units.len();
-            let offset = header.offset();
+            let offset = match header.offset().as_debug_info_offset() {
+                Some(offset) => offset,
+                None => continue,
+            };
             let dw_unit = match sections.unit(header) {
                 Ok(dw_unit) => dw_unit,
                 Err(_) => continue,
