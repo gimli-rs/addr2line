@@ -46,7 +46,7 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use core::cmp::Ordering;
+use core::cmp::{self, Ordering};
 use core::iter;
 use core::mem;
 use core::u64;
@@ -289,17 +289,19 @@ impl<R: gimli::Reader> Context<R> {
     /// location in the CU for that address.
     fn find_units(&self, probe: u64) -> impl Iterator<Item = &ResUnit<R>> {
         self.find_units_range(probe, probe + 1)
+            .map(|(unit, _range)| unit)
     }
 
     /// Finds the CUs covering the range of addresses given.
     ///
-    /// The range is [low, high) (ie, the upper bound is exclusive).
+    /// The range is [low, high) (ie, the upper bound is exclusive). This can return multiple
+    /// ranges for the same unit.
     #[inline]
     fn find_units_range(
         &self,
         probe_low: u64,
         probe_high: u64,
-    ) -> impl Iterator<Item = &ResUnit<R>> {
+    ) -> impl Iterator<Item = (&ResUnit<R>, &gimli::Range)> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
@@ -338,7 +340,7 @@ impl<R: gimli::Reader> Context<R> {
                 if probe_low >= i.range.end || probe_high <= i.range.begin {
                     return None;
                 }
-                Some(&self.units[i.unit_id])
+                Some((&self.units[i.unit_id], &i.range))
             })
     }
 
@@ -646,7 +648,7 @@ where
 
 /// Iterator over `Location`s in a range of addresses, returned by `Context::find_location_range`.
 pub struct LocationRangeIter<'ctx, R: gimli::Reader> {
-    unit_iter: Box<dyn Iterator<Item = &'ctx ResUnit<R>> + 'ctx>,
+    unit_iter: Box<dyn Iterator<Item = (&'ctx ResUnit<R>, &'ctx gimli::Range)> + 'ctx>,
     iter: Option<LocationRangeUnitIter<'ctx>>,
 
     probe_low: u64,
@@ -673,10 +675,10 @@ impl<'ctx, R: gimli::Reader> LocationRangeIter<'ctx, R> {
             let iter = self.iter.take();
             match iter {
                 None => match self.unit_iter.next() {
-                    Some(unit) => {
+                    Some((unit, range)) => {
                         self.iter = unit.find_location_range(
-                            self.probe_low,
-                            self.probe_high,
+                            cmp::max(self.probe_low, range.begin),
+                            cmp::min(self.probe_high, range.end),
                             self.sections,
                         )?;
                     }
