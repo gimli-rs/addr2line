@@ -591,25 +591,21 @@ where
         units: &[ResUnit<R>],
     ) -> Result<(Option<&Function<R>>, Option<Location<'_>>), Error> {
         let functions = self.parse_functions(sections)?;
-        if functions.is_empty() {
-            // If there are no functions, then this unit may have line information only,
-            // so check for a location.
-            let location = self.find_location(probe, sections)?;
-            return Ok((None, location));
-        }
-        let address = match functions.find_address(probe) {
-            Some(function) => function,
-            None => return Ok((None, None)),
+        let function = match functions.find_address(probe) {
+            Some(address) => {
+                let function_index = functions.addresses[address].function;
+                let (offset, ref function) = functions.functions[function_index];
+                Some(
+                    function
+                        .borrow_with(|| Function::parse(offset, &self.dw_unit, sections, units))
+                        .as_ref()
+                        .map_err(Error::clone)?,
+                )
+            }
+            None => None,
         };
-        let function_index = functions.addresses[address].function;
-        let function = &functions.functions[function_index];
-        let function = function
-            .1
-            .borrow_with(|| Function::parse(function.0, &self.dw_unit, sections, units))
-            .as_ref()
-            .map_err(Error::clone)?;
         let location = self.find_location(probe, sections)?;
-        Ok((Some(function), location))
+        Ok((function, location))
     }
 
     fn render_file(
@@ -972,10 +968,6 @@ struct InlinedFunction<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Functions<R> {
-    fn is_empty(&self) -> bool {
-        self.functions.is_empty()
-    }
-
     fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
