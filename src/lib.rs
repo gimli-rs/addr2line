@@ -399,6 +399,12 @@ impl<R: gimli::Reader> ResDwarf<R> {
                 Some(offset) => offset,
                 None => continue,
             };
+            // We mainly want compile units, but we may need to follow references to entries
+            // within other units for function names.  We don't need anything from type units.
+            match header.type_() {
+                gimli::UnitType::Type { .. } | gimli::UnitType::SplitType { .. } => continue,
+                _ => {}
+            }
             let dw_unit = match sections.unit(header) {
                 Ok(dw_unit) => dw_unit,
                 Err(_) => continue,
@@ -409,8 +415,8 @@ impl<R: gimli::Reader> ResDwarf<R> {
                 let mut entries = dw_unit.entries_raw(None)?;
 
                 let abbrev = match entries.read_abbreviation()? {
-                    Some(abbrev) if abbrev.tag() == gimli::DW_TAG_compile_unit => abbrev,
-                    _ => continue, // wtf?
+                    Some(abbrev) => abbrev,
+                    None => continue,
                 };
 
                 let mut ranges = RangeAttributes::default();
