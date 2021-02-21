@@ -90,6 +90,12 @@ fn main() {
                 .required(true),
         )
         .arg(
+            Arg::with_name("sup")
+                .long("sup")
+                .value_name("filename")
+                .help("Path to supplementary object file."),
+        )
+        .arg(
             Arg::with_name("functions")
                 .short("f")
                 .long("functions")
@@ -153,10 +159,19 @@ fn main() {
 
     let file = File::open(path).unwrap();
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
-    let file = &object::File::parse(&*map).unwrap();
+    let object = &object::File::parse(&*map).unwrap();
 
-    let symbols = file.symbol_map();
-    let ctx = Context::new(file).unwrap();
+    let sup_map;
+    let sup_object = if let Some(sup_path) = matches.value_of("sup") {
+        let sup_file = File::open(sup_path).unwrap();
+        sup_map = unsafe { memmap::Mmap::map(&sup_file).unwrap() };
+        Some(object::File::parse(&*sup_map).unwrap())
+    } else {
+        None
+    };
+
+    let symbols = object.symbol_map();
+    let ctx = Context::new_with_sup(object, sup_object.as_ref()).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches
