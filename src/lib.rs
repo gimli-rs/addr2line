@@ -74,6 +74,7 @@ type Error = gimli::Error;
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R: gimli::Reader> {
     dwarf: ResDwarf<R>,
+    sup_dwarf: Option<ResDwarf<R>>,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -88,10 +89,28 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
     /// This means it is not thread safe, has no lifetime constraints (since it copies
     /// the input data), and works for any endianity.
     ///
-    /// Performance sensitive applications may want to use `Context::from_sections`
+    /// Performance sensitive applications may want to use `Context::from_dwarf`
     /// with a more specialised `gimli::Reader` implementation.
+    #[inline]
     pub fn new<'data: 'file, 'file, O: object::Object<'data, 'file>>(
         file: &'file O,
+    ) -> Result<Self, Error> {
+        Self::new_with_sup(file, None)
+    }
+
+    /// Construct a new `Context`.
+    ///
+    /// Optionally also use a supplementary object file.
+    ///
+    /// The resulting `Context` uses `gimli::EndianRcSlice<gimli::RunTimeEndian>`.
+    /// This means it is not thread safe, has no lifetime constraints (since it copies
+    /// the input data), and works for any endianity.
+    ///
+    /// Performance sensitive applications may want to use `Context::from_dwarf_with_sup`
+    /// with a more specialised `gimli::Reader` implementation.
+    pub fn new_with_sup<'data: 'file, 'file, O: object::Object<'data, 'file>>(
+        file: &'file O,
+        sup_file: Option<&'file O>,
     ) -> Result<Self, Error> {
         let endian = if file.is_little_endian() {
             gimli::RunTimeEndian::Little
@@ -99,49 +118,49 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             gimli::RunTimeEndian::Big
         };
 
-        fn load_section<'data: 'file, 'file, O, S, Endian>(file: &'file O, endian: Endian) -> S
+        fn load_section<'data: 'file, 'file, O, Endian>(
+            id: gimli::SectionId,
+            file: &'file O,
+            endian: Endian,
+        ) -> Result<gimli::EndianRcSlice<Endian>, Error>
         where
             O: object::Object<'data, 'file>,
-            S: gimli::Section<gimli::EndianRcSlice<Endian>>,
             Endian: gimli::Endianity,
         {
             use object::ObjectSection;
 
             let data = file
-                .section_by_name(S::section_name())
+                .section_by_name(id.name())
                 .and_then(|section| section.uncompressed_data().ok())
                 .unwrap_or(Cow::Borrowed(&[]));
-            S::from(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
+            Ok(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
-        let debug_abbrev: gimli::DebugAbbrev<_> = load_section(file, endian);
-        let debug_addr: gimli::DebugAddr<_> = load_section(file, endian);
-        let debug_info: gimli::DebugInfo<_> = load_section(file, endian);
-        let debug_line: gimli::DebugLine<_> = load_section(file, endian);
-        let debug_line_str: gimli::DebugLineStr<_> = load_section(file, endian);
-        let debug_ranges: gimli::DebugRanges<_> = load_section(file, endian);
-        let debug_rnglists: gimli::DebugRngLists<_> = load_section(file, endian);
-        let debug_str: gimli::DebugStr<_> = load_section(file, endian);
-        let debug_str_offsets: gimli::DebugStrOffsets<_> = load_section(file, endian);
-        let default_section = gimli::EndianRcSlice::new(Rc::from(&[][..]), endian);
+        let default_section = Ok(gimli::EndianRcSlice::new(Rc::from(&[][..]), endian));
 
-        Context::from_sections(
-            debug_abbrev,
-            debug_addr,
-            debug_info,
-            debug_line,
-            debug_line_str,
-            debug_ranges,
-            debug_rnglists,
-            debug_str,
-            debug_str_offsets,
-            default_section,
-        )
+        let dwarf = gimli::Dwarf::load(
+            |id| load_section(id, file, endian),
+            |id| {
+                sup_file
+                    .map(|f| load_section(id, f, endian))
+                    .unwrap_or_else(|| default_section.clone())
+            },
+        )?;
+        let sup_dwarf = match sup_file {
+            Some(sup_file) => Some(gimli::Dwarf::load(
+                |id| load_section(id, sup_file, endian),
+                |_| default_section.clone(),
+            )?),
+            None => None,
+        };
+        Context::from_dwarf_with_sup(dwarf, sup_dwarf)
     }
 }
 
 impl<R: gimli::Reader> Context<R> {
     /// Construct a new `Context` from DWARF sections.
+    ///
+    /// This method does not support using a supplementary object file.
     pub fn from_sections(
         debug_abbrev: gimli::DebugAbbrev<R>,
         debug_addr: gimli::DebugAddr<R>,
@@ -174,9 +193,24 @@ impl<R: gimli::Reader> Context<R> {
     }
 
     /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
+    #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Self, Error> {
+        Self::from_dwarf_with_sup(sections, None)
+    }
+
+    /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
+    ///
+    /// Optionally also use a supplementary object file.
+    pub fn from_dwarf_with_sup(
+        sections: gimli::Dwarf<R>,
+        sup_sections: Option<gimli::Dwarf<R>>,
+    ) -> Result<Self, Error> {
         let dwarf = ResDwarf::parse(sections)?;
-        Ok(Context { dwarf })
+        let sup_dwarf = match sup_sections {
+            Some(sup_sections) => Some(ResDwarf::parse(sup_sections)?),
+            None => None,
+        };
+        Ok(Context { dwarf, sup_dwarf })
     }
 
     /// The dwarf sections associated with this `Context`.
