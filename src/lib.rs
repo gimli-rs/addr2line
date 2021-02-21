@@ -289,7 +289,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Find the DWARF unit corresponding to the given virtual memory address.
     pub fn find_dwarf_unit(&self, probe: u64) -> Option<&gimli::Unit<R>> {
         for unit in self.find_units(probe) {
-            match unit.find_function_or_location(probe, &self.dwarf) {
+            match unit.find_function_or_location(probe, &self.dwarf, self.sup_dwarf.as_ref()) {
                 Ok((Some(_), _)) | Ok((_, Some(_))) => return Some(&unit.dw_unit),
                 _ => {}
             }
@@ -328,7 +328,7 @@ impl<R: gimli::Reader> Context<R> {
     /// location, until an non-inline caller is reached.
     pub fn find_frames(&self, probe: u64) -> Result<FrameIter<R>, Error> {
         for unit in self.find_units(probe) {
-            match unit.find_function_or_location(probe, &self.dwarf)? {
+            match unit.find_function_or_location(probe, &self.dwarf, self.sup_dwarf.as_ref())? {
                 (Some(function), location) => {
                     let inlined_functions = function.find_inlined_functions(probe);
                     return Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
@@ -370,7 +370,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_inlined_functions(&self) -> Result<(), Error> {
         for unit in &self.dwarf.units {
-            unit.parse_inlined_functions(&self.dwarf)?;
+            unit.parse_inlined_functions(&self.dwarf, self.sup_dwarf.as_ref())?;
         }
         Ok(())
     }
@@ -474,6 +474,17 @@ impl<R: gimli::Reader> ResDwarf<R> {
             unit_ranges,
             sections,
         })
+    }
+
+    fn find_unit(&self, offset: gimli::DebugInfoOffset<R::Offset>) -> Result<&ResUnit<R>, Error> {
+        match self
+            .units
+            .binary_search_by_key(&offset.0, |unit| unit.offset.0)
+        {
+            // There is never a DIE at the unit offset or before the first unit.
+            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
+            Err(i) => Ok(&self.units[i - 1]),
+        }
     }
 }
 
@@ -584,12 +595,16 @@ impl<R: gimli::Reader> ResUnit<R> {
             .map_err(Error::clone)
     }
 
-    fn parse_inlined_functions(&self, dwarf: &ResDwarf<R>) -> Result<(), Error> {
+    fn parse_inlined_functions(
+        &self,
+        dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
+    ) -> Result<(), Error> {
         self.funcs
             .borrow_with(|| Functions::parse(&self.dw_unit, dwarf))
             .as_ref()
             .map_err(Error::clone)?
-            .parse_inlined_functions(&self.dw_unit, dwarf)
+            .parse_inlined_functions(&self.dw_unit, dwarf, sup_dwarf)
     }
 
     fn find_location(
@@ -621,6 +636,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         &self,
         probe: u64,
         dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
     ) -> Result<(Option<&Function<R>>, Option<Location<'_>>), Error> {
         let functions = self.parse_functions(dwarf)?;
         let function = match functions.find_address(probe) {
@@ -629,7 +645,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 let (offset, ref function) = functions.functions[function_index];
                 Some(
                     function
-                        .borrow_with(|| Function::parse(offset, &self.dw_unit, dwarf))
+                        .borrow_with(|| Function::parse(offset, &self.dw_unit, dwarf, sup_dwarf))
                         .as_ref()
                         .map_err(Error::clone)?,
                 )
@@ -884,6 +900,7 @@ fn name_attr<R>(
     attr: gimli::AttributeValue<R>,
     unit: &gimli::Unit<R>,
     dwarf: &ResDwarf<R>,
+    sup_dwarf: Option<&ResDwarf<R>>,
     recursion_limit: usize,
 ) -> Result<Option<R>, Error>
 where
@@ -893,25 +910,48 @@ where
         return Ok(None);
     }
 
-    let (unit, offset) = match attr {
-        gimli::AttributeValue::UnitRef(offset) => (unit, offset),
+    match attr {
+        gimli::AttributeValue::UnitRef(offset) => {
+            name_entry(unit, offset, dwarf, sup_dwarf, recursion_limit)
+        }
         gimli::AttributeValue::DebugInfoRef(dr) => {
-            let res_unit = match dwarf
-                .units
-                .binary_search_by_key(&dr.0, |unit| unit.offset.0)
-            {
-                // There is never a DIE at the unit offset or before the first unit.
-                Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
-                Err(i) => &dwarf.units[i - 1],
-            };
-            (
+            let res_unit = dwarf.find_unit(dr)?;
+            name_entry(
                 &res_unit.dw_unit,
                 gimli::UnitOffset(dr.0 - res_unit.offset.0),
+                dwarf,
+                sup_dwarf,
+                recursion_limit,
             )
         }
-        _ => return Ok(None),
-    };
+        gimli::AttributeValue::DebugInfoRefSup(dr) => {
+            if let Some(sup_dwarf) = sup_dwarf {
+                let res_unit = sup_dwarf.find_unit(dr)?;
+                name_entry(
+                    &res_unit.dw_unit,
+                    gimli::UnitOffset(dr.0 - res_unit.offset.0),
+                    sup_dwarf,
+                    None,
+                    recursion_limit,
+                )
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
 
+fn name_entry<R>(
+    unit: &gimli::Unit<R>,
+    offset: gimli::UnitOffset<R::Offset>,
+    dwarf: &ResDwarf<R>,
+    sup_dwarf: Option<&ResDwarf<R>>,
+    recursion_limit: usize,
+) -> Result<Option<R>, Error>
+where
+    R: gimli::Reader,
+{
     let mut entries = unit.entries_raw(Some(offset))?;
     let abbrev = if let Some(abbrev) = entries.read_abbreviation()? {
         abbrev
@@ -948,7 +988,7 @@ where
     }
 
     if let Some(next) = next {
-        return name_attr(next, unit, dwarf, recursion_limit - 1);
+        return name_attr(next, unit, dwarf, sup_dwarf, recursion_limit - 1);
     }
 
     Ok(None)
@@ -1095,11 +1135,12 @@ impl<R: gimli::Reader> Functions<R> {
         &self,
         unit: &gimli::Unit<R>,
         dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
     ) -> Result<(), Error> {
         for function in &*self.functions {
             function
                 .1
-                .borrow_with(|| Function::parse(function.0, unit, dwarf))
+                .borrow_with(|| Function::parse(function.0, unit, dwarf, sup_dwarf))
                 .as_ref()
                 .map_err(Error::clone)?;
         }
@@ -1112,6 +1153,7 @@ impl<R: gimli::Reader> Function<R> {
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         unit: &gimli::Unit<R>,
         dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
     ) -> Result<Self, Error> {
         let mut entries = unit.entries_raw(Some(dw_die_offset))?;
         let depth = entries.next_depth();
@@ -1135,7 +1177,7 @@ impl<R: gimli::Reader> Function<R> {
                         }
                         gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
                             if name.is_none() {
-                                name = name_attr(attr.value(), unit, dwarf, 16)?;
+                                name = name_attr(attr.value(), unit, dwarf, sup_dwarf, 16)?;
                             }
                         }
                         _ => {}
@@ -1152,6 +1194,7 @@ impl<R: gimli::Reader> Function<R> {
             depth,
             unit,
             dwarf,
+            sup_dwarf,
             &mut inlined_functions,
             &mut inlined_addresses,
             0,
@@ -1194,6 +1237,7 @@ impl<R: gimli::Reader> Function<R> {
         depth: isize,
         unit: &gimli::Unit<R>,
         dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
@@ -1217,6 +1261,7 @@ impl<R: gimli::Reader> Function<R> {
                             next_depth,
                             unit,
                             dwarf,
+                            sup_dwarf,
                             inlined_functions,
                             inlined_addresses,
                             inlined_depth,
@@ -1307,6 +1352,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         depth: isize,
         unit: &gimli::Unit<R>,
         dwarf: &ResDwarf<R>,
+        sup_dwarf: Option<&ResDwarf<R>>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
@@ -1345,7 +1391,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
                     }
                     gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
                         if name.is_none() {
-                            name = name_attr(attr.value(), unit, dwarf, 16)?;
+                            name = name_attr(attr.value(), unit, dwarf, sup_dwarf, 16)?;
                         }
                     }
                     gimli::DW_AT_call_file => {
@@ -1387,6 +1433,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
             depth,
             unit,
             dwarf,
+            sup_dwarf,
             inlined_functions,
             inlined_addresses,
             inlined_depth + 1,
