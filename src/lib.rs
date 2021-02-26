@@ -892,14 +892,27 @@ impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
 }
 
 fn path_push(path: &mut String, p: &str) {
-    if p.starts_with('/') {
+    if has_unix_root(p) || has_windows_root(p) {
         *path = p.to_string();
     } else {
-        if !path.ends_with('/') {
-            path.push('/');
+        let dir_separator = if has_windows_root(path.as_str()) { '\\' } else { '/' };
+
+        if !path.ends_with(dir_separator) {
+            path.push(dir_separator);
         }
         *path += p;
     }
+}
+
+/// Check if the path in the given string has a unix style root
+fn has_unix_root(p: &str) -> bool {
+    p.starts_with('/')
+}
+
+/// Check if the path in the given string has a windows style root
+fn has_windows_root(p: &str) -> bool {
+    p.starts_with('\\')
+    || p.get(1..3) == Some(":\\")
 }
 
 fn name_attr<R>(
