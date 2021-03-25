@@ -7,7 +7,7 @@ extern crate object;
 
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{BufRead, Lines, StdinLock};
+use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::Path;
 
 use clap::{App, Arg, Values};
@@ -255,5 +255,6 @@ fn main() {
         if llvm {
             println!();
         }
+        std::io::stdout().flush().unwrap();
     }
 }
