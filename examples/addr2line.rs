@@ -4,15 +4,18 @@ extern crate fallible_iterator;
 extern crate gimli;
 extern crate memmap;
 extern crate object;
+extern crate typed_arena;
 
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::Path;
+use std::result;
 
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;
-use object::Object;
+use object::{Object, ObjectSection};
+use typed_arena::Arena;
 
 use addr2line::{Context, Location};
 
@@ -35,7 +38,7 @@ impl<'a> Iterator for Addrs<'a> {
     fn next(&mut self) -> Option<u64> {
         let text = match *self {
             Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
-            Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
+            Addrs::Stdin(ref mut lines) => lines.next().map(result::Result::unwrap).map(Cow::from),
         };
         text.as_ref()
             .map(Cow::as_ref)
@@ -72,6 +75,23 @@ fn print_function(name: &str, language: Option<gimli::DwLang>, demangle: bool) {
         print!("{}", addr2line::demangle_auto(Cow::from(name), language));
     } else {
         print!("{}", name);
+    }
+}
+
+fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
+    id: gimli::SectionId,
+    file: &object::File<'input>,
+    endian: Endian,
+    arena_data: &'arena Arena<Cow<'input, [u8]>>,
+) -> Result<gimli::EndianSlice<'arena, Endian>, ()> {
+    // TODO: Unify with dwarfdump.rs in gimli.
+    let name = id.name();
+    match file.section_by_name(name) {
+        Some(section) => match section.uncompressed_data().unwrap() {
+            Cow::Borrowed(b) => Ok(gimli::EndianSlice::new(b, endian)),
+            Cow::Owned(b) => Ok(gimli::EndianSlice::new(arena_data.alloc(b.into()), endian)),
+        },
+        None => Ok(gimli::EndianSlice::new(&[][..], endian)),
     }
 }
 
@@ -148,6 +168,8 @@ fn main() {
         )
         .get_matches();
 
+    let arena_data = Arena::new();
+
     let do_functions = matches.is_present("functions");
     let do_inlines = matches.is_present("inlines");
     let pretty = matches.is_present("pretty");
@@ -161,6 +183,16 @@ fn main() {
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
     let object = &object::File::parse(&*map).unwrap();
 
+    let endian = if object.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+
+    let mut load_section = |id: gimli::SectionId| -> Result<_, _> {
+        load_file_section(id, object, endian, &arena_data)
+    };
+
     let sup_map;
     let sup_object = if let Some(sup_path) = matches.value_of("sup") {
         let sup_file = File::open(sup_path).unwrap();
@@ -169,9 +201,24 @@ fn main() {
     } else {
         None
     };
+    let mut load_sup_section = |id: gimli::SectionId| -> Result<_, _> {
+        if let Some(ref sup_object) = sup_object {
+            load_file_section(id, &sup_object, endian, &arena_data)
+        } else {
+            Ok(gimli::EndianSlice::new(&[][..], endian))
+        }
+    };
 
     let symbols = object.symbol_map();
-    let ctx = Context::new_with_sup(object, sup_object.as_ref()).unwrap();
+    let dwarf = gimli::Dwarf::load(&mut load_section, &mut load_sup_section).unwrap();
+    let dwarf_sup = Some(
+        gimli::Dwarf::load(&mut load_sup_section, |_| -> Result<_, _> {
+            Ok(gimli::EndianSlice::new(&[][..], endian))
+        })
+        .unwrap(),
+    );
+
+    let ctx = Context::from_dwarf_with_sup(dwarf, dwarf_sup).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches
