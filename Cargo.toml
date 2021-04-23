@@ -35,6 +35,7 @@ backtrace = "0.3.13"
 findshlibs = "0.8"
 rustc-test = "0.3"
 auxiliary = { path = "tests/auxiliary" }
+typed-arena = "2"
 
 [profile.release]
 debug = true
