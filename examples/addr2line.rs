@@ -208,7 +208,6 @@ fn main() {
             load_file_section(id, sup_object, endian, &arena_data)
         };
         dwarf.load_sup(&mut load_sup_section).unwrap();
-
     }
 
     let ctx = Context::from_dwarf(dwarf).unwrap();
