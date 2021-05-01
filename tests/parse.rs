@@ -40,8 +40,7 @@ fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
             .unwrap_or(&[][..]);
         Ok(Cow::Borrowed(data))
     };
-    let load_section_sup = |_| Ok(Cow::Borrowed(&[][..]));
-    gimli::Dwarf::load(&load_section, &load_section_sup).unwrap()
+    gimli::Dwarf::load(&load_section).unwrap()
 }
 
 fn dwarf_borrow<'a>(

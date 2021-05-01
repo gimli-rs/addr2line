@@ -44,11 +44,13 @@ use alloc::boxed::Box;
 #[cfg(feature = "object")]
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use core::cmp::{self, Ordering};
 use core::iter;
 use core::mem;
+use core::num::NonZeroU64;
 use core::u64;
 
 use crate::lazy::LazyCell;
@@ -136,24 +138,11 @@ impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
             Ok(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
         }
 
-        let default_section = Ok(gimli::EndianRcSlice::new(Rc::from(&[][..]), endian));
-
-        let dwarf = gimli::Dwarf::load(
-            |id| load_section(id, file, endian),
-            |id| {
-                sup_file
-                    .map(|f| load_section(id, f, endian))
-                    .unwrap_or_else(|| default_section.clone())
-            },
-        )?;
-        let sup_dwarf = match sup_file {
-            Some(sup_file) => Some(gimli::Dwarf::load(
-                |id| load_section(id, sup_file, endian),
-                |_| default_section.clone(),
-            )?),
-            None => None,
-        };
-        Context::from_dwarf_with_sup(dwarf, sup_dwarf)
+        let mut dwarf = gimli::Dwarf::load(|id| load_section(id, file, endian))?;
+        if let Some(sup_file) = sup_file {
+            dwarf.load_sup(|id| load_section(id, sup_file, endian))?;
+        }
+        Context::from_dwarf(dwarf)
     }
 }
 
@@ -176,12 +165,12 @@ impl<R: gimli::Reader> Context<R> {
         Self::from_dwarf(gimli::Dwarf {
             debug_abbrev,
             debug_addr,
+            debug_aranges: default_section.clone().into(),
             debug_info,
             debug_line,
             debug_line_str,
             debug_str,
             debug_str_offsets,
-            debug_str_sup: default_section.clone().into(),
             debug_types: default_section.clone().into(),
             locations: gimli::LocationLists::new(
                 default_section.clone().into(),
@@ -189,24 +178,15 @@ impl<R: gimli::Reader> Context<R> {
             ),
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
             file_type: gimli::DwarfFileType::Main,
+            sup: None,
         })
     }
 
     /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
     #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Self, Error> {
-        Self::from_dwarf_with_sup(sections, None)
-    }
-
-    /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
-    ///
-    /// Optionally also use a supplementary object file.
-    pub fn from_dwarf_with_sup(
-        sections: gimli::Dwarf<R>,
-        sup_sections: Option<gimli::Dwarf<R>>,
-    ) -> Result<Self, Error> {
-        let dwarf = ResDwarf::parse(sections)?;
-        let sup_dwarf = match sup_sections {
+        let dwarf = ResDwarf::parse(Arc::new(sections))?;
+        let sup_dwarf = match dwarf.sections.sup.clone() {
             Some(sup_sections) => Some(ResDwarf::parse(sup_sections)?),
             None => None,
         };
@@ -385,11 +365,11 @@ struct UnitRange {
 struct ResDwarf<R: gimli::Reader> {
     unit_ranges: Vec<UnitRange>,
     units: Vec<ResUnit<R>>,
-    sections: gimli::Dwarf<R>,
+    sections: Arc<gimli::Dwarf<R>>,
 }
 
 impl<R: gimli::Reader> ResDwarf<R> {
-    fn parse(sections: gimli::Dwarf<R>) -> Result<Self, Error> {
+    fn parse(sections: Arc<gimli::Dwarf<R>>) -> Result<Self, Error> {
         let mut unit_ranges = Vec::new();
         let mut res_units = Vec::new();
         let mut units = sections.units();
@@ -548,10 +528,10 @@ impl<R: gimli::Reader> ResUnit<R> {
 
                     let address = row.address();
                     let file_index = row.file_index();
-                    let line = row.line().unwrap_or(0) as u32;
+                    let line = row.line().map(NonZeroU64::get).unwrap_or(0) as u32;
                     let column = match row.column() {
                         gimli::ColumnType::LeftEdge => 0,
-                        gimli::ColumnType::Column(x) => x as u32,
+                        gimli::ColumnType::Column(x) => x.get() as u32,
                     };
 
                     if let Some(last_row) = sequence_rows.last_mut() {
