@@ -1,3 +1,33 @@
+## 0.15.0 (2021/05/02)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+  [#215](https://github.com/gimli-rs/addr2line/pull/215)
+
+* Added `debug_aranges` parameter to `Context::from_sections`.
+  [#200](https://github.com/gimli-rs/addr2line/pull/200)
+
+### Added
+
+* Added `.debug_aranges` support.
+  [#200](https://github.com/gimli-rs/addr2line/pull/200)
+
+* Added supplementary object file support.
+  [#208](https://github.com/gimli-rs/addr2line/pull/208)
+
+### Fixed
+
+* Fixed handling of Windows paths in locations.
+  [#209](https://github.com/gimli-rs/addr2line/pull/209)
+
+* examples/addr2line: Flush stdout after each response.
+  [#210](https://github.com/gimli-rs/addr2line/pull/210)
+
+* examples/addr2line: Avoid copying every section.
+  [#213](https://github.com/gimli-rs/addr2line/pull/213)
+
+
 ## 0.14.1 (2020/12/31)
 
 ### Fixed
