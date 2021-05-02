@@ -464,10 +464,7 @@ impl<R: gimli::Reader> ResDwarf<R> {
                         let aranges_header = sections.debug_aranges.header(*aranges_offset)?;
                         let mut aranges = aranges_header.entries();
                         while let Some(arange) = aranges.next()? {
-                            // Ignore unrelocated ranges (e.g. the function was eliminated
-                            // when linking).
-                            // TODO: allow this if there is a section at address zero.
-                            if arange.address() != 0 && arange.length() != 0 {
+                            if arange.length() != 0 {
                                 unit_ranges.push(UnitRange {
                                     range: arange.range(),
                                     unit_id,

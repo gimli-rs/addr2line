@@ -1,3 +1,10 @@
+## 0.15.1 (2021/05/02)
+
+### Fixed
+
+* Don't ignore aranges with address 0.
+  [#217](https://github.com/gimli-rs/addr2line/pull/217)
+
 ## 0.15.0 (2021/05/02)
 
 ### Breaking changes
