@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::Path;
-use std::result;
 
 use clap::{App, Arg, Values};
 use fallible_iterator::FallibleIterator;
@@ -38,7 +37,7 @@ impl<'a> Iterator for Addrs<'a> {
     fn next(&mut self) -> Option<u64> {
         let text = match *self {
             Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
-            Addrs::Stdin(ref mut lines) => lines.next().map(result::Result::unwrap).map(Cow::from),
+            Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
         };
         text.as_ref()
             .map(Cow::as_ref)
@@ -201,24 +200,17 @@ fn main() {
     } else {
         None
     };
-    let mut load_sup_section = |id: gimli::SectionId| -> Result<_, _> {
-        if let Some(ref sup_object) = sup_object {
-            load_file_section(id, &sup_object, endian, &arena_data)
-        } else {
-            Ok(gimli::EndianSlice::new(&[][..], endian))
-        }
-    };
 
     let symbols = object.symbol_map();
-    let dwarf = gimli::Dwarf::load(&mut load_section, &mut load_sup_section).unwrap();
-    let dwarf_sup = Some(
-        gimli::Dwarf::load(&mut load_sup_section, |_| -> Result<_, _> {
-            Ok(gimli::EndianSlice::new(&[][..], endian))
-        })
-        .unwrap(),
-    );
+    let mut dwarf = gimli::Dwarf::load(&mut load_section).unwrap();
+    if let Some(ref sup_object) = sup_object {
+        let mut load_sup_section = |id: gimli::SectionId| -> Result<_, _> {
+            load_file_section(id, sup_object, endian, &arena_data)
+        };
+        dwarf.load_sup(&mut load_sup_section).unwrap();
+    }
 
-    let ctx = Context::from_dwarf_with_sup(dwarf, dwarf_sup).unwrap();
+    let ctx = Context::from_dwarf(dwarf).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches
