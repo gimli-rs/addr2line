@@ -152,6 +152,7 @@ impl<R: gimli::Reader> Context<R> {
     pub fn from_sections(
         debug_abbrev: gimli::DebugAbbrev<R>,
         debug_addr: gimli::DebugAddr<R>,
+        debug_aranges: gimli::DebugAranges<R>,
         debug_info: gimli::DebugInfo<R>,
         debug_line: gimli::DebugLine<R>,
         debug_line_str: gimli::DebugLineStr<R>,
@@ -164,7 +165,7 @@ impl<R: gimli::Reader> Context<R> {
         Self::from_dwarf(gimli::Dwarf {
             debug_abbrev,
             debug_addr,
-            debug_aranges: default_section.clone().into(),
+            debug_aranges,
             debug_info,
             debug_line,
             debug_line_str,
@@ -370,6 +371,16 @@ struct ResDwarf<R: gimli::Reader> {
 
 impl<R: gimli::Reader> ResDwarf<R> {
     fn parse(sections: Arc<gimli::Dwarf<R>>) -> Result<Self, Error> {
+        // Find all the references to compilation units in .debug_aranges.
+        // Note that we always also iterate through all of .debug_info to
+        // find compilation units, because .debug_aranges may be missing some.
+        let mut aranges = Vec::new();
+        let mut headers = sections.debug_aranges.headers();
+        while let Some(header) = headers.next()? {
+            aranges.push((header.debug_info_offset(), header.offset()));
+        }
+        aranges.sort_by_key(|i| i.0);
+
         let mut unit_ranges = Vec::new();
         let mut res_units = Vec::new();
         let mut units = sections.units();
@@ -426,13 +437,54 @@ impl<R: gimli::Reader> ResDwarf<R> {
                     }
                 }
 
-                ranges.for_each_range(&sections, &dw_unit, |range| {
-                    unit_ranges.push(UnitRange {
-                        range,
-                        unit_id,
-                        max_end: 0,
-                    });
-                })?;
+                // Find the address ranges for the CU, using in order of preference:
+                // - DW_AT_ranges
+                // - .debug_aranges
+                // - DW_AT_low_pc/DW_AT_high_pc
+                //
+                // Using DW_AT_ranges before .debug_aranges is possibly an arbitrary choice,
+                // but the feeling is that DW_AT_ranges is more likely to be reliable or complete
+                // if it is present.
+                //
+                // .debug_aranges must be used before DW_AT_low_pc/DW_AT_high_pc because
+                // it has been observed on macOS that DW_AT_ranges was not emitted even for
+                // discontiguous CUs.
+                let i = match ranges.ranges_offset {
+                    Some(_) => None,
+                    None => aranges.binary_search_by_key(&offset, |x| x.0).ok(),
+                };
+                if let Some(mut i) = i {
+                    // There should be only one set per CU, but in practice multiple
+                    // sets have been observed. This is probably a compiler bug, but
+                    // either way we need to handle it.
+                    while i > 0 && aranges[i - 1].0 == offset {
+                        i -= 1;
+                    }
+                    for (_, aranges_offset) in aranges[i..].iter().take_while(|x| x.0 == offset) {
+                        let aranges_header = sections.debug_aranges.header(*aranges_offset)?;
+                        let mut aranges = aranges_header.entries();
+                        while let Some(arange) = aranges.next()? {
+                            // Ignore unrelocated ranges (e.g. the function was eliminated
+                            // when linking).
+                            // TODO: allow this if there is a section at address zero.
+                            if arange.address() != 0 && arange.length() != 0 {
+                                unit_ranges.push(UnitRange {
+                                    range: arange.range(),
+                                    unit_id,
+                                    max_end: 0,
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    ranges.for_each_range(&sections, &dw_unit, |range| {
+                        unit_ranges.push(UnitRange {
+                            range,
+                            unit_id,
+                            max_end: 0,
+                        });
+                    })?;
+                }
             }
 
             res_units.push(ResUnit {
