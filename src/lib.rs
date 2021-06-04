@@ -187,7 +187,7 @@ impl<R: gimli::Reader> Context<R> {
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Self, Error> {
         let mut dwarf = ResDwarf::parse(Arc::new(sections))?;
         dwarf.sup = match dwarf.sections.sup.clone() {
-            Some(sup_sections) => Some(Arc::new(ResDwarf::parse(sup_sections)?)),
+            Some(sup_sections) => Some(Box::new(ResDwarf::parse(sup_sections)?)),
             None => None,
         };
         Ok(Context { dwarf })
@@ -366,7 +366,7 @@ struct ResDwarf<R: gimli::Reader> {
     unit_ranges: Vec<UnitRange>,
     units: Vec<ResUnit<R>>,
     sections: Arc<gimli::Dwarf<R>>,
-    sup: Option<Arc<ResDwarf<R>>>,
+    sup: Option<Box<ResDwarf<R>>>,
 }
 
 impl<R: gimli::Reader> ResDwarf<R> {
