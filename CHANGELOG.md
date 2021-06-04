@@ -1,9 +1,18 @@
+## 0.15.2 (2021/06/04)
+
+### Fixed
+
+* Allow `Context` to be `Send`.
+  [#219](https://github.com/gimli-rs/addr2line/pull/219)
+
+
 ## 0.15.1 (2021/05/02)
 
 ### Fixed
 
 * Don't ignore aranges with address 0.
   [#217](https://github.com/gimli-rs/addr2line/pull/217)
+
 
 ## 0.15.0 (2021/05/02)
 
