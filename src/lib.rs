@@ -1712,3 +1712,12 @@ pub struct Location<'a> {
     /// The column number.
     pub column: Option<u32>,
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn context_is_send() {
+        fn assert_is_send<T: Send>() {}
+        assert_is_send::<crate::Context<gimli::read::EndianSlice<gimli::LittleEndian>>>();
+    }
+}
