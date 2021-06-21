@@ -25,7 +25,7 @@ pub(crate) struct Functions<R: gimli::Reader> {
 /// is handled by having multiple `FunctionAddress` entries with the same
 /// `function` field.
 pub(crate) struct FunctionAddress {
-    pub(crate) range: gimli::Range,
+    range: gimli::Range,
     /// An index into `Functions::functions`.
     pub(crate) function: usize,
 }
@@ -34,16 +34,16 @@ pub(crate) struct Function<R: gimli::Reader> {
     pub(crate) dw_die_offset: gimli::UnitOffset<R::Offset>,
     pub(crate) name: Option<R>,
     /// List of all `DW_TAG_inlined_subroutine` details in this function.
-    pub(crate) inlined_functions: Box<[InlinedFunction<R>]>,
+    inlined_functions: Box<[InlinedFunction<R>]>,
     /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
-    pub(crate) inlined_addresses: Box<[InlinedFunctionAddress]>,
+    inlined_addresses: Box<[InlinedFunctionAddress]>,
 }
 
 pub(crate) struct InlinedFunctionAddress {
-    pub(crate) range: gimli::Range,
-    pub(crate) call_depth: usize,
+    range: gimli::Range,
+    call_depth: usize,
     /// An index into `Function::inlined_functions`.
-    pub(crate) function: usize,
+    function: usize,
 }
 
 pub(crate) struct InlinedFunction<R: gimli::Reader> {
@@ -242,7 +242,7 @@ impl<R: gimli::Reader> Function<R> {
         })
     }
 
-    pub(crate) fn parse_children(
+    fn parse_children(
         entries: &mut gimli::EntriesRaw<R>,
         depth: isize,
         unit: &gimli::Unit<R>,
@@ -288,7 +288,7 @@ impl<R: gimli::Reader> Function<R> {
         }
     }
 
-    pub(crate) fn skip(
+    fn skip(
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
@@ -353,7 +353,7 @@ impl<R: gimli::Reader> Function<R> {
 }
 
 impl<R: gimli::Reader> InlinedFunction<R> {
-    pub(crate) fn parse(
+    fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
