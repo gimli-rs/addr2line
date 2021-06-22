@@ -37,11 +37,20 @@ rustc-test = "0.3"
 auxiliary = { path = "tests/auxiliary" }
 typed-arena = "2"
 
+[profile.dev]
+split-debuginfo = 'packed'
+
+[profile.test]
+split-debuginfo = 'packed'
+
 [profile.release]
 debug = true
+split-debuginfo = 'packed'
+
 [profile.bench]
 debug = true
 codegen-units = 1
+split-debuginfo = 'packed'
 
 [features]
 default = ["rustc-demangle", "cpp_demangle", "std-object", "fallible-iterator", "smallvec"]
