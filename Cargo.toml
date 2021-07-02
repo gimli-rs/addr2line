@@ -54,8 +54,9 @@ split-debuginfo = 'packed'
 
 [features]
 default = ["rustc-demangle", "cpp_demangle", "std-object", "fallible-iterator", "smallvec"]
+endian_reader = ["gimli/endian-reader"]
 std = ["gimli/std"]
-std-object = ["std", "object", "object/std", "object/compression", "gimli/endian-reader"]
+std-object = ["std", "object", "object/std", "object/compression", "endian_reader"]
 
 # Internal feature, only used when building as part of libstd, not part of the
 # stable interface of this crate.
