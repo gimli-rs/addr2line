@@ -82,7 +82,7 @@ jobs:
         run: cargo build --example addr2line
       - name: Run cargo tarpaulin
         # TODO: Hook this up to coveralls, so we actually get coverage reports.
-        run: cargo tarpaulin --verbose # --ciserver travis-ci --coveralls "$TRAVIS_JOB_ID";
+        run: cargo tarpaulin --skip-clean --verbose # --ciserver travis-ci --coveralls "$TRAVIS_JOB_ID";
 
   doc:
     runs-on: ubuntu-latest

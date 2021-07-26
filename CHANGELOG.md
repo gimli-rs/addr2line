@@ -1,3 +1,11 @@
+## 0.16.0 (2021/07/26)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+--------------------------------------------------------------------------------
+
 ## 0.15.2 (2021/06/04)
 
 ### Fixed
@@ -5,6 +13,7 @@
 * Allow `Context` to be `Send`.
   [#219](https://github.com/gimli-rs/addr2line/pull/219)
 
+--------------------------------------------------------------------------------
 
 ## 0.15.1 (2021/05/02)
 
@@ -13,6 +22,7 @@
 * Don't ignore aranges with address 0.
   [#217](https://github.com/gimli-rs/addr2line/pull/217)
 
+--------------------------------------------------------------------------------
 
 ## 0.15.0 (2021/05/02)
 
@@ -43,6 +53,7 @@
 * examples/addr2line: Avoid copying every section.
   [#213](https://github.com/gimli-rs/addr2line/pull/213)
 
+--------------------------------------------------------------------------------
 
 ## 0.14.1 (2020/12/31)
 
@@ -57,6 +68,7 @@
   [#196](https://github.com/gimli-rs/addr2line/pull/196)
   [#199](https://github.com/gimli-rs/addr2line/pull/199)
 
+--------------------------------------------------------------------------------
 
 ## 0.14.0 (2020/10/27)
 
@@ -75,6 +87,7 @@
 * Fix handling of `DW_FORM_ref_addr`.
   [#193](https://github.com/gimli-rs/addr2line/pull/193)
 
+--------------------------------------------------------------------------------
 
 ## 0.13.0 (2020/07/07)
 
@@ -93,6 +106,7 @@
 * Don't skip `.debug_info` and `.debug_line` entries with a zero address.
   [#182](https://github.com/gimli-rs/addr2line/pull/182)
 
+--------------------------------------------------------------------------------
 
 ## 0.12.2 (2020/06/21)
 
@@ -101,6 +115,7 @@
 * Avoid linear search for `DW_FORM_ref_addr`.
   [#175](https://github.com/gimli-rs/addr2line/pull/175)
 
+--------------------------------------------------------------------------------
 
 ## 0.12.1 (2020/05/19)
 
@@ -112,6 +127,7 @@
 * Don't assert for functions with overlapping address ranges.
   [#168](https://github.com/gimli-rs/addr2line/pull/168)
 
+--------------------------------------------------------------------------------
 
 ## 0.12.0 (2020/05/12)
 
@@ -132,6 +148,7 @@
 * Removed `lazycell` dependency.
   [#160](https://github.com/gimli-rs/addr2line/pull/160)
 
+--------------------------------------------------------------------------------
 
 ## 0.11.0 (2020/01/11)
 
@@ -180,6 +197,7 @@
   [#146](https://github.com/gimli-rs/addr2line/pull/146)
   Improved benchmarks.
 
+--------------------------------------------------------------------------------
 
 ## 0.10.0 (2019/07/07)
 
@@ -188,6 +206,7 @@
 * [#127](https://github.com/gimli-rs/addr2line/pull/127)
   Update `gimli`.
 
+--------------------------------------------------------------------------------
 
 ## 0.9.0 (2019/05/02)
 
@@ -201,6 +220,7 @@
 * [#121](https://github.com/gimli-rs/addr2line/pull/121)
   Reexport `gimli`, `object`, and `fallible-iterator`.
 
+--------------------------------------------------------------------------------
 
 ## 0.8.0 (2019/02/06)
 
