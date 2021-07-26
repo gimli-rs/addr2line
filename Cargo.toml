@@ -1,23 +1,22 @@
 [package]
 name = "addr2line"
-version = "0.15.2"
-authors = ["Nick Fitzgerald <fitzgen@gmail.com>", "Philip Craig <philipjcraig@gmail.com>", "Jon Gjengset <jon@thesquareplanet.com>", "Noah Bergbauer <noah.bergbauer@tum.de>"]
+version = "0.16.0"
 description = "A cross-platform symbolication library written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
+exclude = ["/benches/*", "/fixtures/*"]
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
 categories = ["development-tools::debugging"]
 license = "Apache-2.0/MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
-exclude = ["/benches/*", "/fixtures/*"]
 
 [badges]
 travis-ci = { repository = "gimli-rs/addr2line" }
 
 [dependencies]
-gimli = { version = "0.24", default-features = false, features = ["read"] }
+gimli = { version = "0.25", default-features = false, features = ["read"] }
 fallible-iterator = { version = "0.2", default-features = false, optional = true }
-object = { version = "0.24", default-features = false, features = ["read"], optional = true }
+object = { version = "0.26", default-features = false, features = ["read"], optional = true }
 smallvec = { version = "1", default-features = false, optional = true }
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.3", default-features = false, optional = true }
