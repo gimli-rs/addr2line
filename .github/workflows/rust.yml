@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: ["ubuntu-latest"]
-        rust_channel: ["stable", "beta", "nightly", "1.42.0"]
+        rust_channel: ["stable", "beta", "nightly"]
         include:
           - rust_channel: "stable"
             os: "macOS-latest"
@@ -52,6 +52,15 @@ jobs:
           rustup install nightly
           rustup default nightly
       - run: cargo bench
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install rust
+        run: rustup update 1.42.0 && rustup default 1.42.0
+      - name: Build
+        run: cargo build
 
   rustfmt:
     runs-on: ubuntu-latest
