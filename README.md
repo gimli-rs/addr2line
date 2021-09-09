@@ -19,7 +19,7 @@ performed programmatically through `Context::find_location` and
 
 # Quickstart
  - Add the [`addr2line` crate](https://crates.io/crates/addr2line) to your `Cargo.toml`
- - Load the file and parse it with [`addr2line::object::File::parse`](https://docs.rs/object/*/object/struct.File.html#method.parse)
+ - Load the file and parse it with [`addr2line::object::read::File::parse`](https://docs.rs/object/*/object/read/struct.File.html#method.parse)
  - Pass the parsed file to [`addr2line::Context::new` ](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.new)
  - Use [`addr2line::Context::find_location`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_location)
    or [`addr2line::Context::find_frames`](https://docs.rs/addr2line/*/addr2line/struct.Context.html#method.find_frames)
