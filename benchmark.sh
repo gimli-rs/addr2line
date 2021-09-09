@@ -16,7 +16,7 @@ fi
 # readlink -f, but more portable:
 dirname=$(perl -e 'use Cwd "abs_path";print abs_path(shift)' "$(dirname "$0")")
 
-# http://stackoverflow.com/a/2358432/472927
+# https://stackoverflow.com/a/2358432/472927
 {
 	# compile all refs
 	pushd "$dirname" > /dev/null
@@ -25,7 +25,7 @@ dirname=$(perl -e 'use Cwd "abs_path";print abs_path(shift)' "$(dirname "$0")")
 	echo "==> Stashing any local modifications"
 	git stash --keep-index > /dev/null
 	popstash() {
-		# http://stackoverflow.com/q/24520791/472927
+		# https://stackoverflow.com/q/24520791/472927
 		if [[ "$(git stash list | wc -l)" -ne "$nstashed" ]]; then
 			echo "==> Restoring stashed state"
 			git stash pop > /dev/null

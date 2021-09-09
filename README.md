@@ -1,6 +1,6 @@
 # addr2line
 
-[![](http://meritbadge.herokuapp.com/addr2line) ![](https://img.shields.io/crates/d/addr2line.svg)](https://crates.io/crates/addr2line)
+[![](https://img.shields.io/crates/v/addr2line.svg) ![](https://img.shields.io/crates/d/addr2line.svg)](https://crates.io/crates/addr2line)
 [![](https://docs.rs/addr2line/badge.svg)](https://docs.rs/addr2line/)
 [![Build Status](https://travis-ci.org/gimli-rs/addr2line.svg?branch=master)](https://travis-ci.org/gimli-rs/addr2line)
 [![Coverage Status](https://coveralls.io/repos/github/gimli-rs/addr2line/badge.svg?branch=master)](https://coveralls.io/github/gimli-rs/addr2line?branch=master)
@@ -39,8 +39,8 @@ was done that indicates a comparable performance.
 
 Licensed under either of
 
-  * Apache License, Version 2.0 ([`LICENSE-APACHE`](./LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-  * MIT license ([`LICENSE-MIT`](./LICENSE-MIT) or http://opensource.org/licenses/MIT)
+  * Apache License, Version 2.0 ([`LICENSE-APACHE`](./LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+  * MIT license ([`LICENSE-MIT`](./LICENSE-MIT) or https://opensource.org/licenses/MIT)
 
 at your option.
 
