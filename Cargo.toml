@@ -6,12 +6,9 @@ documentation = "https://docs.rs/addr2line"
 exclude = ["/benches/*", "/fixtures/*", ".github"]
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
 categories = ["development-tools::debugging"]
-license = "Apache-2.0/MIT"
+license = "Apache-2.0 OR MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
-
-[badges]
-travis-ci = { repository = "gimli-rs/addr2line" }
 
 [dependencies]
 gimli = { version = "0.25", default-features = false, features = ["read"] }

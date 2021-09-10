@@ -1,8 +1,7 @@
 # addr2line
 
-[![](https://img.shields.io/crates/v/addr2line.svg) ![](https://img.shields.io/crates/d/addr2line.svg)](https://crates.io/crates/addr2line)
-[![](https://docs.rs/addr2line/badge.svg)](https://docs.rs/addr2line/)
-[![Build Status](https://travis-ci.org/gimli-rs/addr2line.svg?branch=master)](https://travis-ci.org/gimli-rs/addr2line)
+[![](https://img.shields.io/crates/v/addr2line.svg)](https://crates.io/crates/addr2line)
+[![](https://img.shields.io/docsrs/addr2line.svg)](https://docs.rs/addr2line)
 [![Coverage Status](https://coveralls.io/repos/github/gimli-rs/addr2line/badge.svg?branch=master)](https://coveralls.io/github/gimli-rs/addr2line?branch=master)
 
 A cross-platform library for retrieving per-address debug information
