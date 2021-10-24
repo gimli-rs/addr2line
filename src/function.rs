@@ -104,12 +104,7 @@ impl<R: gimli::Reader> Functions<R> {
                         functions.push((dw_die_offset, LazyCell::new()));
                     }
                 } else {
-                    for spec in abbrev.attributes() {
-                        match entries.read_attribute(*spec) {
-                            Ok(_) => {}
-                            Err(e) => return Err(e),
-                        }
-                    }
+                    entries.skip_attributes(abbrev.attributes())?;
                 }
             }
         }
@@ -276,12 +271,7 @@ impl<R: gimli::Reader> Function<R> {
                         )?;
                     }
                     _ => {
-                        for spec in abbrev.attributes() {
-                            match entries.read_attribute(*spec) {
-                                Ok(_) => {}
-                                Err(e) => return Err(e),
-                            }
-                        }
+                        entries.skip_attributes(abbrev.attributes())?;
                     }
                 }
             }
@@ -294,20 +284,10 @@ impl<R: gimli::Reader> Function<R> {
         depth: isize,
     ) -> Result<(), Error> {
         // TODO: use DW_AT_sibling
-        for spec in abbrev.attributes() {
-            match entries.read_attribute(*spec) {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
-        }
+        entries.skip_attributes(abbrev.attributes())?;
         while entries.next_depth() > depth {
             if let Some(abbrev) = entries.read_abbreviation()? {
-                for spec in abbrev.attributes() {
-                    match entries.read_attribute(*spec) {
-                        Ok(_) => {}
-                        Err(e) => return Err(e),
-                    }
-                }
+                entries.skip_attributes(abbrev.attributes())?;
             }
         }
         Ok(())
