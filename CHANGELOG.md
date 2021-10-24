@@ -1,3 +1,16 @@
+## 0.17.0 (2021/10/24)
+
+### Breaking changes
+
+* Updated `gimli` and `object` dependencies.
+
+### Changed
+
+* Use `skip_attributes` to improve performance.
+  [#236](https://github.com/gimli-rs/addr2line/pull/236)
+
+--------------------------------------------------------------------------------
+
 ## 0.16.0 (2021/07/26)
 
 ### Breaking changes
