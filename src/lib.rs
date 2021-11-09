@@ -701,14 +701,17 @@ impl<R: gimli::Reader> ResUnit<R> {
             String::new()
         };
 
-        if let Some(directory) = file.directory(header) {
-            path_push(
-                &mut path,
-                sections
-                    .attr_string(&self.dw_unit, directory)?
-                    .to_string_lossy()?
-                    .as_ref(),
-            );
+        // The directory index 0 is defined to correspond to the compilation unit directory.
+        if file.directory_index() != 0 {
+            if let Some(directory) = file.directory(header) {
+                path_push(
+                    &mut path,
+                    sections
+                        .attr_string(&self.dw_unit, directory)?
+                        .to_string_lossy()?
+                        .as_ref(),
+                );
+            }
         }
 
         path_push(
