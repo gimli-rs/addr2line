@@ -41,11 +41,12 @@ fn find_debuginfo() -> memmap::Mmap {
 fn correctness() {
     let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
+    let module_base = file.relative_address_base();
     let ctx = Context::new(file).unwrap();
 
     let mut bias = None;
     TargetSharedLibrary::each(|lib| {
-        bias = Some(lib.virtual_memory_bias().0 as u64);
+        bias = Some((lib.virtual_memory_bias().0 as u64).wrapping_sub(module_base));
         IterationControl::Break
     });
 
