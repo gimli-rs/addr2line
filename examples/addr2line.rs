@@ -9,9 +9,10 @@ extern crate typed_arena;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::vec::IntoIter;
 
-use clap::{App, Arg, Values};
+use clap::Parser;
 use fallible_iterator::FallibleIterator;
 use object::{Object, ObjectSection};
 use typed_arena::Arena;
@@ -27,7 +28,7 @@ fn parse_uint_from_hex_string(string: &str) -> u64 {
 }
 
 enum Addrs<'a> {
-    Args(Values<'a>),
+    Args(IntoIter<String>),
     Stdin(Lines<StdinLock<'a>>),
 }
 
@@ -94,89 +95,58 @@ fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
     }
 }
 
+#[derive(Parser)]
+#[clap(version = "0.1")]
+#[clap(about = "A fast addr2line clone")]
+struct Opts {
+    /// Specify the name of the executable for which addresses should be translated.
+    #[clap(short, long, value_name = "FILENAME")]
+    exe: PathBuf,
+    /// Path to supplementary object file.
+    #[clap(long, value_name = "FILENAME")]
+    sup: Option<PathBuf>,
+    /// Display function names as well as file and line number information.
+    #[clap(short, long)]
+    functions: bool,
+    /// Make the output more human friendly: each location is printed on one line.
+    #[clap(short, long)]
+    pretty_print: bool,
+    /// If the address belongs to a function that was inlined, the source information for all
+    /// enclosing scopes back to the first non-inlined function will be printed.
+    #[clap(short, long)]
+    inlines: bool,
+    /// Display the address before the function name, file and line number information.
+    #[clap(short, long)]
+    addresses: bool,
+    /// Display only the base of each file name.
+    #[clap(short = 's', long)]
+    basenames: bool,
+    /// Demangle function names.
+    /// Specifying a specific demangling style (like GNU addr2line) is not supported. (TODO)
+    #[clap(short = 'C', long)]
+    demangle: bool,
+    /// Display output in the same format as llvm-symbolizer.
+    #[clap(long)]
+    llvm: bool,
+    /// Addresses to use instead of reading from stdin.
+    addrs: Vec<String>,
+}
+
 fn main() {
-    let matches = App::new("hardliner")
-        .version("0.1")
-        .about("A fast addr2line clone")
-        .arg(
-            Arg::with_name("exe")
-                .short("e")
-                .long("exe")
-                .value_name("filename")
-                .help(
-                    "Specify the name of the executable for which addresses should be translated.",
-                )
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("sup")
-                .long("sup")
-                .value_name("filename")
-                .help("Path to supplementary object file."),
-        )
-        .arg(
-            Arg::with_name("functions")
-                .short("f")
-                .long("functions")
-                .help("Display function names as well as file and line number information."),
-        )
-        .arg(
-            Arg::with_name("pretty")
-                .short("p")
-                .long("pretty-print")
-                .help(
-                    "Make the output more human friendly: each location are printed on \
-                     one line.",
-                ),
-        )
-        .arg(Arg::with_name("inlines").short("i").long("inlines").help(
-            "If the address belongs to a function that was inlined, the source \
-             information for all enclosing scopes back to the first non-inlined \
-             function will also be printed.",
-        ))
-        .arg(
-            Arg::with_name("addresses")
-                .short("a")
-                .long("addresses")
-                .help(
-                    "Display the address before the function name, file and line \
-                     number information.",
-                ),
-        )
-        .arg(
-            Arg::with_name("basenames")
-                .short("s")
-                .long("basenames")
-                .help("Display only the base of each file name."),
-        )
-        .arg(Arg::with_name("demangle").short("C").long("demangle").help(
-            "Demangle function names. \
-             Specifying a specific demangling style (like GNU addr2line) \
-             is not supported. (TODO)",
-        ))
-        .arg(
-            Arg::with_name("llvm")
-                .long("llvm")
-                .help("Display output in the same format as llvm-symbolizer."),
-        )
-        .arg(
-            Arg::with_name("addrs")
-                .takes_value(true)
-                .multiple(true)
-                .help("Addresses to use instead of reading from stdin."),
-        )
-        .get_matches();
+    let Opts {
+        functions: do_functions,
+        inlines: do_inlines,
+        pretty_print: pretty,
+        addresses: print_addrs,
+        basenames,
+        demangle,
+        llvm,
+        exe: path,
+        sup,
+        addrs,
+    } = Opts::parse();
 
     let arena_data = Arena::new();
-
-    let do_functions = matches.is_present("functions");
-    let do_inlines = matches.is_present("inlines");
-    let pretty = matches.is_present("pretty");
-    let print_addrs = matches.is_present("addresses");
-    let basenames = matches.is_present("basenames");
-    let demangle = matches.is_present("demangle");
-    let llvm = matches.is_present("llvm");
-    let path = matches.value_of("exe").unwrap();
 
     let file = File::open(path).unwrap();
     let map = unsafe { memmap::Mmap::map(&file).unwrap() };
@@ -193,7 +163,7 @@ fn main() {
     };
 
     let sup_map;
-    let sup_object = if let Some(sup_path) = matches.value_of("sup") {
+    let sup_object = if let Some(sup_path) = sup {
         let sup_file = File::open(sup_path).unwrap();
         sup_map = unsafe { memmap::Mmap::map(&sup_file).unwrap() };
         Some(object::File::parse(&*sup_map).unwrap())
@@ -213,10 +183,11 @@ fn main() {
     let ctx = Context::from_dwarf(dwarf).unwrap();
 
     let stdin = std::io::stdin();
-    let addrs = matches
-        .values_of("addrs")
-        .map(Addrs::Args)
-        .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
+    let addrs = if addrs.is_empty() {
+        Addrs::Stdin(stdin.lock().lines())
+    } else {
+        Addrs::Args(addrs.into_iter())
+    };
 
     for probe in addrs {
         if print_addrs {
