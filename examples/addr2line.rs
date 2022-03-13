@@ -96,6 +96,7 @@ fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
 }
 
 #[derive(Parser)]
+#[clap(bin_name = "hardliner")]
 #[clap(version = "0.1")]
 #[clap(about = "A fast addr2line clone")]
 struct Opts {
