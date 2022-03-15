@@ -26,7 +26,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
 memmap = "0.7"
-clap = { version = "3.1.6", features = ["derive"] }
+clap = "3.1.6"
 backtrace = "0.3.13"
 findshlibs = "0.10"
 rustc-test = "0.3"
