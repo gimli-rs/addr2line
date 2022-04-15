@@ -68,14 +68,23 @@ impl<R: gimli::Reader> Functions<R> {
                         match entries.read_attribute(*spec) {
                             Ok(ref attr) => {
                                 match attr.name() {
-                                    gimli::DW_AT_low_pc => {
-                                        if let gimli::AttributeValue::Addr(val) = attr.value() {
-                                            ranges.low_pc = Some(val);
+                                    gimli::DW_AT_low_pc => match attr.value() {
+                                        gimli::AttributeValue::Addr(val) => {
+                                            ranges.low_pc = Some(val)
                                         }
-                                    }
+                                        gimli::AttributeValue::DebugAddrIndex(index) => {
+                                            ranges.low_pc =
+                                                Some(dwarf.sections.address(unit, index)?);
+                                        }
+                                        _ => {}
+                                    },
                                     gimli::DW_AT_high_pc => match attr.value() {
                                         gimli::AttributeValue::Addr(val) => {
                                             ranges.high_pc = Some(val)
+                                        }
+                                        gimli::AttributeValue::DebugAddrIndex(index) => {
+                                            ranges.high_pc =
+                                                Some(dwarf.sections.address(unit, index)?);
                                         }
                                         gimli::AttributeValue::Udata(val) => {
                                             ranges.size = Some(val)
@@ -352,13 +361,18 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         for spec in abbrev.attributes() {
             match entries.read_attribute(*spec) {
                 Ok(ref attr) => match attr.name() {
-                    gimli::DW_AT_low_pc => {
-                        if let gimli::AttributeValue::Addr(val) = attr.value() {
-                            ranges.low_pc = Some(val);
+                    gimli::DW_AT_low_pc => match attr.value() {
+                        gimli::AttributeValue::Addr(val) => ranges.low_pc = Some(val),
+                        gimli::AttributeValue::DebugAddrIndex(index) => {
+                            ranges.low_pc = Some(dwarf.sections.address(unit, index)?);
                         }
-                    }
+                        _ => {}
+                    },
                     gimli::DW_AT_high_pc => match attr.value() {
                         gimli::AttributeValue::Addr(val) => ranges.high_pc = Some(val),
+                        gimli::AttributeValue::DebugAddrIndex(index) => {
+                            ranges.high_pc = Some(dwarf.sections.address(unit, index)?);
+                        }
                         gimli::AttributeValue::Udata(val) => ranges.size = Some(val),
                         _ => {}
                     },
