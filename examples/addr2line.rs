@@ -13,7 +13,7 @@ use std::path::Path;
 
 use clap::{Arg, Command, Values};
 use fallible_iterator::FallibleIterator;
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
 use addr2line::{Context, Location};
@@ -96,6 +96,10 @@ fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
         },
         None => Ok(gimli::EndianSlice::new(&[][..], endian)),
     }
+}
+
+fn find_name_from_symbols<'a>(symbols: &'a SymbolMap<SymbolMapName>, probe: u64) -> Option<&'a str> {
+    symbols.get(probe).map(|x| x.name())
 }
 
 fn main() {
@@ -229,7 +233,7 @@ fn main() {
                             demangle,
                         );
                     } else {
-                        let name = symbols.get(probe).map(|x| x.name());
+                        let name = find_name_from_symbols(&symbols, probe);
                         print_function(name, None, demangle);
                     }
 
@@ -251,7 +255,7 @@ fn main() {
 
             if !printed_anything {
                 if do_functions {
-                    let name = symbols.get(probe).map(|x| x.name());
+                    let name = find_name_from_symbols(&symbols, probe);
                     print_function(name, None, demangle);
 
                     if pretty {
