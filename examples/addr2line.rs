@@ -18,11 +18,11 @@ use typed_arena::Arena;
 
 use addr2line::{Context, Location};
 
-fn parse_uint_from_hex_string(string: &str) -> u64 {
+fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
     if string.len() > 2 && string.starts_with("0x") {
-        u64::from_str_radix(&string[2..], 16).expect("Failed to parse address")
+        u64::from_str_radix(&string[2..], 16).ok()
     } else {
-        u64::from_str_radix(string, 16).expect("Failed to parse address")
+        u64::from_str_radix(string, 16).ok()
     }
 }
 
@@ -32,9 +32,9 @@ enum Addrs<'a> {
 }
 
 impl<'a> Iterator for Addrs<'a> {
-    type Item = u64;
+    type Item = Option<u64>;
 
-    fn next(&mut self) -> Option<u64> {
+    fn next(&mut self) -> Option<Option<u64>> {
         let text = match *self {
             Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
             Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
@@ -98,7 +98,10 @@ fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
     }
 }
 
-fn find_name_from_symbols<'a>(symbols: &'a SymbolMap<SymbolMapName>, probe: u64) -> Option<&'a str> {
+fn find_name_from_symbols<'a>(
+    symbols: &'a SymbolMap<SymbolMapName>,
+    probe: u64,
+) -> Option<&'a str> {
     symbols.get(probe).map(|x| x.name())
 }
 
@@ -205,10 +208,11 @@ fn main() {
 
     for probe in addrs {
         if print_addrs {
+            let addr = probe.unwrap_or(0);
             if llvm {
-                print!("0x{:x}", probe);
+                print!("0x{:x}", addr);
             } else {
-                print!("0x{:016x}", probe);
+                print!("0x{:016x}", addr);
             }
             if pretty {
                 print!(": ");
@@ -219,43 +223,45 @@ fn main() {
 
         if do_functions || do_inlines {
             let mut printed_anything = false;
-            let mut frames = ctx.find_frames(probe).unwrap().enumerate();
-            while let Some((i, frame)) = frames.next().unwrap() {
-                if pretty && i != 0 {
-                    print!(" (inlined by) ");
-                }
-
-                if do_functions {
-                    if let Some(func) = frame.function {
-                        print_function(
-                            func.raw_name().ok().as_ref().map(AsRef::as_ref),
-                            func.language,
-                            demangle,
-                        );
-                    } else {
-                        let name = find_name_from_symbols(&symbols, probe);
-                        print_function(name, None, demangle);
+            if let Some(probe) = probe {
+                let mut frames = ctx.find_frames(probe).unwrap().enumerate();
+                while let Some((i, frame)) = frames.next().unwrap() {
+                    if pretty && i != 0 {
+                        print!(" (inlined by) ");
                     }
 
-                    if pretty {
-                        print!(" at ");
-                    } else {
-                        println!();
+                    if do_functions {
+                        if let Some(func) = frame.function {
+                            print_function(
+                                func.raw_name().ok().as_ref().map(AsRef::as_ref),
+                                func.language,
+                                demangle,
+                            );
+                        } else {
+                            let name = find_name_from_symbols(&symbols, probe);
+                            print_function(name, None, demangle);
+                        }
+
+                        if pretty {
+                            print!(" at ");
+                        } else {
+                            println!();
+                        }
                     }
-                }
 
-                print_loc(frame.location.as_ref(), basenames, llvm);
+                    print_loc(frame.location.as_ref(), basenames, llvm);
 
-                printed_anything = true;
+                    printed_anything = true;
 
-                if !do_inlines {
-                    break;
+                    if !do_inlines {
+                        break;
+                    }
                 }
             }
 
             if !printed_anything {
                 if do_functions {
-                    let name = find_name_from_symbols(&symbols, probe);
+                    let name = probe.and_then(|probe| find_name_from_symbols(&symbols, probe));
                     print_function(name, None, demangle);
 
                     if pretty {
@@ -268,7 +274,7 @@ fn main() {
                 print_loc(None, basenames, llvm);
             }
         } else {
-            let loc = ctx.find_location(probe).unwrap();
+            let loc = probe.and_then(|probe| ctx.find_location(probe).unwrap());
             print_loc(loc.as_ref(), basenames, llvm);
         }
 
