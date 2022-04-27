@@ -45,8 +45,8 @@ impl<'a> Iterator for Addrs<'a> {
     }
 }
 
-fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
-    if let Some(ref loc) = *loc {
+fn print_loc(loc: Option<&Location>, basenames: bool, llvm: bool) {
+    if let Some(ref loc) = loc {
         let file = loc.file.as_ref().unwrap();
         let path = if basenames {
             Path::new(Path::new(file).file_name().unwrap())
@@ -69,11 +69,15 @@ fn print_loc(loc: &Option<Location>, basenames: bool, llvm: bool) {
     }
 }
 
-fn print_function(name: &str, language: Option<gimli::DwLang>, demangle: bool) {
-    if demangle {
-        print!("{}", addr2line::demangle_auto(Cow::from(name), language));
+fn print_function(name: Option<&str>, language: Option<gimli::DwLang>, demangle: bool) {
+    if let Some(name) = name {
+        if demangle {
+            print!("{}", addr2line::demangle_auto(Cow::from(name), language));
+        } else {
+            print!("{}", name);
+        }
     } else {
-        print!("{}", name);
+        print!("??");
     }
 }
 
@@ -219,11 +223,14 @@ fn main() {
 
                 if do_functions {
                     if let Some(func) = frame.function {
-                        print_function(&func.raw_name().unwrap(), func.language, demangle);
-                    } else if let Some(name) = symbols.get(probe).map(|x| x.name()) {
-                        print_function(name, None, demangle);
+                        print_function(
+                            func.raw_name().ok().as_ref().map(AsRef::as_ref),
+                            func.language,
+                            demangle,
+                        );
                     } else {
-                        print!("??");
+                        let name = symbols.get(probe).map(|x| x.name());
+                        print_function(name, None, demangle);
                     }
 
                     if pretty {
@@ -233,7 +240,7 @@ fn main() {
                     }
                 }
 
-                print_loc(&frame.location, basenames, llvm);
+                print_loc(frame.location.as_ref(), basenames, llvm);
 
                 printed_anything = true;
 
@@ -244,11 +251,8 @@ fn main() {
 
             if !printed_anything {
                 if do_functions {
-                    if let Some(name) = symbols.get(probe).map(|x| x.name()) {
-                        print_function(name, None, demangle);
-                    } else {
-                        print!("??");
-                    }
+                    let name = symbols.get(probe).map(|x| x.name());
+                    print_function(name, None, demangle);
 
                     if pretty {
                         print!(" at ");
@@ -257,15 +261,11 @@ fn main() {
                     }
                 }
 
-                if llvm {
-                    println!("??:0:0");
-                } else {
-                    println!("??:?");
-                }
+                print_loc(None, basenames, llvm);
             }
         } else {
             let loc = ctx.find_location(probe).unwrap();
-            print_loc(&loc, basenames, llvm);
+            print_loc(loc.as_ref(), basenames, llvm);
         }
 
         if llvm {
