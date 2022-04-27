@@ -65,7 +65,7 @@ fn print_loc(loc: Option<&Location>, basenames: bool, llvm: bool) {
     } else if llvm {
         println!("??:0:0");
     } else {
-        println!("??:?");
+        println!("??:0");
     }
 }
 
