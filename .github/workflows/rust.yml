@@ -92,7 +92,7 @@ jobs:
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
         with:
-          args: '--skip-clean --ignore-tests --out Lcov'
+          args: '--skip-clean --ignore-tests --out Lcov --implicit-test-threads'
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@master
         with:
