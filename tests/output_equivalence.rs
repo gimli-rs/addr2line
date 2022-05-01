@@ -11,6 +11,7 @@ use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
 
+#[inline(never)]
 fn make_trace() -> Vec<String> {
     fn foo() -> Backtrace {
         bar()
