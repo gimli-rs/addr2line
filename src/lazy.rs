@@ -11,10 +11,10 @@ impl<T> LazyCell<T> {
     }
 
     pub fn borrow_with(&self, closure: impl FnOnce() -> T) -> &T {
-        unsafe {
+        
             // First check if we're already initialized...
             let ptr = self.contents.get();
-            if let Some(val) = &*ptr {
+            if let Some(val) = unsafe { &*ptr } {
                 return val;
             }
             // Note that while we're executing `closure` our `borrow_with` may
@@ -23,7 +23,7 @@ impl<T> LazyCell<T> {
             // method which will only perform mutation if we aren't already
             // `Some`.
             let val = closure();
-            (*ptr).get_or_insert(val)
-        }
+            unsafe { (*ptr).get_or_insert(val) }
+        
     }
 }
