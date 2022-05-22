@@ -47,13 +47,16 @@ impl<'a> Iterator for Addrs<'a> {
 
 fn print_loc(loc: Option<&Location>, basenames: bool, llvm: bool) {
     if let Some(ref loc) = loc {
-        let file = loc.file.as_ref().unwrap();
-        let path = if basenames {
-            Path::new(Path::new(file).file_name().unwrap())
+        if let Some(ref file) = loc.file.as_ref() {
+            let path = if basenames {
+                Path::new(Path::new(file).file_name().unwrap())
+            } else {
+                Path::new(file)
+            };
+            print!("{}:", path.display());
         } else {
-            Path::new(file)
-        };
-        print!("{}:", path.display());
+            print!("??:");
+        }
         if llvm {
             print!("{}:{}", loc.line.unwrap_or(0), loc.column.unwrap_or(0));
         } else if let Some(line) = loc.line {
