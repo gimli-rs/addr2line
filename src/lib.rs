@@ -964,7 +964,7 @@ fn path_push(path: &mut String, p: &str) {
             '/'
         };
 
-        if !path.ends_with(dir_separator) {
+        if !path.is_empty() && !path.ends_with(dir_separator) {
             path.push(dir_separator);
         }
         *path += p;
