@@ -494,7 +494,7 @@ impl<R: gimli::Reader> ResDwarf<R> {
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit.line_program {
                     if let Ok(lines) = lines
-                        .borrow_with(|| Lines::parse(&dw_unit, ilnp, &*sections))
+                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), &*sections))
                         .as_ref()
                     {
                         for sequence in lines.sequences.iter() {
@@ -559,12 +559,12 @@ struct Lines {
 impl Lines {
     fn parse<R: gimli::Reader>(
         dw_unit: &gimli::Unit<R>,
-        ilnp: &gimli::IncompleteLineProgram<R, R::Offset>,
+        ilnp: gimli::IncompleteLineProgram<R, R::Offset>,
         sections: &gimli::Dwarf<R>,
     ) -> Result<Self, Error> {
         let mut sequences = Vec::new();
         let mut sequence_rows = Vec::<LineRow>::new();
-        let mut rows = ilnp.clone().rows();
+        let mut rows = ilnp.rows();
         while let Some((_, row)) = rows.next_row()? {
             if row.end_sequence() {
                 if let Some(start) = sequence_rows.first().map(|x| x.address) {
@@ -607,7 +607,7 @@ impl Lines {
         sequences.sort_by_key(|x| x.start);
 
         let mut files = Vec::new();
-        let header = ilnp.header();
+        let header = rows.header();
         match header.file(0) {
             Some(file) => files.push(render_file(dw_unit, file, header, sections)?),
             None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
@@ -689,7 +689,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             None => return Ok(None),
         };
         self.lines
-            .borrow_with(|| Lines::parse(&self.dw_unit, ilnp, sections))
+            .borrow_with(|| Lines::parse(&self.dw_unit, ilnp.clone(), sections))
             .as_ref()
             .map(Some)
             .map_err(Error::clone)
