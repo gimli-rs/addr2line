@@ -404,6 +404,7 @@ impl<R: gimli::Reader> ResDwarf<R> {
             };
 
             let mut lang = None;
+            let mut have_unit_range = false;
             {
                 let mut entries = dw_unit.entries_raw(None)?;
 
@@ -472,11 +473,12 @@ impl<R: gimli::Reader> ResDwarf<R> {
                                     unit_id,
                                     max_end: 0,
                                 });
+                                have_unit_range = true;
                             }
                         }
                     }
                 } else {
-                    ranges.for_each_range(&sections, &dw_unit, |range| {
+                    have_unit_range |= ranges.for_each_range(&sections, &dw_unit, |range| {
                         unit_ranges.push(UnitRange {
                             range,
                             unit_id,
@@ -486,11 +488,34 @@ impl<R: gimli::Reader> ResDwarf<R> {
                 }
             }
 
+            let lines = LazyCell::new();
+            if !have_unit_range {
+                // The unit did not declare any ranges.
+                // Try to get some ranges from the line program sequences.
+                if let Some(ref ilnp) = dw_unit.line_program {
+                    if let Ok(lines) = lines
+                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), &*sections))
+                        .as_ref()
+                    {
+                        for sequence in lines.sequences.iter() {
+                            unit_ranges.push(UnitRange {
+                                range: gimli::Range {
+                                    begin: sequence.start,
+                                    end: sequence.end,
+                                },
+                                unit_id,
+                                max_end: 0,
+                            })
+                        }
+                    }
+                }
+            }
+
             res_units.push(ResUnit {
                 offset,
                 dw_unit,
                 lang,
-                lines: LazyCell::new(),
+                lines,
                 funcs: LazyCell::new(),
             });
         }
@@ -531,6 +556,111 @@ struct Lines {
     sequences: Box<[LineSequence]>,
 }
 
+impl Lines {
+    fn parse<R: gimli::Reader>(
+        dw_unit: &gimli::Unit<R>,
+        ilnp: gimli::IncompleteLineProgram<R, R::Offset>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<Self, Error> {
+        let mut sequences = Vec::new();
+        let mut sequence_rows = Vec::<LineRow>::new();
+        let mut rows = ilnp.rows();
+        while let Some((_, row)) = rows.next_row()? {
+            if row.end_sequence() {
+                if let Some(start) = sequence_rows.first().map(|x| x.address) {
+                    let end = row.address();
+                    let mut rows = Vec::new();
+                    mem::swap(&mut rows, &mut sequence_rows);
+                    sequences.push(LineSequence {
+                        start,
+                        end,
+                        rows: rows.into_boxed_slice(),
+                    });
+                }
+                continue;
+            }
+
+            let address = row.address();
+            let file_index = row.file_index();
+            let line = row.line().map(NonZeroU64::get).unwrap_or(0) as u32;
+            let column = match row.column() {
+                gimli::ColumnType::LeftEdge => 0,
+                gimli::ColumnType::Column(x) => x.get() as u32,
+            };
+
+            if let Some(last_row) = sequence_rows.last_mut() {
+                if last_row.address == address {
+                    last_row.file_index = file_index;
+                    last_row.line = line;
+                    last_row.column = column;
+                    continue;
+                }
+            }
+
+            sequence_rows.push(LineRow {
+                address,
+                file_index,
+                line,
+                column,
+            });
+        }
+        sequences.sort_by_key(|x| x.start);
+
+        let mut files = Vec::new();
+        let header = rows.header();
+        match header.file(0) {
+            Some(file) => files.push(render_file(dw_unit, file, header, sections)?),
+            None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
+        }
+        let mut index = 1;
+        while let Some(file) = header.file(index) {
+            files.push(render_file(dw_unit, file, header, sections)?);
+            index += 1;
+        }
+
+        Ok(Self {
+            files: files.into_boxed_slice(),
+            sequences: sequences.into_boxed_slice(),
+        })
+    }
+}
+
+fn render_file<R: gimli::Reader>(
+    dw_unit: &gimli::Unit<R>,
+    file: &gimli::FileEntry<R, R::Offset>,
+    header: &gimli::LineProgramHeader<R, R::Offset>,
+    sections: &gimli::Dwarf<R>,
+) -> Result<String, gimli::Error> {
+    let mut path = if let Some(ref comp_dir) = dw_unit.comp_dir {
+        comp_dir.to_string_lossy()?.into_owned()
+    } else {
+        String::new()
+    };
+
+    // The directory index 0 is defined to correspond to the compilation unit directory.
+    if file.directory_index() != 0 {
+        if let Some(directory) = file.directory(header) {
+            path_push(
+                &mut path,
+                sections
+                    .attr_string(dw_unit, directory)?
+                    .to_string_lossy()?
+                    .as_ref(),
+            );
+        }
+    }
+
+    path_push(
+        &mut path,
+        sections
+            .attr_string(dw_unit, file.path_name())?
+            .to_string_lossy()?
+            .as_ref(),
+    );
+
+    Ok(path)
+}
+
 struct LineSequence {
     start: u64,
     end: u64,
@@ -559,68 +689,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             None => return Ok(None),
         };
         self.lines
-            .borrow_with(|| {
-                let mut sequences = Vec::new();
-                let mut sequence_rows = Vec::<LineRow>::new();
-                let mut rows = ilnp.clone().rows();
-                while let Some((_, row)) = rows.next_row()? {
-                    if row.end_sequence() {
-                        if let Some(start) = sequence_rows.first().map(|x| x.address) {
-                            let end = row.address();
-                            let mut rows = Vec::new();
-                            mem::swap(&mut rows, &mut sequence_rows);
-                            sequences.push(LineSequence {
-                                start,
-                                end,
-                                rows: rows.into_boxed_slice(),
-                            });
-                        }
-                        continue;
-                    }
-
-                    let address = row.address();
-                    let file_index = row.file_index();
-                    let line = row.line().map(NonZeroU64::get).unwrap_or(0) as u32;
-                    let column = match row.column() {
-                        gimli::ColumnType::LeftEdge => 0,
-                        gimli::ColumnType::Column(x) => x.get() as u32,
-                    };
-
-                    if let Some(last_row) = sequence_rows.last_mut() {
-                        if last_row.address == address {
-                            last_row.file_index = file_index;
-                            last_row.line = line;
-                            last_row.column = column;
-                            continue;
-                        }
-                    }
-
-                    sequence_rows.push(LineRow {
-                        address,
-                        file_index,
-                        line,
-                        column,
-                    });
-                }
-                sequences.sort_by_key(|x| x.start);
-
-                let mut files = Vec::new();
-                let header = ilnp.header();
-                match header.file(0) {
-                    Some(file) => files.push(self.render_file(file, header, sections)?),
-                    None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
-                }
-                let mut index = 1;
-                while let Some(file) = header.file(index) {
-                    files.push(self.render_file(file, header, sections)?);
-                    index += 1;
-                }
-
-                Ok(Lines {
-                    files: files.into_boxed_slice(),
-                    sequences: sequences.into_boxed_slice(),
-                })
-            })
+            .borrow_with(|| Lines::parse(&self.dw_unit, ilnp.clone(), sections))
             .as_ref()
             .map(Some)
             .map_err(Error::clone)
@@ -687,42 +756,6 @@ impl<R: gimli::Reader> ResUnit<R> {
         };
         let location = self.find_location(probe, &dwarf.sections)?;
         Ok((function, location))
-    }
-
-    fn render_file(
-        &self,
-        file: &gimli::FileEntry<R, R::Offset>,
-        header: &gimli::LineProgramHeader<R, R::Offset>,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<String, gimli::Error> {
-        let mut path = if let Some(ref comp_dir) = self.dw_unit.comp_dir {
-            comp_dir.to_string_lossy()?.into_owned()
-        } else {
-            String::new()
-        };
-
-        // The directory index 0 is defined to correspond to the compilation unit directory.
-        if file.directory_index() != 0 {
-            if let Some(directory) = file.directory(header) {
-                path_push(
-                    &mut path,
-                    sections
-                        .attr_string(&self.dw_unit, directory)?
-                        .to_string_lossy()?
-                        .as_ref(),
-                );
-            }
-        }
-
-        path_push(
-            &mut path,
-            sections
-                .attr_string(&self.dw_unit, file.path_name())?
-                .to_string_lossy()?
-                .as_ref(),
-        );
-
-        Ok(path)
     }
 }
 
@@ -931,7 +964,7 @@ fn path_push(path: &mut String, p: &str) {
             '/'
         };
 
-        if !path.ends_with(dir_separator) {
+        if !path.is_empty() && !path.ends_with(dir_separator) {
             path.push(dir_separator);
         }
         *path += p;
