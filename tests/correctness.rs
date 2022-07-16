@@ -2,7 +2,7 @@ extern crate addr2line;
 extern crate fallible_iterator;
 extern crate findshlibs;
 extern crate gimli;
-extern crate memmap;
+extern crate memmap2;
 extern crate object;
 
 use addr2line::Context;
@@ -11,10 +11,10 @@ use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use object::Object;
 use std::fs::File;
 
-fn find_debuginfo() -> memmap::Mmap {
+fn find_debuginfo() -> memmap2::Mmap {
     let path = std::env::current_exe().unwrap();
     let file = File::open(&path).unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file = &object::File::parse(&*map).unwrap();
     if let Ok(uuid) = file.mach_uuid() {
         for candidate in path.parent().unwrap().read_dir().unwrap() {
@@ -25,7 +25,7 @@ fn find_debuginfo() -> memmap::Mmap {
             for candidate in path.join("Contents/Resources/DWARF").read_dir().unwrap() {
                 let path = candidate.unwrap().path();
                 let file = File::open(&path).unwrap();
-                let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+                let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
                 let file = &object::File::parse(&*map).unwrap();
                 if file.mach_uuid().unwrap() == uuid {
                     return map;
