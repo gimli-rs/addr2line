@@ -2,7 +2,7 @@ extern crate addr2line;
 extern crate clap;
 extern crate fallible_iterator;
 extern crate gimli;
-extern crate memmap;
+extern crate memmap2;
 extern crate object;
 extern crate typed_arena;
 
@@ -170,7 +170,7 @@ fn main() {
     let path = matches.value_of("exe").unwrap();
 
     let file = File::open(path).unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let object = &object::File::parse(&*map).unwrap();
 
     let endian = if object.is_little_endian() {
@@ -186,7 +186,7 @@ fn main() {
     let sup_map;
     let sup_object = if let Some(sup_path) = matches.value_of("sup") {
         let sup_file = File::open(sup_path).unwrap();
-        sup_map = unsafe { memmap::Mmap::map(&sup_file).unwrap() };
+        sup_map = unsafe { memmap2::Mmap::map(&sup_file).unwrap() };
         Some(object::File::parse(&*sup_map).unwrap())
     } else {
         None

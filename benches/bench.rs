@@ -1,7 +1,7 @@
 #![feature(test)]
 
 extern crate addr2line;
-extern crate memmap;
+extern crate memmap2;
 extern crate object;
 extern crate test;
 
@@ -24,7 +24,7 @@ fn release_fixture_path() -> PathBuf {
 
 fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
     let file = File::open(target).unwrap();
-    let map = unsafe { memmap::Mmap::map(&file).unwrap() };
+    let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file = object::File::parse(&*map).unwrap();
     f(&file)
 }
