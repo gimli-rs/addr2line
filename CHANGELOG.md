@@ -1,3 +1,22 @@
+## 0.18.0 (2022/07/16)
+
+### Breaking changes
+
+* Updated `object` dependency.
+
+### Changed
+
+* Fixed handling of relative path for `DW_AT_comp_dir`.
+  [#239](https://github.com/gimli-rs/addr2line/pull/239)
+
+* Fixed handling of `DW_FORM_addrx` for DWARF 5 support.
+  [#243](https://github.com/gimli-rs/addr2line/pull/243)
+
+* Fixed handling of units that are missing range information.
+  [#249](https://github.com/gimli-rs/addr2line/pull/249)
+
+--------------------------------------------------------------------------------
+
 ## 0.17.0 (2021/10/24)
 
 ### Breaking changes
