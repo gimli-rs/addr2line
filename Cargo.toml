@@ -26,7 +26,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
 memmap2 = "0.5.5"
-bpaf = { version = "0.5.3", default-features = false }
+bpaf = { version = "0.5.6", default-features = false, features = ["autocomplete"] }
 backtrace = "0.3.13"
 findshlibs = "0.10"
 rustc-test = "0.3"
