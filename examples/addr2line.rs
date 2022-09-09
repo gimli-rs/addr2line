@@ -234,7 +234,7 @@ fn main() {
         let probe = match mprobe {
             Some(probe) => probe,
             None => {
-                println!("??:0");
+                print_loc(None, opts.basenames, opts.llvm);
                 continue;
             }
         };
