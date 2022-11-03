@@ -16,7 +16,7 @@ fallible-iterator = { version = "0.2", default-features = false, optional = true
 object = { version = "0.29", default-features = false, features = ["read"], optional = true }
 smallvec = { version = "1", default-features = false, optional = true }
 rustc-demangle = { version = "0.1", optional = true }
-cpp_demangle = { version = "0.3", default-features = false, optional = true }
+cpp_demangle = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 
 # Internal feature, only used when building as part of libstd, not part of the
 # stable interface of this crate.
