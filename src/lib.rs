@@ -181,6 +181,7 @@ impl<R: gimli::Reader> Context<R> {
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
             file_type: gimli::DwarfFileType::Main,
             sup: None,
+            abbreviations_cache: gimli::AbbreviationsCache::new(),
         })
     }
 
