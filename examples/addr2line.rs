@@ -16,6 +16,8 @@ use fallible_iterator::FallibleIterator;
 use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
+#[cfg(not(unix))]
+use addr2line::LookupResultExt;
 use addr2line::{Context, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
@@ -201,6 +203,13 @@ fn main() {
         dwarf.load_sup(&mut load_sup_section).unwrap();
     }
 
+    #[cfg(unix)]
+    let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
+        |data, endian| {
+            gimli::EndianSlice::new(arena_data.alloc(Cow::Owned(data.into_owned())), endian)
+        },
+        Some(std::path::PathBuf::from(path)),
+    );
     let ctx = Context::from_dwarf(dwarf).unwrap();
 
     let stdin = std::io::stdin();
@@ -227,7 +236,12 @@ fn main() {
         if do_functions || do_inlines {
             let mut printed_anything = false;
             if let Some(probe) = probe {
-                let mut frames = ctx.find_frames(probe).unwrap().enumerate();
+                let frames = ctx.find_frames(probe);
+                #[cfg(unix)]
+                let frames = split_dwarf_loader.run(frames).unwrap();
+                #[cfg(not(unix))]
+                let frames = frames.skip_all_loads().unwrap();
+                let mut frames = frames.enumerate();
                 while let Some((i, frame)) = frames.next().unwrap() {
                     if pretty && i != 0 {
                         print!(" (inlined by) ");

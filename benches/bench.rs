@@ -10,6 +10,7 @@ use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
 
+use addr2line::LookupResultExt;
 use object::{Object, ObjectSection, ObjectSymbol};
 
 fn release_fixture_path() -> PathBuf {
@@ -224,7 +225,7 @@ fn context_query_with_functions_rc(b: &mut test::Bencher) {
         let ctx = addr2line::Context::new(file).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            let mut frames = ctx.find_frames(*addr).unwrap();
+            let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
             while let Ok(Some(ref frame)) = frames.next() {
                 test::black_box(frame);
             }
@@ -232,7 +233,7 @@ fn context_query_with_functions_rc(b: &mut test::Bencher) {
 
         b.iter(|| {
             for addr in &addresses {
-                let mut frames = ctx.find_frames(*addr).unwrap();
+                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
                     test::black_box(frame);
                 }
@@ -253,7 +254,7 @@ fn context_query_with_functions_slice(b: &mut test::Bencher) {
         let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            let mut frames = ctx.find_frames(*addr).unwrap();
+            let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
             while let Ok(Some(ref frame)) = frames.next() {
                 test::black_box(frame);
             }
@@ -261,7 +262,7 @@ fn context_query_with_functions_slice(b: &mut test::Bencher) {
 
         b.iter(|| {
             for addr in &addresses {
-                let mut frames = ctx.find_frames(*addr).unwrap();
+                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
                     test::black_box(frame);
                 }
@@ -314,7 +315,7 @@ fn context_new_and_query_with_functions_rc(b: &mut test::Bencher) {
         b.iter(|| {
             let ctx = addr2line::Context::new(file).unwrap();
             for addr in addresses.iter().take(100) {
-                let mut frames = ctx.find_frames(*addr).unwrap();
+                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
                     test::black_box(frame);
                 }
@@ -334,7 +335,7 @@ fn context_new_and_query_with_functions_slice(b: &mut test::Bencher) {
             let dwarf = dwarf_borrow(&dwarf);
             let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
             for addr in addresses.iter().take(100) {
-                let mut frames = ctx.find_frames(*addr).unwrap();
+                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
                     test::black_box(frame);
                 }

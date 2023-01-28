@@ -67,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Install rust
-        run: rustup update 1.42.0 && rustup default 1.42.0
+        run: rustup update 1.55.0 && rustup default 1.55.0
       - name: Build
         run: cargo build
 

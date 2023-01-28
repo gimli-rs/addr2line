@@ -10,6 +10,10 @@ impl<T> LazyCell<T> {
         }
     }
 
+    pub fn borrow(&self) -> Option<&T> {
+        unsafe { &*self.contents.get() }.as_ref()
+    }
+
     pub fn borrow_with(&self, closure: impl FnOnce() -> T) -> &T {
         // First check if we're already initialized...
         let ptr = self.contents.get();
