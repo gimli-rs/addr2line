@@ -5,11 +5,13 @@ extern crate gimli;
 extern crate memmap2;
 extern crate object;
 
-use addr2line::Context;
+use addr2line::{Context, LookupResultExt};
 use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use object::Object;
+use std::borrow::Cow;
 use std::fs::File;
+use std::sync::Arc;
 
 fn find_debuginfo() -> memmap2::Mmap {
     let path = std::env::current_exe().unwrap();
@@ -42,7 +44,38 @@ fn correctness() {
     let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
     let module_base = file.relative_address_base();
-    let ctx = Context::new(file).unwrap();
+
+    let endian = if file.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+
+    fn load_section<'data: 'file, 'file, O, Endian>(
+        id: gimli::SectionId,
+        file: &'file O,
+        endian: Endian,
+    ) -> Result<gimli::EndianArcSlice<Endian>, gimli::Error>
+    where
+        O: object::Object<'data, 'file>,
+        Endian: gimli::Endianity,
+    {
+        use object::ObjectSection;
+
+        let data = file
+            .section_by_name(id.name())
+            .and_then(|section| section.uncompressed_data().ok())
+            .unwrap_or(Cow::Borrowed(&[]));
+        Ok(gimli::EndianArcSlice::new(Arc::from(&*data), endian))
+    }
+
+    let dwarf = gimli::Dwarf::load(|id| load_section(id, file, endian)).unwrap();
+    let ctx = Context::from_dwarf(dwarf).unwrap();
+    #[cfg(unix)]
+    let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
+        |data, endian| gimli::EndianArcSlice::new(Arc::from(&*data), endian),
+        None,
+    );
 
     let mut bias = None;
     TargetSharedLibrary::each(|lib| {
@@ -50,10 +83,15 @@ fn correctness() {
         IterationControl::Break
     });
 
-    let test = |sym: u64, expected_prefix: &str| {
+    #[allow(unused_mut)]
+    let mut test = |sym: u64, expected_prefix: &str| {
         let ip = sym.wrapping_sub(bias.unwrap());
 
-        let frames = ctx.find_frames(ip).unwrap();
+        let frames = ctx.find_frames(ip);
+        #[cfg(unix)]
+        let frames = split_dwarf_loader.run(frames).unwrap();
+        #[cfg(not(unix))]
+        let frames = frames.skip_all_loads().unwrap();
         let frame = frames.last().unwrap().unwrap();
         let name = frame.function.as_ref().unwrap().demangle().unwrap();
         // Old rust versions generate DWARF with wrong linkage name,
@@ -87,6 +125,13 @@ fn zero_function() {
     let file = &object::File::parse(&*map).unwrap();
     let ctx = Context::new(file).unwrap();
     for probe in 0..10 {
-        assert!(ctx.find_frames(probe).unwrap().count().unwrap() < 10);
+        assert!(
+            ctx.find_frames(probe)
+                .skip_all_loads()
+                .unwrap()
+                .count()
+                .unwrap()
+                < 10
+        );
     }
 }
