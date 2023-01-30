@@ -744,11 +744,12 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
         })
     }
 
+    // Find the unit containing the given offset, and convert the offset into a unit offset.
     fn find_unit(
         &self,
         offset: gimli::DebugInfoOffset<R::Offset>,
         file: DebugFile,
-    ) -> Result<&ResUnit<R>, Error> {
+    ) -> Result<(&gimli::Unit<R>, gimli::UnitOffset<R::Offset>), Error> {
         let units = match file {
             DebugFile::Primary => &self.units,
             DebugFile::Supplementary => self
@@ -757,11 +758,16 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
                 .ok_or(gimli::Error::NoEntryAtGivenOffset)?,
         };
 
-        match units.binary_search_by_key(&offset.0, |unit| unit.offset.0) {
+        let unit = match units.binary_search_by_key(&offset.0, |unit| unit.offset.0) {
             // There is never a DIE at the unit offset or before the first unit.
-            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
-            Err(i) => Ok(&units[i - 1]),
-        }
+            Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
+            Err(i) => &units[i - 1].dw_unit,
+        };
+
+        let unit_offset = offset
+            .to_unit_offset(&unit.header)
+            .ok_or(gimli::Error::NoEntryAtGivenOffset)?;
+        Ok((unit, unit_offset))
     }
 }
 

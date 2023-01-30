@@ -481,28 +481,14 @@ where
             name_entry(file, unit, offset, parsed, sections, recursion_limit)
         }
         gimli::AttributeValue::DebugInfoRef(dr) => {
-            let res_unit = parsed.find_unit(dr, file)?;
-            name_entry(
-                file,
-                &res_unit.dw_unit,
-                gimli::UnitOffset(dr.0 - res_unit.offset.0),
-                parsed,
-                sections,
-                recursion_limit,
-            )
+            let (unit, offset) = parsed.find_unit(dr, file)?;
+            name_entry(file, unit, offset, parsed, sections, recursion_limit)
         }
         gimli::AttributeValue::DebugInfoRefSup(dr) => {
             if let Some(sup_sections) = sections.sup.as_ref() {
                 file = DebugFile::Supplementary;
-                let res_unit = parsed.find_unit(dr, file)?;
-                name_entry(
-                    file,
-                    &res_unit.dw_unit,
-                    gimli::UnitOffset(dr.0 - res_unit.offset.0),
-                    parsed,
-                    sup_sections,
-                    recursion_limit,
-                )
+                let (unit, offset) = parsed.find_unit(dr, file)?;
+                name_entry(file, unit, offset, parsed, sup_sections, recursion_limit)
             } else {
                 Ok(None)
             }
