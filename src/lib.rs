@@ -84,6 +84,7 @@ type Error = gimli::Error;
 enum DebugFile {
     Primary,
     Supplementary,
+    Dwo,
 }
 
 /// Operations that consult debug information may require additional files
@@ -400,7 +401,7 @@ impl<R: gimli::Reader> Context<R> {
                 move |r| {
                     ControlFlow::Break(match r {
                         Ok((Some(_), _)) | Ok((_, Some(_))) => {
-                            let (sections, unit) = unit
+                            let (_file, sections, unit) = unit
                                 .dwarf_and_unit_dwo(self)
                                 // We've already been through both error cases here to get to this point.
                                 .unwrap()
@@ -796,6 +797,7 @@ impl<R: gimli::Reader> Context<R> {
                     Err(i) => &self.sup_units[i - 1].dw_unit,
                 }
             }
+            DebugFile::Dwo => return Err(gimli::Error::NoEntryAtGivenOffset),
         };
 
         let unit_offset = offset
@@ -1092,17 +1094,18 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
         SimpleLookup<
-            Result<(&'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
+            Result<(DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
             R,
             impl FnOnce(
                 Option<Arc<gimli::Dwarf<R>>>,
-            ) -> Result<(&'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
+            )
+                -> Result<(DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
         >,
     > {
         loop {
             break SimpleLookup::new_complete(match self.dwo.borrow() {
-                Some(Ok(Some(v))) => Ok((&*v.0, &v.1)),
-                Some(Ok(None)) => Ok((&*ctx.sections, &self.dw_unit)),
+                Some(Ok(Some(v))) => Ok((DebugFile::Dwo, &*v.0, &v.1)),
+                Some(Ok(None)) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
                 Some(Err(e)) => Err(*e),
                 None => {
                     let dwo_id = match self.dw_unit.dwo_id {
@@ -1155,8 +1158,8 @@ impl<R: gimli::Reader> ResUnit<R> {
                             parent: ctx.sections.clone(),
                         },
                         move |dwo_dwarf| match self.dwo.borrow_with(|| process_dwo(dwo_dwarf)) {
-                            Ok(Some(v)) => Ok((&*v.0, &v.1)),
-                            Ok(None) => Ok((&*ctx.sections, &self.dw_unit)),
+                            Ok(Some(v)) => Ok((DebugFile::Dwo, &*v.0, &v.1)),
+                            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
                             Err(e) => Err(*e),
                         },
                     );
@@ -1196,7 +1199,7 @@ impl<R: gimli::Reader> ResUnit<R> {
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
     {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (sections, unit) = r?;
+            let (_file, sections, unit) = r?;
             self.parse_functions_dwarf_and_unit(unit, sections)
         })
     }
@@ -1205,12 +1208,12 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (sections, unit) = r?;
+            let (file, sections, unit) = r?;
             self.funcs
                 .borrow_with(|| Functions::parse(unit, sections))
                 .as_ref()
                 .map_err(Error::clone)?
-                .parse_inlined_functions(unit, ctx, sections)
+                .parse_inlined_functions(file, unit, ctx, sections)
         })
     }
 
@@ -1250,7 +1253,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         >,
     > {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (sections, unit) = r?;
+            let (file, sections, unit) = r?;
             let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
             let function = match functions.find_address(probe) {
                 Some(address) => {
@@ -1258,7 +1261,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                     let (offset, ref function) = functions.functions[function_index];
                     Some(
                         function
-                            .borrow_with(|| Function::parse(offset, unit, ctx, sections))
+                            .borrow_with(|| Function::parse(offset, file, unit, ctx, sections))
                             .as_ref()
                             .map_err(Error::clone)?,
                     )
