@@ -150,6 +150,7 @@ impl<R: gimli::Reader> Functions<R> {
 
     pub(crate) fn parse_inlined_functions(
         &self,
+        file: DebugFile,
         unit: &gimli::Unit<R>,
         ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
@@ -157,7 +158,7 @@ impl<R: gimli::Reader> Functions<R> {
         for function in &*self.functions {
             function
                 .1
-                .borrow_with(|| Function::parse(function.0, unit, ctx, sections))
+                .borrow_with(|| Function::parse(function.0, file, unit, ctx, sections))
                 .as_ref()
                 .map_err(Error::clone)?;
         }
@@ -168,6 +169,7 @@ impl<R: gimli::Reader> Functions<R> {
 impl<R: gimli::Reader> Function<R> {
     pub(crate) fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
+        file: DebugFile,
         unit: &gimli::Unit<R>,
         ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
@@ -194,14 +196,7 @@ impl<R: gimli::Reader> Function<R> {
                         }
                         gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
                             if name.is_none() {
-                                name = name_attr(
-                                    attr.value(),
-                                    DebugFile::Primary,
-                                    unit,
-                                    ctx,
-                                    sections,
-                                    16,
-                                )?;
+                                name = name_attr(attr.value(), file, unit, ctx, sections, 16)?;
                             }
                         }
                         _ => {}
@@ -216,6 +211,7 @@ impl<R: gimli::Reader> Function<R> {
         Function::parse_children(
             &mut entries,
             depth,
+            file,
             unit,
             ctx,
             sections,
@@ -259,6 +255,7 @@ impl<R: gimli::Reader> Function<R> {
     fn parse_children(
         entries: &mut gimli::EntriesRaw<R>,
         depth: isize,
+        file: DebugFile,
         unit: &gimli::Unit<R>,
         ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
@@ -283,6 +280,7 @@ impl<R: gimli::Reader> Function<R> {
                             entries,
                             abbrev,
                             next_depth,
+                            file,
                             unit,
                             ctx,
                             sections,
@@ -359,6 +357,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         entries: &mut gimli::EntriesRaw<R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
+        file: DebugFile,
         unit: &gimli::Unit<R>,
         ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
@@ -404,14 +403,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
                     }
                     gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
                         if name.is_none() {
-                            name = name_attr(
-                                attr.value(),
-                                DebugFile::Primary,
-                                unit,
-                                ctx,
-                                sections,
-                                16,
-                            )?;
+                            name = name_attr(attr.value(), file, unit, ctx, sections, 16)?;
                         }
                     }
                     gimli::DW_AT_call_file => {
@@ -451,6 +443,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         Function::parse_children(
             entries,
             depth,
+            file,
             unit,
             ctx,
             sections,
