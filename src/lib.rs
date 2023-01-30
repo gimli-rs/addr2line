@@ -1113,20 +1113,17 @@ impl<R: gimli::Reader> ResUnit<R> {
                         Some(dwo_id) => dwo_id,
                     };
 
-                    let dwo_path_f = || {
-                        let dwo_comp_dir = self.dw_unit.comp_dir.clone();
+                    let comp_dir = self.dw_unit.comp_dir.clone();
 
-                        let dwo_path = self.dw_unit.dwo_name().and_then(|s| {
-                            if let Some(s) = s {
-                                Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
-                            } else {
-                                Ok(None)
-                            }
-                        })?;
-                        Ok((dwo_comp_dir, dwo_path))
-                    };
+                    let dwo_name = self.dw_unit.dwo_name().and_then(|s| {
+                        if let Some(s) = s {
+                            Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
+                        } else {
+                            Ok(None)
+                        }
+                    });
 
-                    let (comp_dir, path) = match dwo_path_f() {
+                    let path = match dwo_name {
                         Ok(v) => v,
                         Err(e) => {
                             self.dwo.borrow_with(|| Err(e));
