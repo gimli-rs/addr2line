@@ -191,7 +191,7 @@ impl<L: LookupContinuation> LookupResultExtInternal<L> for LookupResult<L> {
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R: gimli::Reader> {
     parsed_dwarf: ParsedDwarf<R>,
-    raw_dwarf: RawDwarf<R>,
+    sections: Arc<gimli::Dwarf<R>>,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -302,19 +302,15 @@ impl<R: gimli::Reader> Context<R> {
     /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
     #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Context<R>, Error> {
-        let sup_sections = sections.sup.clone();
-        let raw_dwarf = RawDwarf {
-            sections: Arc::new(sections),
-            sup_sections,
-        };
-        let mut parsed_dwarf = ParsedDwarf::parse(&raw_dwarf.sections)?;
-        if let Some(sup) = raw_dwarf.sup_sections.as_ref() {
+        let sections = Arc::new(sections);
+        let mut parsed_dwarf = ParsedDwarf::parse(&sections)?;
+        if let Some(sup) = sections.sup.as_ref() {
             let sup_dwarf = ParsedDwarf::parse(sup)?;
             parsed_dwarf.sup_units = Some(sup_dwarf.units);
         }
         Ok(Context {
             parsed_dwarf,
-            raw_dwarf,
+            sections,
         })
     }
 
@@ -400,12 +396,12 @@ impl<R: gimli::Reader> Context<R> {
                 move |r| {
                     ControlFlow::Break(match r {
                         Ok((Some(_), _)) | Ok((_, Some(_))) => {
-                            let (dwarf, unit) = unit
+                            let (sections, unit) = unit
                                 .dwarf_and_unit_dwo(self)
                                 // We've already been through both error cases here to get to this point.
                                 .unwrap()
                                 .unwrap();
-                            Some((&*dwarf.sections, unit))
+                            Some((sections, unit))
                         }
                         _ => match units_iter.next() {
                             Some(next_unit) => {
@@ -426,7 +422,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
         for unit in self.find_units(probe) {
-            if let Some(location) = unit.find_location(probe, &self.raw_dwarf.sections)? {
+            if let Some(location) = unit.find_location(probe, &self.sections)? {
                 return Ok(Some(location));
             }
         }
@@ -465,7 +461,7 @@ impl<R: gimli::Reader> Context<R> {
                         let inlined_functions = function.find_inlined_functions(probe);
                         Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
                             unit,
-                            sections: &self.raw_dwarf.sections,
+                            sections: &self.sections,
                             function,
                             inlined_functions,
                             next: location,
@@ -539,7 +535,7 @@ impl<R: gimli::Reader> Context<R> {
     #[doc(hidden)]
     pub fn parse_lines(&self) -> Result<(), Error> {
         for unit in &self.parsed_dwarf.units {
-            unit.parse_lines(&self.raw_dwarf.sections)?;
+            unit.parse_lines(&self.sections)?;
         }
         Ok(())
     }
@@ -573,11 +569,6 @@ struct ParsedDwarf<R: gimli::Reader> {
     unit_ranges: Vec<UnitRange>,
     units: Vec<ResUnit<R>>,
     sup_units: Option<Vec<ResUnit<R>>>,
-}
-
-struct RawDwarf<R: gimli::Reader> {
-    sections: Arc<gimli::Dwarf<R>>,
-    sup_sections: Option<Arc<gimli::Dwarf<R>>>,
 }
 
 impl<R: gimli::Reader> ParsedDwarf<R> {
@@ -774,22 +765,6 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
     }
 }
 
-impl<R: gimli::Reader> RawDwarf<R> {
-    fn dwo(&self, dwo_sections: Arc<gimli::Dwarf<R>>) -> RawDwarf<R> {
-        RawDwarf {
-            sections: dwo_sections,
-            sup_sections: self.sup_sections.clone(),
-        }
-    }
-
-    fn sections_for_file(&self, file: DebugFile) -> Option<&gimli::Dwarf<R>> {
-        match file {
-            DebugFile::Primary => Some(&self.sections),
-            DebugFile::Supplementary => self.sup_sections.as_deref(),
-        }
-    }
-}
-
 struct Lines {
     files: Box<[String]>,
     sequences: Box<[LineSequence]>,
@@ -919,7 +894,7 @@ struct ResUnit<R: gimli::Reader> {
     lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
     funcs: LazyCell<Result<Functions<R>, Error>>,
-    dwo: LazyCell<Result<Option<Box<(RawDwarf<R>, gimli::Unit<R>)>>, Error>>,
+    dwo: LazyCell<Result<Option<Box<(Arc<gimli::Dwarf<R>>, gimli::Unit<R>)>>, Error>>,
 }
 
 /// This struct contains the information needed to find split DWARF data
@@ -1086,17 +1061,17 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
         SimpleLookup<
-            Result<(&'unit RawDwarf<R>, &'unit gimli::Unit<R>), Error>,
+            Result<(&'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
             R,
             impl FnOnce(
                 Option<Arc<gimli::Dwarf<R>>>,
-            ) -> Result<(&'unit RawDwarf<R>, &'unit gimli::Unit<R>), Error>,
+            ) -> Result<(&'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
         >,
     > {
         loop {
             break SimpleLookup::new_complete(match self.dwo.borrow() {
-                Some(Ok(Some(v))) => Ok((&v.0, &v.1)),
-                Some(Ok(None)) => Ok((&ctx.raw_dwarf, &self.dw_unit)),
+                Some(Ok(Some(v))) => Ok((&*v.0, &v.1)),
+                Some(Ok(None)) => Ok((&*ctx.sections, &self.dw_unit)),
                 Some(Err(e)) => Err(*e),
                 None => {
                     let dwo_id = match self.dw_unit.dwo_id {
@@ -1112,7 +1087,7 @@ impl<R: gimli::Reader> ResUnit<R> {
 
                         let dwo_path = self.dw_unit.dwo_name().and_then(|s| {
                             if let Some(s) = s {
-                                Ok(Some(ctx.raw_dwarf.sections.attr_string(&self.dw_unit, s)?))
+                                Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
                             } else {
                                 Ok(None)
                             }
@@ -1141,7 +1116,7 @@ impl<R: gimli::Reader> ResUnit<R> {
 
                         let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
                         dwo_unit.copy_relocated_attributes(&self.dw_unit);
-                        Ok(Some(Box::new((ctx.raw_dwarf.dwo(dwo_dwarf), dwo_unit))))
+                        Ok(Some(Box::new((dwo_dwarf, dwo_unit))))
                     };
 
                     return SimpleLookup::new_needs_load(
@@ -1149,11 +1124,11 @@ impl<R: gimli::Reader> ResUnit<R> {
                             dwo_id,
                             comp_dir,
                             path,
-                            parent: ctx.raw_dwarf.sections.clone(),
+                            parent: ctx.sections.clone(),
                         },
                         move |dwo_dwarf| match self.dwo.borrow_with(|| process_dwo(dwo_dwarf)) {
-                            Ok(Some(v)) => Ok((&v.0, &v.1)),
-                            Ok(None) => Ok((&ctx.raw_dwarf, &self.dw_unit)),
+                            Ok(Some(v)) => Ok((&*v.0, &v.1)),
+                            Ok(None) => Ok((&*ctx.sections, &self.dw_unit)),
                             Err(e) => Err(*e),
                         },
                     );
@@ -1179,10 +1154,10 @@ impl<R: gimli::Reader> ResUnit<R> {
     fn parse_functions_dwarf_and_unit(
         &self,
         unit: &gimli::Unit<R>,
-        raw_dwarf: &RawDwarf<R>,
+        sections: &gimli::Dwarf<R>,
     ) -> Result<&Functions<R>, Error> {
         self.funcs
-            .borrow_with(|| Functions::parse(unit, raw_dwarf))
+            .borrow_with(|| Functions::parse(unit, sections))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -1193,8 +1168,8 @@ impl<R: gimli::Reader> ResUnit<R> {
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
     {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (raw_dwarf, unit) = r?;
-            self.parse_functions_dwarf_and_unit(unit, raw_dwarf)
+            let (sections, unit) = r?;
+            self.parse_functions_dwarf_and_unit(unit, sections)
         })
     }
     fn parse_inlined_functions<'unit, 'ctx: 'unit>(
@@ -1202,12 +1177,12 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (raw_dwarf, unit) = r?;
+            let (sections, unit) = r?;
             self.funcs
-                .borrow_with(|| Functions::parse(unit, raw_dwarf))
+                .borrow_with(|| Functions::parse(unit, sections))
                 .as_ref()
                 .map_err(Error::clone)?
-                .parse_inlined_functions(unit, &ctx.parsed_dwarf, raw_dwarf)
+                .parse_inlined_functions(unit, &ctx.parsed_dwarf, sections)
         })
     }
 
@@ -1247,8 +1222,8 @@ impl<R: gimli::Reader> ResUnit<R> {
         >,
     > {
         self.dwarf_and_unit_dwo(ctx).map(move |r| {
-            let (raw_dwarf, unit) = r?;
-            let functions = self.parse_functions_dwarf_and_unit(unit, raw_dwarf)?;
+            let (sections, unit) = r?;
+            let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
             let function = match functions.find_address(probe) {
                 Some(address) => {
                     let function_index = functions.addresses[address].function;
@@ -1256,7 +1231,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                     Some(
                         function
                             .borrow_with(|| {
-                                Function::parse(offset, unit, &ctx.parsed_dwarf, raw_dwarf)
+                                Function::parse(offset, unit, &ctx.parsed_dwarf, sections)
                             })
                             .as_ref()
                             .map_err(Error::clone)?,
@@ -1264,7 +1239,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 }
                 None => None,
             };
-            let location = self.find_location(probe, &raw_dwarf.sections)?;
+            let location = self.find_location(probe, sections)?;
             Ok((function, location))
         })
     }
@@ -1283,7 +1258,7 @@ pub struct LocationRangeIter<'ctx, R: gimli::Reader> {
 impl<'ctx, R: gimli::Reader> LocationRangeIter<'ctx, R> {
     #[inline]
     fn new(ctx: &'ctx Context<R>, probe_low: u64, probe_high: u64) -> Result<Self, Error> {
-        let sections = &ctx.raw_dwarf.sections;
+        let sections = &ctx.sections;
         let unit_iter = ctx.find_units_range(probe_low, probe_high);
         Ok(Self {
             unit_iter: Box::new(unit_iter),
