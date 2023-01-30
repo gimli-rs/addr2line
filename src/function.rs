@@ -5,7 +5,7 @@ use core::iter;
 
 use crate::lazy::LazyCell;
 use crate::maybe_small;
-use crate::{DebugFile, Error, ParsedDwarf, RangeAttributes};
+use crate::{Context, DebugFile, Error, RangeAttributes};
 
 pub(crate) struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
@@ -151,13 +151,13 @@ impl<R: gimli::Reader> Functions<R> {
     pub(crate) fn parse_inlined_functions(
         &self,
         unit: &gimli::Unit<R>,
-        parsed: &ParsedDwarf<R>,
+        ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
     ) -> Result<(), Error> {
         for function in &*self.functions {
             function
                 .1
-                .borrow_with(|| Function::parse(function.0, unit, parsed, sections))
+                .borrow_with(|| Function::parse(function.0, unit, ctx, sections))
                 .as_ref()
                 .map_err(Error::clone)?;
         }
@@ -169,7 +169,7 @@ impl<R: gimli::Reader> Function<R> {
     pub(crate) fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         unit: &gimli::Unit<R>,
-        parsed: &ParsedDwarf<R>,
+        ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
     ) -> Result<Self, Error> {
         let mut entries = unit.entries_raw(Some(dw_die_offset))?;
@@ -198,7 +198,7 @@ impl<R: gimli::Reader> Function<R> {
                                     attr.value(),
                                     DebugFile::Primary,
                                     unit,
-                                    parsed,
+                                    ctx,
                                     sections,
                                     16,
                                 )?;
@@ -217,7 +217,7 @@ impl<R: gimli::Reader> Function<R> {
             &mut entries,
             depth,
             unit,
-            parsed,
+            ctx,
             sections,
             &mut inlined_functions,
             &mut inlined_addresses,
@@ -260,7 +260,7 @@ impl<R: gimli::Reader> Function<R> {
         entries: &mut gimli::EntriesRaw<R>,
         depth: isize,
         unit: &gimli::Unit<R>,
-        parsed: &ParsedDwarf<R>,
+        ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
@@ -284,7 +284,7 @@ impl<R: gimli::Reader> Function<R> {
                             abbrev,
                             next_depth,
                             unit,
-                            parsed,
+                            ctx,
                             sections,
                             inlined_functions,
                             inlined_addresses,
@@ -360,7 +360,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         abbrev: &gimli::Abbreviation,
         depth: isize,
         unit: &gimli::Unit<R>,
-        parsed: &ParsedDwarf<R>,
+        ctx: &Context<R>,
         sections: &gimli::Dwarf<R>,
         inlined_functions: &mut Vec<InlinedFunction<R>>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
@@ -408,7 +408,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
                                 attr.value(),
                                 DebugFile::Primary,
                                 unit,
-                                parsed,
+                                ctx,
                                 sections,
                                 16,
                             )?;
@@ -452,7 +452,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
             entries,
             depth,
             unit,
-            parsed,
+            ctx,
             sections,
             inlined_functions,
             inlined_addresses,
@@ -465,7 +465,7 @@ fn name_attr<R>(
     attr: gimli::AttributeValue<R>,
     mut file: DebugFile,
     unit: &gimli::Unit<R>,
-    parsed: &ParsedDwarf<R>,
+    ctx: &Context<R>,
     sections: &gimli::Dwarf<R>,
     recursion_limit: usize,
 ) -> Result<Option<R>, Error>
@@ -478,17 +478,17 @@ where
 
     match attr {
         gimli::AttributeValue::UnitRef(offset) => {
-            name_entry(file, unit, offset, parsed, sections, recursion_limit)
+            name_entry(file, unit, offset, ctx, sections, recursion_limit)
         }
         gimli::AttributeValue::DebugInfoRef(dr) => {
-            let (unit, offset) = parsed.find_unit(dr, file)?;
-            name_entry(file, unit, offset, parsed, sections, recursion_limit)
+            let (unit, offset) = ctx.find_unit(dr, file)?;
+            name_entry(file, unit, offset, ctx, sections, recursion_limit)
         }
         gimli::AttributeValue::DebugInfoRefSup(dr) => {
             if let Some(sup_sections) = sections.sup.as_ref() {
                 file = DebugFile::Supplementary;
-                let (unit, offset) = parsed.find_unit(dr, file)?;
-                name_entry(file, unit, offset, parsed, sup_sections, recursion_limit)
+                let (unit, offset) = ctx.find_unit(dr, file)?;
+                name_entry(file, unit, offset, ctx, sup_sections, recursion_limit)
             } else {
                 Ok(None)
             }
@@ -501,7 +501,7 @@ fn name_entry<R>(
     file: DebugFile,
     unit: &gimli::Unit<R>,
     offset: gimli::UnitOffset<R::Offset>,
-    parsed: &ParsedDwarf<R>,
+    ctx: &Context<R>,
     sections: &gimli::Dwarf<R>,
     recursion_limit: usize,
 ) -> Result<Option<R>, Error>
@@ -544,7 +544,7 @@ where
     }
 
     if let Some(next) = next {
-        return name_attr(next, file, unit, parsed, sections, recursion_limit - 1);
+        return name_attr(next, file, unit, ctx, sections, recursion_limit - 1);
     }
 
     Ok(None)

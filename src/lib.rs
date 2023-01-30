@@ -190,8 +190,10 @@ impl<L: LookupContinuation> LookupResultExtInternal<L> for LookupResult<L> {
 /// Constructing a `Context` is somewhat costly, so users should aim to reuse `Context`s
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R: gimli::Reader> {
-    parsed_dwarf: ParsedDwarf<R>,
     sections: Arc<gimli::Dwarf<R>>,
+    unit_ranges: Vec<UnitRange>,
+    units: Vec<ResUnit<R>>,
+    sup_units: Vec<SupUnit<R>>,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -303,13 +305,17 @@ impl<R: gimli::Reader> Context<R> {
     #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Context<R>, Error> {
         let sections = Arc::new(sections);
-        let mut parsed_dwarf = ParsedDwarf::parse(&sections)?;
-        if let Some(sup) = sections.sup.as_ref() {
-            parsed_dwarf.sup_units = ParsedDwarf::parse_sup(sup)?;
-        }
+        let (unit_ranges, units) = Context::parse_units(&sections)?;
+        let sup_units = if let Some(sup) = sections.sup.as_ref() {
+            Context::parse_sup(sup)?
+        } else {
+            Vec::new()
+        };
         Ok(Context {
-            parsed_dwarf,
             sections,
+            unit_ranges,
+            units,
+            sup_units,
         })
     }
 
@@ -341,7 +347,6 @@ impl<R: gimli::Reader> Context<R> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
-            .parsed_dwarf
             .unit_ranges
             .binary_search_by_key(&probe_high, |i| i.range.begin)
         {
@@ -356,7 +361,7 @@ impl<R: gimli::Reader> Context<R> {
 
         // Once we have our index we iterate backwards from that position
         // looking for a matching CU.
-        self.parsed_dwarf.unit_ranges[..pos]
+        self.unit_ranges[..pos]
             .iter()
             .rev()
             .take_while(move |i| {
@@ -377,7 +382,7 @@ impl<R: gimli::Reader> Context<R> {
                 if probe_low >= i.range.end || probe_high <= i.range.begin {
                     return None;
                 }
-                Some((&self.parsed_dwarf.units[i.unit_id], &i.range))
+                Some((&self.units[i.unit_id], &i.range))
             })
     }
 
@@ -533,7 +538,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all line data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_lines(&self) -> Result<(), Error> {
-        for unit in &self.parsed_dwarf.units {
+        for unit in &self.units {
             unit.parse_lines(&self.sections)?;
         }
         Ok(())
@@ -542,7 +547,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all function data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
-        for unit in &self.parsed_dwarf.units {
+        for unit in &self.units {
             unit.parse_functions(self).skip_all_loads()?;
         }
         Ok(())
@@ -551,7 +556,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all inlined function data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_inlined_functions(&self) -> Result<(), Error> {
-        for unit in &self.parsed_dwarf.units {
+        for unit in &self.units {
             unit.parse_inlined_functions(self).skip_all_loads()?;
         }
         Ok(())
@@ -578,14 +583,8 @@ struct SupUnit<R: gimli::Reader> {
     dw_unit: gimli::Unit<R>,
 }
 
-struct ParsedDwarf<R: gimli::Reader> {
-    unit_ranges: Vec<UnitRange>,
-    units: Vec<ResUnit<R>>,
-    sup_units: Vec<SupUnit<R>>,
-}
-
-impl<R: gimli::Reader> ParsedDwarf<R> {
-    fn parse(sections: &gimli::Dwarf<R>) -> Result<Self, Error> {
+impl<R: gimli::Reader> Context<R> {
+    fn parse_units(sections: &gimli::Dwarf<R>) -> Result<(Vec<UnitRange>, Vec<ResUnit<R>>), Error> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -750,11 +749,7 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
             i.max_end = max;
         }
 
-        Ok(ParsedDwarf {
-            units: res_units,
-            unit_ranges,
-            sup_units: Vec::new(),
-        })
+        Ok((unit_ranges, res_units))
     }
 
     fn parse_sup(sections: &gimli::Dwarf<R>) -> Result<Vec<SupUnit<R>>, Error> {
@@ -1218,7 +1213,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 .borrow_with(|| Functions::parse(unit, sections))
                 .as_ref()
                 .map_err(Error::clone)?
-                .parse_inlined_functions(unit, &ctx.parsed_dwarf, sections)
+                .parse_inlined_functions(unit, ctx, sections)
         })
     }
 
@@ -1266,9 +1261,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                     let (offset, ref function) = functions.functions[function_index];
                     Some(
                         function
-                            .borrow_with(|| {
-                                Function::parse(offset, unit, &ctx.parsed_dwarf, sections)
-                            })
+                            .borrow_with(|| Function::parse(offset, unit, ctx, sections))
                             .as_ref()
                             .map_err(Error::clone)?,
                     )
