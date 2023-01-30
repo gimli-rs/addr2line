@@ -305,8 +305,7 @@ impl<R: gimli::Reader> Context<R> {
         let sections = Arc::new(sections);
         let mut parsed_dwarf = ParsedDwarf::parse(&sections)?;
         if let Some(sup) = sections.sup.as_ref() {
-            let sup_dwarf = ParsedDwarf::parse(sup)?;
-            parsed_dwarf.sup_units = Some(sup_dwarf.units);
+            parsed_dwarf.sup_units = ParsedDwarf::parse_sup(sup)?;
         }
         Ok(Context {
             parsed_dwarf,
@@ -565,10 +564,24 @@ struct UnitRange {
     range: gimli::Range,
 }
 
+struct ResUnit<R: gimli::Reader> {
+    offset: gimli::DebugInfoOffset<R::Offset>,
+    dw_unit: gimli::Unit<R>,
+    lang: Option<gimli::DwLang>,
+    lines: LazyCell<Result<Lines, Error>>,
+    funcs: LazyCell<Result<Functions<R>, Error>>,
+    dwo: LazyCell<Result<Option<Box<(Arc<gimli::Dwarf<R>>, gimli::Unit<R>)>>, Error>>,
+}
+
+struct SupUnit<R: gimli::Reader> {
+    offset: gimli::DebugInfoOffset<R::Offset>,
+    dw_unit: gimli::Unit<R>,
+}
+
 struct ParsedDwarf<R: gimli::Reader> {
     unit_ranges: Vec<UnitRange>,
     units: Vec<ResUnit<R>>,
-    sup_units: Option<Vec<ResUnit<R>>>,
+    sup_units: Vec<SupUnit<R>>,
 }
 
 impl<R: gimli::Reader> ParsedDwarf<R> {
@@ -740,8 +753,25 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
         Ok(ParsedDwarf {
             units: res_units,
             unit_ranges,
-            sup_units: None,
+            sup_units: Vec::new(),
         })
+    }
+
+    fn parse_sup(sections: &gimli::Dwarf<R>) -> Result<Vec<SupUnit<R>>, Error> {
+        let mut sup_units = Vec::new();
+        let mut units = sections.units();
+        while let Some(header) = units.next()? {
+            let offset = match header.offset().as_debug_info_offset() {
+                Some(offset) => offset,
+                None => continue,
+            };
+            let dw_unit = match sections.unit(header) {
+                Ok(dw_unit) => dw_unit,
+                Err(_) => continue,
+            };
+            sup_units.push(SupUnit { dw_unit, offset });
+        }
+        Ok(sup_units)
     }
 
     // Find the unit containing the given offset, and convert the offset into a unit offset.
@@ -750,18 +780,27 @@ impl<R: gimli::Reader> ParsedDwarf<R> {
         offset: gimli::DebugInfoOffset<R::Offset>,
         file: DebugFile,
     ) -> Result<(&gimli::Unit<R>, gimli::UnitOffset<R::Offset>), Error> {
-        let units = match file {
-            DebugFile::Primary => &self.units,
-            DebugFile::Supplementary => self
-                .sup_units
-                .as_ref()
-                .ok_or(gimli::Error::NoEntryAtGivenOffset)?,
-        };
-
-        let unit = match units.binary_search_by_key(&offset.0, |unit| unit.offset.0) {
-            // There is never a DIE at the unit offset or before the first unit.
-            Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
-            Err(i) => &units[i - 1].dw_unit,
+        let unit = match file {
+            DebugFile::Primary => {
+                match self
+                    .units
+                    .binary_search_by_key(&offset.0, |unit| unit.offset.0)
+                {
+                    // There is never a DIE at the unit offset or before the first unit.
+                    Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
+                    Err(i) => &self.units[i - 1].dw_unit,
+                }
+            }
+            DebugFile::Supplementary => {
+                match self
+                    .sup_units
+                    .binary_search_by_key(&offset.0, |unit| unit.offset.0)
+                {
+                    // There is never a DIE at the unit offset or before the first unit.
+                    Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
+                    Err(i) => &self.sup_units[i - 1].dw_unit,
+                }
+            }
         };
 
         let unit_offset = offset
@@ -892,15 +931,6 @@ struct LineRow {
     file_index: u64,
     line: u32,
     column: u32,
-}
-
-struct ResUnit<R: gimli::Reader> {
-    offset: gimli::DebugInfoOffset<R::Offset>,
-    dw_unit: gimli::Unit<R>,
-    lang: Option<gimli::DwLang>,
-    lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<Functions<R>, Error>>,
-    dwo: LazyCell<Result<Option<Box<(Arc<gimli::Dwarf<R>>, gimli::Unit<R>)>>, Error>>,
 }
 
 /// This struct contains the information needed to find split DWARF data
