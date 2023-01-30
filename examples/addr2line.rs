@@ -9,7 +9,7 @@ extern crate typed_arena;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Arg, Command, Values};
 use fallible_iterator::FallibleIterator;
@@ -117,6 +117,7 @@ fn main() {
                 .short('e')
                 .long("exe")
                 .value_name("filename")
+                .value_parser(clap::value_parser!(PathBuf))
                 .help(
                     "Specify the name of the executable for which addresses should be translated.",
                 )
@@ -124,6 +125,7 @@ fn main() {
             Arg::new("sup")
                 .long("sup")
                 .value_name("filename")
+                .value_parser(clap::value_parser!(PathBuf))
                 .help("Path to supplementary object file."),
             Arg::new("functions")
                 .short('f')
@@ -167,7 +169,7 @@ fn main() {
     let basenames = matches.is_present("basenames");
     let demangle = matches.is_present("demangle");
     let llvm = matches.is_present("llvm");
-    let path = matches.value_of("exe").unwrap();
+    let path = matches.get_one::<PathBuf>("exe").unwrap();
 
     let file = File::open(path).unwrap();
     let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
@@ -184,7 +186,7 @@ fn main() {
     };
 
     let sup_map;
-    let sup_object = if let Some(sup_path) = matches.value_of("sup") {
+    let sup_object = if let Some(sup_path) = matches.get_one::<PathBuf>("sup") {
         let sup_file = File::open(sup_path).unwrap();
         sup_map = unsafe { memmap2::Mmap::map(&sup_file).unwrap() };
         Some(object::File::parse(&*sup_map).unwrap())
@@ -206,7 +208,7 @@ fn main() {
         |data, endian| {
             gimli::EndianSlice::new(arena_data.alloc(Cow::Owned(data.into_owned())), endian)
         },
-        Some(std::path::PathBuf::from(path)),
+        Some(PathBuf::from(path)),
     );
     let ctx = Context::from_dwarf(dwarf).unwrap();
 
