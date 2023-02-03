@@ -103,18 +103,25 @@ enum DebugFile {
 ///   let mut r = ctx.find_frames(ADDRESS);
 ///   let result = loop {
 ///     match r {
-///       LookupResult::Break(result) => break result,
-///       LookupResult::Continue((load, continuation)) => {
+///       LookupResult::Output(result) => break result,
+///       LookupResult::Load { load, continuation } => {
 ///         let dwo = do_split_dwarf_load(load);
 ///         r = continuation.resume(dwo);
 ///       }
 ///     }
 ///   };
 /// ```
-pub type LookupResult<L> = ControlFlow<
-    <L as LookupContinuation>::Output,
-    (SplitDwarfLoad<<L as LookupContinuation>::Buf>, L),
->;
+pub enum LookupResult<L: LookupContinuation> {
+    /// The lookup requires split DWARF data to be loaded.
+    Load {
+        /// The information needed to find the split DWARF data.
+        load: SplitDwarfLoad<<L as LookupContinuation>::Buf>,
+        /// The continuation to resume with the loaded split DWARF data.
+        continuation: L,
+    },
+    /// The lookup has completed and produced an output.
+    Output(<L as LookupContinuation>::Output),
+}
 
 /// This trait represents a partially complete operation that can be resumed
 /// once a load of needed split DWARF data is completed or abandoned by the
@@ -138,50 +145,38 @@ pub trait LookupContinuation: Sized {
     fn resume(self, input: Option<Arc<gimli::Dwarf<Self::Buf>>>) -> LookupResult<Self>;
 }
 
-/// This trait is used to extend `LookupResult`.
-pub trait LookupResultExt<L: LookupContinuation> {
+impl<L: LookupContinuation> LookupResult<L> {
     /// Callers that do not handle split DWARF can call `skip_all_loads`
     /// to fast-forward to the end result. This result is produced with
     /// the data that is available and may be less accurate than the
     /// the results that would be produced if the caller did properly
     /// support split DWARF.
-    fn skip_all_loads(self) -> L::Output;
-}
-
-impl<L: LookupContinuation> LookupResultExt<L> for LookupResult<L> {
-    fn skip_all_loads(mut self) -> L::Output {
+    pub fn skip_all_loads(mut self) -> L::Output {
         loop {
             self = match self {
-                ControlFlow::Break(t) => return t,
-                ControlFlow::Continue((_, continuation)) => continuation.resume(None),
+                LookupResult::Output(t) => return t,
+                LookupResult::Load { continuation, .. } => continuation.resume(None),
             };
         }
     }
-}
 
-trait LookupResultExtInternal<L: LookupContinuation> {
-    fn map<T, F: FnOnce(L::Output) -> T>(self, f: F) -> LookupResult<MappedLookup<T, L, F>>;
-    fn unwrap(self) -> L::Output;
-}
-
-impl<L: LookupContinuation> LookupResultExtInternal<L> for LookupResult<L> {
     fn map<T, F: FnOnce(L::Output) -> T>(self, f: F) -> LookupResult<MappedLookup<T, L, F>> {
         match self {
-            ControlFlow::Break(t) => ControlFlow::Break(f(t)),
-            ControlFlow::Continue((load, continuation)) => ControlFlow::Continue((
+            LookupResult::Output(t) => LookupResult::Output(f(t)),
+            LookupResult::Load { load, continuation } => LookupResult::Load {
                 load,
-                MappedLookup {
+                continuation: MappedLookup {
                     original: continuation,
                     mutator: f,
                 },
-            )),
+            },
         }
     }
 
     fn unwrap(self) -> L::Output {
         match self {
-            ControlFlow::Break(t) => t,
-            ControlFlow::Continue(_) => unreachable!("Internal API misuse"),
+            LookupResult::Output(t) => t,
+            LookupResult::Load { .. } => unreachable!("Internal API misuse"),
         }
     }
 }
@@ -512,8 +507,8 @@ impl<R: gimli::Reader> Context<R> {
     ///   });
     ///
     ///   let frames_iter = match ctx.find_frames(ADDRESS) {
-    ///     LookupResult::Break(result) => result,
-    ///     LookupResult::Continue(_) => unreachable!("addr2line promised we wouldn't get here"),
+    ///     LookupResult::Output(result) => result,
+    ///     LookupResult::Load { .. } => unreachable!("addr2line promised we wouldn't get here"),
     ///   };
     ///
     ///   // ...
@@ -529,8 +524,8 @@ impl<R: gimli::Reader> Context<R> {
     > {
         self.find_units(probe)
             .filter_map(move |unit| match unit.dwarf_and_unit_dwo(self) {
-                LookupResult::Break(_) => None,
-                LookupResult::Continue((load, continuation)) => Some((load, |result| {
+                LookupResult::Output(_) => None,
+                LookupResult::Load { load, continuation } => Some((load, |result| {
                     continuation.resume(result).unwrap().map(|_| ())
                 })),
             })
@@ -961,17 +956,17 @@ where
     R: gimli::Reader,
 {
     fn new_complete(t: F::Output) -> LookupResult<SimpleLookup<T, R, F>> {
-        ControlFlow::Break(t)
+        LookupResult::Output(t)
     }
 
-    fn new_needs_load(lookup: SplitDwarfLoad<R>, f: F) -> LookupResult<SimpleLookup<T, R, F>> {
-        ControlFlow::Continue((
-            lookup,
-            SimpleLookup {
+    fn new_needs_load(load: SplitDwarfLoad<R>, f: F) -> LookupResult<SimpleLookup<T, R, F>> {
+        LookupResult::Load {
+            load,
+            continuation: SimpleLookup {
                 f,
                 phantom: PhantomData,
             },
-        ))
+        }
     }
 }
 
@@ -984,7 +979,7 @@ where
     type Buf = R;
 
     fn resume(self, v: Option<Arc<gimli::Dwarf<Self::Buf>>>) -> LookupResult<Self> {
-        ControlFlow::Break((self.f)(v))
+        LookupResult::Output((self.f)(v))
     }
 }
 
@@ -1007,14 +1002,14 @@ where
 
     fn resume(self, v: Option<Arc<gimli::Dwarf<Self::Buf>>>) -> LookupResult<Self> {
         match self.original.resume(v) {
-            ControlFlow::Break(t) => ControlFlow::Break((self.mutator)(t)),
-            ControlFlow::Continue((load, continuation)) => ControlFlow::Continue((
+            LookupResult::Output(t) => LookupResult::Output((self.mutator)(t)),
+            LookupResult::Load { load, continuation } => LookupResult::Load {
                 load,
-                MappedLookup {
+                continuation: MappedLookup {
                     original: continuation,
                     mutator: self.mutator,
                 },
-            )),
+            },
         }
     }
 }
@@ -1046,31 +1041,31 @@ where
     F: FnMut(L::Output) -> ControlFlow<T, LookupResult<L>>,
 {
     fn new_complete(t: T) -> LookupResult<Self> {
-        ControlFlow::Break(t)
+        LookupResult::Output(t)
     }
 
     fn new_lookup(mut r: LookupResult<L>, mut mutator: F) -> LookupResult<Self> {
         // Drive the loop eagerly so that we only ever have to represent one state
         // (the r == ControlFlow::Continue state) in LoopingLookup.
-        let (load, continuation) = loop {
+        loop {
             match r {
-                ControlFlow::Break(l) => match mutator(l) {
-                    ControlFlow::Break(t) => return ControlFlow::Break(t),
+                LookupResult::Output(l) => match mutator(l) {
+                    ControlFlow::Break(t) => return LookupResult::Output(t),
                     ControlFlow::Continue(r2) => {
                         r = r2;
                     }
                 },
-                ControlFlow::Continue((load, continuation)) => break (load, continuation),
+                LookupResult::Load { load, continuation } => {
+                    return LookupResult::Load {
+                        load,
+                        continuation: LoopingLookup {
+                            continuation,
+                            mutator,
+                        },
+                    };
+                }
             }
-        };
-
-        ControlFlow::Continue((
-            load,
-            LoopingLookup {
-                continuation,
-                mutator,
-            },
-        ))
+        }
     }
 }
 

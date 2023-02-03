@@ -5,7 +5,7 @@ extern crate gimli;
 extern crate memmap2;
 extern crate object;
 
-use addr2line::{Context, LookupResultExt};
+use addr2line::Context;
 use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
 use object::Object;

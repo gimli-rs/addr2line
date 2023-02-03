@@ -102,8 +102,8 @@ where
     {
         loop {
             let (load, continuation) = match l {
-                LookupResult::Break(output) => break output,
-                LookupResult::Continue(load) => load,
+                LookupResult::Output(output) => break output,
+                LookupResult::Load { load, continuation } => (load, continuation),
             };
 
             let mut r: Option<Arc<gimli::Dwarf<_>>> = None;
