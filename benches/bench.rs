@@ -10,7 +10,6 @@ use std::env;
 use std::fs::File;
 use std::path::{self, PathBuf};
 
-use addr2line::LookupResultExt;
 use object::{Object, ObjectSection, ObjectSymbol};
 
 fn release_fixture_path() -> PathBuf {

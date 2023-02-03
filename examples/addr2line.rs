@@ -16,8 +16,6 @@ use fallible_iterator::FallibleIterator;
 use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
-#[cfg(not(unix))]
-use addr2line::LookupResultExt;
 use addr2line::{Context, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
