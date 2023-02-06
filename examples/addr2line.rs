@@ -110,7 +110,7 @@ fn find_name_from_symbols<'a>(
 
 fn main() {
     let matches = Command::new("addr2line")
-        .version("0.1")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("A fast addr2line Rust port")
         .args(&[
             Arg::new("exe")
