@@ -49,7 +49,7 @@ pub(crate) struct InlinedFunctionAddress {
 pub(crate) struct InlinedFunction<R: gimli::Reader> {
     pub(crate) dw_die_offset: gimli::UnitOffset<R::Offset>,
     pub(crate) name: Option<R>,
-    pub(crate) call_file: u64,
+    pub(crate) call_file: Option<u64>,
     pub(crate) call_line: u32,
     pub(crate) call_column: u32,
 }
@@ -367,7 +367,7 @@ impl<R: gimli::Reader> InlinedFunction<R> {
     ) -> Result<(), Error> {
         let mut ranges = RangeAttributes::default();
         let mut name = None;
-        let mut call_file = 0;
+        let mut call_file = None;
         let mut call_line = 0;
         let mut call_column = 0;
         for spec in abbrev.attributes() {
@@ -407,8 +407,19 @@ impl<R: gimli::Reader> InlinedFunction<R> {
                         }
                     }
                     gimli::DW_AT_call_file => {
+                        // There is a spec issue [1] with how DW_AT_call_file is specified in DWARF 5.
+                        // Before, a file index of 0 would indicate no source file, however in
+                        // DWARF 5 this could be a valid index into the file table.
+                        //
+                        // Implementations such as LLVM generates a file index of 0 when DWARF 5 is
+                        // used.
+                        //
+                        // Thus, if we see a version of 5 or later, treat a file index of 0 as such.
+                        // [1]: http://wiki.dwarfstd.org/index.php?title=DWARF5_Line_Table_File_Numbers
                         if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
-                            call_file = fi;
+                            if fi > 0 || unit.header.version() >= 5 {
+                                call_file = Some(fi);
+                            }
                         }
                     }
                     gimli::DW_AT_call_line => {
