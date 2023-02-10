@@ -1609,9 +1609,9 @@ where
                 None
             },
         };
-        if func.call_file != 0 {
+        if let Some(call_file) = func.call_file {
             if let Some(lines) = frames.unit.parse_lines(frames.sections)? {
-                next.file = lines.files.get(func.call_file as usize).map(String::as_str);
+                next.file = lines.files.get(call_file as usize).map(String::as_str);
             }
         }
         frames.next = Some(next);
