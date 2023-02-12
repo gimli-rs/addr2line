@@ -108,6 +108,18 @@ fn find_name_from_symbols<'a>(
     symbols.get(probe).map(|x| x.name())
 }
 
+struct Options<'a> {
+    do_functions: bool,
+    do_inlines: bool,
+    pretty: bool,
+    print_addrs: bool,
+    basenames: bool,
+    demangle: bool,
+    llvm: bool,
+    exe: &'a PathBuf,
+    sup: Option<&'a PathBuf>,
+}
+
 fn main() {
     let matches = Command::new("addr2line")
         .version(env!("CARGO_PKG_VERSION"))
@@ -162,16 +174,19 @@ fn main() {
 
     let arena_data = Arena::new();
 
-    let do_functions = matches.is_present("functions");
-    let do_inlines = matches.is_present("inlines");
-    let pretty = matches.is_present("pretty");
-    let print_addrs = matches.is_present("addresses");
-    let basenames = matches.is_present("basenames");
-    let demangle = matches.is_present("demangle");
-    let llvm = matches.is_present("llvm");
-    let path = matches.get_one::<PathBuf>("exe").unwrap();
+    let opts = Options {
+        do_functions: matches.is_present("functions"),
+        do_inlines: matches.is_present("inlines"),
+        pretty: matches.is_present("pretty"),
+        print_addrs: matches.is_present("addresses"),
+        basenames: matches.is_present("basenames"),
+        demangle: matches.is_present("demangle"),
+        llvm: matches.is_present("llvm"),
+        exe: matches.get_one::<PathBuf>("exe").unwrap(),
+        sup: matches.get_one::<PathBuf>("sup"),
+    };
 
-    let file = File::open(path).unwrap();
+    let file = File::open(opts.exe).unwrap();
     let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let object = &object::File::parse(&*map).unwrap();
 
@@ -186,7 +201,7 @@ fn main() {
     };
 
     let sup_map;
-    let sup_object = if let Some(sup_path) = matches.get_one::<PathBuf>("sup") {
+    let sup_object = if let Some(sup_path) = opts.sup {
         let sup_file = File::open(sup_path).unwrap();
         sup_map = unsafe { memmap2::Mmap::map(&sup_file).unwrap() };
         Some(object::File::parse(&*sup_map).unwrap())
@@ -208,7 +223,7 @@ fn main() {
         |data, endian| {
             gimli::EndianSlice::new(arena_data.alloc(Cow::Owned(data.into_owned())), endian)
         },
-        Some(PathBuf::from(path)),
+        Some(opts.exe.clone()),
     );
     let ctx = Context::from_dwarf(dwarf).unwrap();
 
@@ -219,21 +234,21 @@ fn main() {
         .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
 
     for probe in addrs {
-        if print_addrs {
+        if opts.print_addrs {
             let addr = probe.unwrap_or(0);
-            if llvm {
+            if opts.llvm {
                 print!("0x{:x}", addr);
             } else {
                 print!("0x{:016x}", addr);
             }
-            if pretty {
+            if opts.pretty {
                 print!(": ");
             } else {
                 println!();
             }
         }
 
-        if do_functions || do_inlines {
+        if opts.do_functions || opts.do_inlines {
             let mut printed_anything = false;
             if let Some(probe) = probe {
                 let frames = ctx.find_frames(probe);
@@ -243,59 +258,59 @@ fn main() {
                 let frames = frames.skip_all_loads().unwrap();
                 let mut frames = frames.enumerate();
                 while let Some((i, frame)) = frames.next().unwrap() {
-                    if pretty && i != 0 {
+                    if opts.pretty && i != 0 {
                         print!(" (inlined by) ");
                     }
 
-                    if do_functions {
+                    if opts.do_functions {
                         if let Some(func) = frame.function {
                             print_function(
                                 func.raw_name().ok().as_ref().map(AsRef::as_ref),
                                 func.language,
-                                demangle,
+                                opts.demangle,
                             );
                         } else {
                             let name = find_name_from_symbols(&symbols, probe);
-                            print_function(name, None, demangle);
+                            print_function(name, None, opts.demangle);
                         }
 
-                        if pretty {
+                        if opts.pretty {
                             print!(" at ");
                         } else {
                             println!();
                         }
                     }
 
-                    print_loc(frame.location.as_ref(), basenames, llvm);
+                    print_loc(frame.location.as_ref(), opts.basenames, opts.llvm);
 
                     printed_anything = true;
 
-                    if !do_inlines {
+                    if !opts.do_inlines {
                         break;
                     }
                 }
             }
 
             if !printed_anything {
-                if do_functions {
+                if opts.do_functions {
                     let name = probe.and_then(|probe| find_name_from_symbols(&symbols, probe));
-                    print_function(name, None, demangle);
+                    print_function(name, None, opts.demangle);
 
-                    if pretty {
+                    if opts.pretty {
                         print!(" at ");
                     } else {
                         println!();
                     }
                 }
 
-                print_loc(None, basenames, llvm);
+                print_loc(None, opts.basenames, opts.llvm);
             }
         } else {
             let loc = probe.and_then(|probe| ctx.find_location(probe).unwrap());
-            print_loc(loc.as_ref(), basenames, llvm);
+            print_loc(loc.as_ref(), opts.basenames, opts.llvm);
         }
 
-        if llvm {
+        if opts.llvm {
             println!();
         }
         std::io::stdout().flush().unwrap();
