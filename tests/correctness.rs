@@ -1,10 +1,3 @@
-extern crate addr2line;
-extern crate fallible_iterator;
-extern crate findshlibs;
-extern crate gimli;
-extern crate memmap2;
-extern crate object;
-
 use addr2line::Context;
 use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};

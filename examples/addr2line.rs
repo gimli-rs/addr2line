@@ -1,11 +1,3 @@
-extern crate addr2line;
-extern crate clap;
-extern crate fallible_iterator;
-extern crate gimli;
-extern crate memmap2;
-extern crate object;
-extern crate typed_arena;
-
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
@@ -45,8 +37,8 @@ impl<'a> Iterator for Addrs<'a> {
     }
 }
 
-fn print_loc(loc: Option<&Location>, basenames: bool, llvm: bool) {
-    if let Some(ref loc) = loc {
+fn print_loc(loc: Option<&Location<'_>>, basenames: bool, llvm: bool) {
+    if let Some(loc) = loc {
         if let Some(ref file) = loc.file.as_ref() {
             let path = if basenames {
                 Path::new(Path::new(file).file_name().unwrap())
@@ -102,7 +94,7 @@ fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
 }
 
 fn find_name_from_symbols<'a>(
-    symbols: &'a SymbolMap<SymbolMapName>,
+    symbols: &'a SymbolMap<SymbolMapName<'_>>,
     probe: u64,
 ) -> Option<&'a str> {
     symbols.get(probe).map(|x| x.name())

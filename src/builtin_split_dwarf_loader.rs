@@ -14,7 +14,7 @@ fn convert_path<R: gimli::Reader<Endian = gimli::RunTimeEndian>>(
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     let bytes = r.to_slice()?;
-    let s = OsStr::from_bytes(&*bytes);
+    let s = OsStr::from_bytes(&bytes);
     Ok(PathBuf::from(s))
 }
 
@@ -45,7 +45,7 @@ where
 pub struct SplitDwarfLoader<R, F>
 where
     R: gimli::Reader<Endian = gimli::RunTimeEndian>,
-    F: FnMut(Cow<[u8]>, R::Endian) -> R,
+    F: FnMut(Cow<'_, [u8]>, R::Endian) -> R,
 {
     loader: F,
     dwarf_package: Option<gimli::DwarfPackage<R>>,
@@ -54,7 +54,7 @@ where
 impl<R, F> SplitDwarfLoader<R, F>
 where
     R: gimli::Reader<Endian = gimli::RunTimeEndian>,
-    F: FnMut(Cow<[u8]>, R::Endian) -> R,
+    F: FnMut(Cow<'_, [u8]>, R::Endian) -> R,
 {
     fn load_dwarf_package(loader: &mut F, path: Option<PathBuf>) -> Option<gimli::DwarfPackage<R>> {
         let mut path = path.map(Ok).unwrap_or_else(std::env::current_exe).ok()?;
