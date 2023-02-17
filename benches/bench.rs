@@ -1,8 +1,5 @@
 #![feature(test)]
 
-extern crate addr2line;
-extern crate memmap2;
-extern crate object;
 extern crate test;
 
 use std::borrow::Cow;
@@ -22,7 +19,7 @@ fn release_fixture_path() -> PathBuf {
     path
 }
 
-fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
+fn with_file<F: FnOnce(&object::File<'_>)>(target: &path::Path, f: F) {
     let file = File::open(target).unwrap();
     let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file = object::File::parse(&*map).unwrap();
@@ -40,17 +37,17 @@ fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
 }
 
 fn dwarf_borrow<'a>(
-    dwarf: &'a gimli::Dwarf<Cow<[u8]>>,
+    dwarf: &'a gimli::Dwarf<Cow<'_, [u8]>>,
 ) -> gimli::Dwarf<gimli::EndianSlice<'a, gimli::LittleEndian>> {
     let borrow_section: &dyn for<'b> Fn(
-        &'b Cow<[u8]>,
+        &'b Cow<'_, [u8]>,
     ) -> gimli::EndianSlice<'b, gimli::LittleEndian> =
         &|section| gimli::EndianSlice::new(&*section, gimli::LittleEndian);
     dwarf.borrow(&borrow_section)
 }
 
 /// Obtain a list of addresses contained within the text section of the `target` executable.
-fn get_test_addresses(target: &object::File) -> Vec<u64> {
+fn get_test_addresses(target: &object::File<'_>) -> Vec<u64> {
     let addresses: Vec<_> = target
         .symbols()
         .filter(|s| s.kind() == object::SymbolKind::Text && s.address() != 0 && s.size() != 0)

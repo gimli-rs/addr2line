@@ -36,7 +36,6 @@ extern crate alloc;
 extern crate cpp_demangle;
 #[cfg(feature = "fallible-iterator")]
 pub extern crate fallible_iterator;
-pub extern crate gimli;
 #[cfg(feature = "object")]
 pub extern crate object;
 #[cfg(feature = "rustc-demangle")]
@@ -288,7 +287,7 @@ impl<R: gimli::Reader> Context<R> {
             debug_types: default_section.clone().into(),
             locations: gimli::LocationLists::new(
                 default_section.clone().into(),
-                default_section.clone().into(),
+                default_section.into(),
             ),
             ranges: gimli::RangeLists::new(debug_ranges, debug_rnglists),
             file_type: gimli::DwarfFileType::Main,
@@ -451,7 +450,8 @@ impl<R: gimli::Reader> Context<R> {
     pub fn find_frames(
         &self,
         probe: u64,
-    ) -> LookupResult<impl LookupContinuation<Output = Result<FrameIter<R>, Error>, Buf = R>> {
+    ) -> LookupResult<impl LookupContinuation<Output = Result<FrameIter<'_, R>, Error>, Buf = R>>
+    {
         let mut units_iter = self.find_units(probe);
         if let Some(unit) = units_iter.next() {
             LoopingLookup::new_lookup(unit.find_function_or_location(probe, self), move |r| {
@@ -1536,11 +1536,11 @@ impl<R: gimli::Reader> RangeAttributes<R> {
 /// An iterator over function frames.
 pub struct FrameIter<'ctx, R>(FrameIterState<'ctx, R>)
 where
-    R: gimli::Reader + 'ctx;
+    R: gimli::Reader;
 
 enum FrameIterState<'ctx, R>
 where
-    R: gimli::Reader + 'ctx,
+    R: gimli::Reader,
 {
     Empty,
     Location(Option<Location<'ctx>>),
@@ -1549,7 +1549,7 @@ where
 
 struct FrameIterFrames<'ctx, R>
 where
-    R: gimli::Reader + 'ctx,
+    R: gimli::Reader,
 {
     unit: &'ctx ResUnit<R>,
     sections: &'ctx gimli::Dwarf<R>,
@@ -1661,12 +1661,12 @@ pub struct FunctionName<R: gimli::Reader> {
 
 impl<R: gimli::Reader> FunctionName<R> {
     /// The raw name of this function before demangling.
-    pub fn raw_name(&self) -> Result<Cow<str>, Error> {
+    pub fn raw_name(&self) -> Result<Cow<'_, str>, Error> {
         self.name.to_string_lossy()
     }
 
     /// The name of this function after demangling (if applicable).
-    pub fn demangle(&self) -> Result<Cow<str>, Error> {
+    pub fn demangle(&self) -> Result<Cow<'_, str>, Error> {
         self.raw_name().map(|x| demangle_auto(x, self.language))
     }
 }
@@ -1702,7 +1702,7 @@ pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
 /// demangle the name. Currently, these heuristics are very basic.
 ///
 /// If demangling fails or is not required, then `name` is returned unchanged.
-pub fn demangle_auto(name: Cow<str>, language: Option<gimli::DwLang>) -> Cow<str> {
+pub fn demangle_auto(name: Cow<'_, str>, language: Option<gimli::DwLang>) -> Cow<'_, str> {
     match language {
         Some(language) => demangle(name.as_ref(), language),
         None => demangle(name.as_ref(), gimli::DW_LANG_Rust)
@@ -1727,6 +1727,6 @@ mod tests {
     #[test]
     fn context_is_send() {
         fn assert_is_send<T: Send>() {}
-        assert_is_send::<crate::Context<gimli::read::EndianSlice<gimli::LittleEndian>>>();
+        assert_is_send::<crate::Context<gimli::read::EndianSlice<'_, gimli::LittleEndian>>>();
     }
 }

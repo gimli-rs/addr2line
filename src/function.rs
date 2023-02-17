@@ -253,7 +253,7 @@ impl<R: gimli::Reader> Function<R> {
     }
 
     fn parse_children(
-        entries: &mut gimli::EntriesRaw<R>,
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         depth: isize,
         file: DebugFile,
         unit: &gimli::Unit<R>,
@@ -298,7 +298,7 @@ impl<R: gimli::Reader> Function<R> {
     }
 
     fn skip(
-        entries: &mut gimli::EntriesRaw<R>,
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
     ) -> Result<(), Error> {
@@ -354,7 +354,7 @@ impl<R: gimli::Reader> Function<R> {
 impl<R: gimli::Reader> InlinedFunction<R> {
     fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
-        entries: &mut gimli::EntriesRaw<R>,
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
         file: DebugFile,

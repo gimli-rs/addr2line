@@ -1,7 +1,3 @@
-extern crate addr2line;
-extern crate memmap2;
-extern crate object;
-
 use std::borrow::Cow;
 use std::env;
 use std::fs::File;
@@ -23,7 +19,7 @@ fn release_fixture_path() -> PathBuf {
     path
 }
 
-fn with_file<F: FnOnce(&object::File)>(target: &path::Path, f: F) {
+fn with_file<F: FnOnce(&object::File<'_>)>(target: &path::Path, f: F) {
     let file = File::open(target).unwrap();
     let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
     let file = object::File::parse(&*map).unwrap();
@@ -44,12 +40,12 @@ fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
 }
 
 fn dwarf_borrow<'a>(
-    dwarf: &'a gimli::Dwarf<Cow<[u8]>>,
+    dwarf: &'a gimli::Dwarf<Cow<'_, [u8]>>,
 ) -> gimli::Dwarf<gimli::EndianSlice<'a, gimli::LittleEndian>> {
     let borrow_section: &dyn for<'b> Fn(
-        &'b Cow<[u8]>,
+        &'b Cow<'_, [u8]>,
     ) -> gimli::EndianSlice<'b, gimli::LittleEndian> =
-        &|section| gimli::EndianSlice::new(&*section, gimli::LittleEndian);
+        &|section| gimli::EndianSlice::new(section, gimli::LittleEndian);
     dwarf.borrow(&borrow_section)
 }
 

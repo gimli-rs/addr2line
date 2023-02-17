@@ -1,5 +1,3 @@
-extern crate backtrace;
-extern crate findshlibs;
 extern crate rustc_test as test;
 
 use std::env;
@@ -7,9 +5,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
+use crate::test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
-use crate::test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
 
 #[inline(never)]
 fn make_trace() -> Vec<String> {
@@ -102,7 +100,7 @@ $ {3} {0} --exe {1} {2}
     }
 }
 
-static FLAGS: &'static str = "aipsf";
+static FLAGS: &str = "aipsf";
 
 fn make_tests() -> Vec<TestDescAndFn> {
     (0..(1 << FLAGS.len()))
