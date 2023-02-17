@@ -9,7 +9,7 @@ use std::process::Command;
 
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
-use test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
+use crate::test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
 
 #[inline(never)]
 fn make_trace() -> Vec<String> {
