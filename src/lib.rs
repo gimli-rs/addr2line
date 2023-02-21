@@ -71,7 +71,7 @@ mod maybe_small {
     pub type IntoIter<T> = alloc::vec::IntoIter<T>;
 }
 
-#[cfg(all(unix, feature = "std", feature = "object", feature = "memmap2"))]
+#[cfg(all(feature = "std", feature = "object", feature = "memmap2"))]
 /// A simple builtin split DWARF loader.
 pub mod builtin_split_dwarf_loader;
 mod function;

@@ -18,6 +18,15 @@ fn convert_path<R: gimli::Reader<Endian = gimli::RunTimeEndian>>(
     Ok(PathBuf::from(s))
 }
 
+#[cfg(not(unix))]
+fn convert_path<R: gimli::Reader<Endian = gimli::RunTimeEndian>>(
+    r: &R,
+) -> Result<PathBuf, gimli::Error> {
+    let bytes = r.to_slice()?;
+    let s = std::str::from_utf8(&bytes).map_err(|_| gimli::Error::BadUtf8)?;
+    Ok(PathBuf::from(s))
+}
+
 fn load_section<'data: 'file, 'file, O, R, F>(
     id: gimli::SectionId,
     file: &'file O,

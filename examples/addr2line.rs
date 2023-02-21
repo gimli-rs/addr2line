@@ -210,7 +210,6 @@ fn main() {
         dwarf.load_sup(&mut load_sup_section).unwrap();
     }
 
-    #[cfg(unix)]
     let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
         |data, endian| {
             gimli::EndianSlice::new(arena_data.alloc(Cow::Owned(data.into_owned())), endian)
@@ -244,10 +243,7 @@ fn main() {
             let mut printed_anything = false;
             if let Some(probe) = probe {
                 let frames = ctx.find_frames(probe);
-                #[cfg(unix)]
                 let frames = split_dwarf_loader.run(frames).unwrap();
-                #[cfg(not(unix))]
-                let frames = frames.skip_all_loads().unwrap();
                 let mut frames = frames.enumerate();
                 while let Some((i, frame)) = frames.next().unwrap() {
                     if opts.pretty && i != 0 {

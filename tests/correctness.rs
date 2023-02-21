@@ -64,7 +64,6 @@ fn correctness() {
 
     let dwarf = gimli::Dwarf::load(|id| load_section(id, file, endian)).unwrap();
     let ctx = Context::from_dwarf(dwarf).unwrap();
-    #[cfg(unix)]
     let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
         |data, endian| gimli::EndianArcSlice::new(Arc::from(&*data), endian),
         None,
@@ -81,10 +80,7 @@ fn correctness() {
         let ip = sym.wrapping_sub(bias.unwrap());
 
         let frames = ctx.find_frames(ip);
-        #[cfg(unix)]
         let frames = split_dwarf_loader.run(frames).unwrap();
-        #[cfg(not(unix))]
-        let frames = frames.skip_all_loads().unwrap();
         let frame = frames.last().unwrap().unwrap();
         let name = frame.function.as_ref().unwrap().demangle().unwrap();
         // Old rust versions generate DWARF with wrong linkage name,
