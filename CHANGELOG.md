@@ -281,7 +281,7 @@
 ### Changed
 
 * [#108](https://github.com/gimli-rs/addr2line/issues/108)
-  `demangle` no longer ouputs the hash for rust symbols.
+  `demangle` no longer outputs the hash for rust symbols.
 
 * [#109](https://github.com/gimli-rs/addr2line/issues/109)
   Set default `R` for `Context<R>`.
