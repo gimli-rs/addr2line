@@ -19,7 +19,7 @@ jobs:
             os: "windows-latest"
     runs-on: ${{matrix.os}}
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Set env (macOS)
       if: matrix.os == 'macOS-latest'
       run: |
@@ -41,7 +41,7 @@ jobs:
   features:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: cargo build --no-default-features
       - run: cargo build --no-default-features --features std
       - run: cargo build --no-default-features --features std,cpp_demangle
@@ -53,7 +53,7 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install rustup
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
       - name: Install nightly rust
@@ -65,7 +65,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install rust
         run: rustup update 1.55.0 && rustup default 1.55.0
       - name: Build
@@ -74,7 +74,7 @@ jobs:
   rustfmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install rustup
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
       - name: Install rust
@@ -90,7 +90,7 @@ jobs:
       image: xd009642/tarpaulin
       options: --security-opt seccomp=unconfined
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install rustup
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile=minimal
       - name: Install rust
@@ -110,5 +110,5 @@ jobs:
   doc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - run: cargo doc
