@@ -32,14 +32,11 @@ extern crate std;
 #[macro_use]
 extern crate alloc;
 
-#[cfg(feature = "cpp_demangle")]
-extern crate cpp_demangle;
 #[cfg(feature = "fallible-iterator")]
 pub extern crate fallible_iterator;
+pub extern crate gimli;
 #[cfg(feature = "object")]
 pub extern crate object;
-#[cfg(feature = "rustc-demangle")]
-extern crate rustc_demangle;
 
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
