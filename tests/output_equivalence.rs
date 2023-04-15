@@ -1,13 +1,11 @@
-extern crate rustc_test as test;
-
 use std::env;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
-use crate::test::{ShouldPanic, TestDesc, TestDescAndFn, TestFn, TestName};
 use backtrace::Backtrace;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
+use libtest_mimic::{Arguments, Failed, Trial};
 
 #[inline(never)]
 fn make_trace() -> Vec<String> {
@@ -55,7 +53,7 @@ fn run_cmd<P: AsRef<OsStr>>(exe: P, me: &Path, flags: Option<&str>, trace: &str)
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn run_test(flags: Option<&str>) {
+fn run_test(flags: Option<&str>) -> Result<(), Failed> {
     let me = env::current_exe().unwrap();
     let mut exe = me.clone();
     assert!(exe.pop());
@@ -98,11 +96,12 @@ $ {3} {0} --exe {1} {2}
             ours
         );
     }
+    Ok(())
 }
 
 static FLAGS: &str = "aipsf";
 
-fn make_tests() -> Vec<TestDescAndFn> {
+fn make_tests() -> Vec<Trial> {
     (0..(1 << FLAGS.len()))
         .map(|bits| {
             if bits == 0 {
@@ -118,19 +117,11 @@ fn make_tests() -> Vec<TestDescAndFn> {
                 Some(param)
             }
         })
-        .map(|param| TestDescAndFn {
-            desc: TestDesc {
-                name: TestName::DynTestName(format!(
-                    "addr2line {}",
-                    param.as_ref().map_or("", String::as_str)
-                )),
-                ignore: false,
-                should_panic: ShouldPanic::No,
-                allow_fail: false,
-            },
-            testfn: TestFn::DynTestFn(Box::new(move || {
-                run_test(param.as_ref().map(String::as_str))
-            })),
+        .map(|param| {
+            Trial::test(
+                format!("addr2line {}", param.as_ref().map_or("", String::as_str)),
+                move || run_test(param.as_ref().map(String::as_str)),
+            )
         })
         .collect()
 }
@@ -139,6 +130,6 @@ fn main() {
     if !cfg!(target_os = "linux") {
         return;
     }
-    let args: Vec<_> = env::args().collect();
-    test::test_main(&args, make_tests());
+    let args = Arguments::from_args();
+    libtest_mimic::run(&args, make_tests()).exit();
 }
