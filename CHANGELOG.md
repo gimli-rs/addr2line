@@ -1,3 +1,37 @@
+# `addr2line` Change Log
+
+--------------------------------------------------------------------------------
+
+## 0.20.0 (2023/04/15)
+
+### Breaking changes
+
+* The minimum supported rust version is 1.58.0.
+
+* Changed `Context::find_frames` to return `LookupResult`.
+  Use `LookupResult::skip_all_loads` to obtain the result without loading split DWARF.
+  [#260](https://github.com/gimli-rs/addr2line/pull/260)
+
+* Replaced `Context::find_dwarf_unit` with `Context::find_dwarf_and_unit`.
+  [#260](https://github.com/gimli-rs/addr2line/pull/260)
+
+* Updated `object` dependency.
+
+### Changed
+
+* Fix handling of file index 0 for DWARF 5.
+  [#264](https://github.com/gimli-rs/addr2line/pull/264)
+
+### Added
+
+* Added types and methods to support loading split DWARF:
+  `LookupResult`, `SplitDwarfLoad`, `SplitDwarfLoader`, `Context::preload_units`.
+  [#260](https://github.com/gimli-rs/addr2line/pull/260)
+  [#262](https://github.com/gimli-rs/addr2line/pull/262)
+  [#263](https://github.com/gimli-rs/addr2line/pull/263)
+
+--------------------------------------------------------------------------------
+
 ## 0.19.0 (2022/11/24)
 
 ### Breaking changes
