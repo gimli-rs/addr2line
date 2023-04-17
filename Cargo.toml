@@ -10,6 +10,7 @@ license = "Apache-2.0 OR MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 edition = "2018"
+rust-version = "1.58"
 
 [dependencies]
 gimli = { version = "0.27.2", default-features = false, features = ["read"] }
