@@ -183,9 +183,9 @@ impl<L: LookupContinuation> LookupResult<L> {
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R: gimli::Reader> {
     sections: Arc<gimli::Dwarf<R>>,
-    unit_ranges: Vec<UnitRange>,
-    units: Vec<ResUnit<R>>,
-    sup_units: Vec<SupUnit<R>>,
+    unit_ranges: Box<[UnitRange]>,
+    units: Box<[ResUnit<R>]>,
+    sup_units: Box<[SupUnit<R>]>,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -305,9 +305,9 @@ impl<R: gimli::Reader> Context<R> {
         };
         Ok(Context {
             sections,
-            unit_ranges,
-            units,
-            sup_units,
+            unit_ranges: unit_ranges.into_boxed_slice(),
+            units: units.into_boxed_slice(),
+            sup_units: sup_units.into_boxed_slice(),
         })
     }
 
@@ -531,7 +531,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all line data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_lines(&self) -> Result<(), Error> {
-        for unit in &self.units {
+        for unit in self.units.iter() {
             unit.parse_lines(&self.sections)?;
         }
         Ok(())
@@ -540,7 +540,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all function data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_functions(&self) -> Result<(), Error> {
-        for unit in &self.units {
+        for unit in self.units.iter() {
             unit.parse_functions(self).skip_all_loads()?;
         }
         Ok(())
@@ -549,7 +549,7 @@ impl<R: gimli::Reader> Context<R> {
     /// Initialize all inlined function data structures. This is used for benchmarks.
     #[doc(hidden)]
     pub fn parse_inlined_functions(&self) -> Result<(), Error> {
-        for unit in &self.units {
+        for unit in self.units.iter() {
             unit.parse_inlined_functions(self).skip_all_loads()?;
         }
         Ok(())
