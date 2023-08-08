@@ -10,7 +10,7 @@ license = "Apache-2.0 OR MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 edition = "2018"
-rust-version = "1.58"
+rust-version = "1.64"
 
 [dependencies]
 gimli = { version = "0.27.2", default-features = false, features = ["read"] }
@@ -28,10 +28,10 @@ alloc = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-all
 compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
-clap = "3.1.6"
+clap = { version = "4.3.21", features = ["wrap_help"] }
 backtrace = "0.3.13"
 findshlibs = "0.10"
-libtest-mimic = "0.5.2"
+libtest-mimic = "0.6.1"
 auxiliary = { path = "tests/auxiliary" }
 typed-arena = "2"
 
