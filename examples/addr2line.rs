@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::{Path, PathBuf};
 
-use clap::{Arg, Command, Values};
+use clap::{Arg, ArgAction, Command};
 use fallible_iterator::FallibleIterator;
 use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
@@ -19,7 +19,7 @@ fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
 }
 
 enum Addrs<'a> {
-    Args(Values<'a>),
+    Args(clap::parser::ValuesRef<'a, String>),
     Stdin(Lines<StdinLock<'a>>),
 }
 
@@ -116,6 +116,7 @@ fn main() {
     let matches = Command::new("addr2line")
         .version(env!("CARGO_PKG_VERSION"))
         .about("A fast addr2line Rust port")
+        .max_term_width(100)
         .args(&[
             Arg::new("exe")
                 .short('e')
@@ -134,32 +135,42 @@ fn main() {
             Arg::new("functions")
                 .short('f')
                 .long("functions")
+                .action(ArgAction::SetTrue)
                 .help("Display function names as well as file and line number information."),
-            Arg::new("pretty").short('p').long("pretty-print").help(
+            Arg::new("pretty").short('p').long("pretty-print")
+                .action(ArgAction::SetTrue)
+                .help(
                 "Make the output more human friendly: each location are printed on one line.",
             ),
-            Arg::new("inlines").short('i').long("inlines").help(
+            Arg::new("inlines").short('i').long("inlines")
+                .action(ArgAction::SetTrue)
+                .help(
                 "If the address belongs to a function that was inlined, the source information for \
                 all enclosing scopes back to the first non-inlined function will also be printed.",
             ),
-            Arg::new("addresses").short('a').long("addresses").help(
+            Arg::new("addresses").short('a').long("addresses")
+                .action(ArgAction::SetTrue)
+                .help(
                 "Display the address before the function name, file and line number information.",
             ),
             Arg::new("basenames")
                 .short('s')
                 .long("basenames")
+                .action(ArgAction::SetTrue)
                 .help("Display only the base of each file name."),
-            Arg::new("demangle").short('C').long("demangle").help(
+            Arg::new("demangle").short('C').long("demangle")
+                .action(ArgAction::SetTrue)
+                .help(
                 "Demangle function names. \
                 Specifying a specific demangling style (like GNU addr2line) is not supported. \
                 (TODO)"
             ),
             Arg::new("llvm")
                 .long("llvm")
+                .action(ArgAction::SetTrue)
                 .help("Display output in the same format as llvm-symbolizer."),
             Arg::new("addrs")
-                .takes_value(true)
-                .multiple_occurrences(true)
+                .action(ArgAction::Append)
                 .help("Addresses to use instead of reading from stdin."),
         ])
         .get_matches();
@@ -167,13 +178,13 @@ fn main() {
     let arena_data = Arena::new();
 
     let opts = Options {
-        do_functions: matches.is_present("functions"),
-        do_inlines: matches.is_present("inlines"),
-        pretty: matches.is_present("pretty"),
-        print_addrs: matches.is_present("addresses"),
-        basenames: matches.is_present("basenames"),
-        demangle: matches.is_present("demangle"),
-        llvm: matches.is_present("llvm"),
+        do_functions: matches.get_flag("functions"),
+        do_inlines: matches.get_flag("inlines"),
+        pretty: matches.get_flag("pretty"),
+        print_addrs: matches.get_flag("addresses"),
+        basenames: matches.get_flag("basenames"),
+        demangle: matches.get_flag("demangle"),
+        llvm: matches.get_flag("llvm"),
         exe: matches.get_one::<PathBuf>("exe").unwrap(),
         sup: matches.get_one::<PathBuf>("sup"),
     };
@@ -220,7 +231,7 @@ fn main() {
 
     let stdin = std::io::stdin();
     let addrs = matches
-        .values_of("addrs")
+        .get_many::<String>("addrs")
         .map(Addrs::Args)
         .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
 
