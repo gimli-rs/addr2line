@@ -4,8 +4,10 @@ use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, Command};
+use clap_num::maybe_hex;
 use fallible_iterator::FallibleIterator;
-use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
+use gimli::DW_LANG_C_plus_plus;
+use object::{Object, ObjectSection, ObjectSegment, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
 use addr2line::{Context, Location};
@@ -110,6 +112,8 @@ struct Options<'a> {
     llvm: bool,
     exe: &'a PathBuf,
     sup: Option<&'a PathBuf>,
+    verbose: bool,
+    load_addr: Option<&'a u64>,
 }
 
 fn main() {
@@ -172,6 +176,19 @@ fn main() {
             Arg::new("addrs")
                 .action(ArgAction::Append)
                 .help("Addresses to use instead of reading from stdin."),
+            Arg::new("verbose")
+                .long("verbose")
+                .short('v')
+                .action(ArgAction::SetTrue)
+                .help("turn on verbose printing (debugging)"),
+            Arg::new("load_addr")
+                .long("load_addr")
+                .short('l')
+                .required(false)
+                .default_missing_value(None)
+                .value_parser(maybe_hex::<u64>)
+                .action(ArgAction::Set)
+                .help("Set the load address of the binary image and all addresses are offsets from this address."),
         ])
         .get_matches();
 
@@ -187,6 +204,8 @@ fn main() {
         llvm: matches.get_flag("llvm"),
         exe: matches.get_one::<PathBuf>("exe").unwrap(),
         sup: matches.get_one::<PathBuf>("sup"),
+        verbose: matches.get_flag("verbose"),
+        load_addr: matches.get_one::<u64>("load_addr"),
     };
 
     let file = File::open(opts.exe).unwrap();
@@ -198,6 +217,27 @@ fn main() {
     } else {
         gimli::RunTimeEndian::Big
     };
+
+    let mut load_addr: u64 = 0;
+    let mut text_vmaddr: u64 = 0;
+    if let Some(addr) = opts.load_addr {
+        load_addr = addr.clone();
+        let mut segments = object.segments();
+        while let Some(segment) = segments.next() {
+            if let Ok(Some(name)) = segment.name() {
+                if name == "__TEXT" {
+                    // there can only be one __TEXT segment for file.
+                    text_vmaddr = segment.address();
+                    // println!("in loop: text_vmraddr = {}", text_vmaddr);
+                    break;
+                }
+            }
+        }
+        if opts.verbose {
+            println!("load_ddr  =  0x{:016x}", load_addr);
+            println!("text_vmaddr = {}", text_vmaddr);
+        }
+    }
 
     let mut load_section = |id: gimli::SectionId| -> Result<_, _> {
         load_file_section(id, object, endian, &arena_data)
@@ -235,7 +275,7 @@ fn main() {
         .map(Addrs::Args)
         .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
 
-    for probe in addrs {
+    for mut probe in addrs {
         if opts.print_addrs {
             let addr = probe.unwrap_or(0);
             if opts.llvm {
@@ -247,6 +287,18 @@ fn main() {
                 print!(": ");
             } else {
                 println!();
+            }
+        }
+
+        if load_addr != 0 {
+            let stack_addr: u64 = probe.unwrap_or(0);
+            let adjusted_addr: u64 = text_vmaddr + stack_addr - load_addr;
+            probe = Some(adjusted_addr);
+            if opts.verbose {
+                println!("text_vmaddr = 0x{:016x} stack_addr = 0x{:016x} load_addr = 0x{:016x}",
+                         text_vmaddr, stack_addr, load_addr);
+                println!("adjusted_addr = 0x{:016x}", adjusted_addr);
+                println!("new probe     = 0x{:016x}", probe.unwrap_or(0));
             }
         }
 
@@ -263,9 +315,13 @@ fn main() {
 
                     if opts.do_functions {
                         if let Some(func) = frame.function {
+                            let language = // func.language;
+                                Some(DW_LANG_C_plus_plus);
+
                             print_function(
                                 func.raw_name().ok().as_ref().map(AsRef::as_ref),
-                                func.language,
+                                // func.language,
+                                language,
                                 opts.demangle,
                             );
                         } else {
@@ -307,7 +363,7 @@ fn main() {
         } else {
             let loc = probe.and_then(|probe| ctx.find_location(probe).unwrap());
             print_loc(loc.as_ref(), opts.basenames, opts.llvm);
-        }
+        };
 
         if opts.llvm {
             println!();
