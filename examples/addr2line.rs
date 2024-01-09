@@ -67,6 +67,7 @@ fn print_loc(loc: Option<&Location<'_>>, basenames: bool, llvm: bool) {
 }
 
 fn print_function(name: Option<&str>, language: Option<gimli::DwLang>, demangle: bool) {
+    // println!("print_function: language = {:?}", language);
     if let Some(name) = name {
         if demangle {
             print!("{}", addr2line::demangle_auto(Cow::from(name), language));
@@ -105,6 +106,7 @@ fn find_name_from_symbols<'a>(
 struct Options<'a> {
     do_functions: bool,
     do_inlines: bool,
+    only_print_last_inlined_frame: bool,
     pretty: bool,
     print_addrs: bool,
     basenames: bool,
@@ -189,6 +191,12 @@ fn main() {
                 .value_parser(maybe_hex::<u64>)
                 .action(ArgAction::Set)
                 .help("specify the load address of the binary image and use all addrs as addresses from within that binary image."),
+            Arg::new("only_print_last_inlined_frame")
+                .long("only_print_last_inlined_frame")
+                .short('F')
+                .required(false)
+                .action(ArgAction::SetFalse)
+                .help("when handling inlined stack frames, only print the last frame and not the intervening frames."),
         ])
         .get_matches();
 
@@ -197,6 +205,7 @@ fn main() {
     let opts = Options {
         do_functions: matches.get_flag("functions"),
         do_inlines: matches.get_flag("inlines"),
+        only_print_last_inlined_frame: !(matches.get_flag("only_print_last_inlined_frame")),
         pretty: matches.get_flag("pretty"),
         print_addrs: matches.get_flag("addresses"),
         basenames: matches.get_flag("basenames"),
@@ -224,6 +233,9 @@ fn main() {
         let mut segments = object.segments();
         while let Some(segment) = segments.next() {
             if let Ok(Some(name)) = segment.name() {
+                if opts.verbose {
+                    println!("segment name = {}", name)
+                }
                 if name == "__TEXT" {
                     // there can only be one __TEXT segment for file.
                     text_vmaddr = segment.address();
@@ -308,11 +320,15 @@ fn main() {
                 let frames = ctx.find_frames(probe);
                 let frames = split_dwarf_loader.run(frames).unwrap();
                 let mut frames = frames.enumerate();
+                let mut last_frame = None;
                 while let Some((i, frame)) = frames.next().unwrap() {
+                    if opts.only_print_last_inlined_frame {
+                        last_frame = Some(frame);
+                        continue;
+                    }
                     if opts.pretty && i != 0 {
                         print!(" (inlined by) ");
                     }
-
                     if opts.do_functions {
                         if let Some(func) = frame.function {
                             let language = // func.language;
@@ -341,12 +357,43 @@ fn main() {
                     printed_anything = true;
 
                     if !opts.do_inlines {
+                        // if I'm not following inlined functions, print the first frame.
                         break;
                     }
                 }
+                if let Some(frame) = last_frame {
+                    if opts.do_functions {
+                        if let Some(func) = frame.function {
+                            let language = // func.language;
+                                Some(DW_LANG_C_plus_plus);
+
+                            print_function(
+                                func.raw_name().ok().as_ref().map(AsRef::as_ref),
+                                // func.language,
+                                language,
+                                opts.demangle,
+                            );
+                        } else {
+                            let name = find_name_from_symbols(&symbols, probe);
+                            print_function(name, None, opts.demangle);
+                        }
+
+                        if opts.pretty {
+                            print!(" at ");
+                        } else {
+                            println!();
+                        }
+                    }
+
+                    print_loc(frame.location.as_ref(), opts.basenames, opts.llvm);
+                    printed_anything = true;
+                }
             }
 
+
             if !printed_anything {
+                // this means the loop above never run, meaning there's no stack to iterate over.
+                // How can this be? Perhaps just an address in main? prior to entering main?
                 if opts.do_functions {
                     let name = probe.and_then(|probe| find_name_from_symbols(&symbols, probe));
                     print_function(name, None, opts.demangle);
@@ -361,6 +408,7 @@ fn main() {
                 print_loc(None, opts.basenames, opts.llvm);
             }
         } else {
+            // this is for not printing functions and not printing inlined funcs.
             let loc = probe.and_then(|probe| ctx.find_location(probe).unwrap());
             print_loc(loc.as_ref(), opts.basenames, opts.llvm);
         };
