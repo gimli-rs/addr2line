@@ -44,13 +44,13 @@ fn correctness() {
         gimli::RunTimeEndian::Big
     };
 
-    fn load_section<'data: 'file, 'file, O, Endian>(
+    fn load_section<'data, O, Endian>(
         id: gimli::SectionId,
-        file: &'file O,
+        file: &O,
         endian: Endian,
     ) -> Result<gimli::EndianArcSlice<Endian>, gimli::Error>
     where
-        O: object::Object<'data, 'file>,
+        O: object::Object<'data>,
         Endian: gimli::Endianity,
     {
         use object::ObjectSection;
