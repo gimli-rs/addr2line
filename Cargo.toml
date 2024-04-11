@@ -1,6 +1,6 @@
 [package]
 name = "addr2line"
-version = "0.21.0"
+version = "0.22.0"
 description = "A cross-platform symbolication library written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
 exclude = ["/benches/*", "/fixtures/*", ".github", "*.sh", "*.r"]
@@ -13,7 +13,7 @@ edition = "2018"
 rust-version = "1.65"
 
 [dependencies]
-gimli = { version = "0.28.0", default-features = false, features = ["read"] }
+gimli = { version = "0.29.0", default-features = false, features = ["read"] }
 fallible-iterator = { version = "0.3.0", default-features = false, optional = true }
 memmap2 = { version = "0.9.4", optional = true }
 object = { version = "0.35.0", default-features = false, features = ["read"], optional = true }
@@ -31,7 +31,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 clap = { version = "4.3.21", features = ["wrap_help"] }
 backtrace = "0.3.13"
 findshlibs = "0.10"
-libtest-mimic = "0.6.1"
+libtest-mimic = "0.7.2"
 auxiliary = { path = "tests/auxiliary" }
 typed-arena = "2"
 
