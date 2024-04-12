@@ -828,6 +828,9 @@ impl Lines {
 
             let address = row.address();
             let file_index = row.file_index();
+            // Convert line and column to u32 to save a little memory.
+            // We'll handle the special case of line 0 later,
+            // and return left edge as column 0 in the public API.
             let line = row.line().map(NonZeroU64::get).unwrap_or(0) as u32;
             let column = match row.column() {
                 gimli::ColumnType::LeftEdge => 0,
@@ -1432,7 +1435,8 @@ impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
                         Location {
                             file,
                             line: if row.line != 0 { Some(row.line) } else { None },
-                            column: if row.column != 0 {
+                            // If row.line is specified then row.column always has meaning.
+                            column: if row.line != 0 {
                                 Some(row.column)
                             } else {
                                 None
@@ -1714,6 +1718,8 @@ pub struct Location<'a> {
     /// The line number.
     pub line: Option<u32>,
     /// The column number.
+    ///
+    /// A value of `Some(0)` indicates the left edge.
     pub column: Option<u32>,
 }
 
