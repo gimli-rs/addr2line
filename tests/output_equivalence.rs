@@ -60,7 +60,6 @@ fn run_test(flags: Option<&str>) -> Result<(), Failed> {
     if exe.file_name().unwrap().to_str().unwrap() == "deps" {
         assert!(exe.pop());
     }
-    exe.push("examples");
     exe.push("addr2line");
 
     assert!(exe.is_file());
