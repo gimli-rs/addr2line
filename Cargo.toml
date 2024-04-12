@@ -21,6 +21,10 @@ smallvec = { version = "1", default-features = false, optional = true }
 rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 
+# bin dependencies
+clap = { version = "4.3.21", features = ["wrap_help"], optional = true }
+typed-arena = { version = "2", optional = true }
+
 # Internal feature, only used when building as part of libstd, not part of the
 # stable interface of this crate.
 core = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-core' }
@@ -28,12 +32,10 @@ alloc = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-all
 compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
-clap = { version = "4.3.21", features = ["wrap_help"] }
 backtrace = "0.3.13"
 findshlibs = "0.10"
 libtest-mimic = "0.7.2"
 auxiliary = { path = "tests/auxiliary" }
-typed-arena = "2"
 
 [profile.release]
 debug = true
@@ -46,6 +48,7 @@ codegen-units = 1
 default = ["rustc-demangle", "cpp_demangle", "std-object", "fallible-iterator", "smallvec", "memmap2"]
 std = ["gimli/std"]
 std-object = ["std", "object", "object/std", "object/compression", "gimli/endian-reader"]
+bin = ["default", "dep:clap", "dep:typed-arena"]
 
 # Internal feature, only used when building as part of libstd, not part of the
 # stable interface of this crate.
@@ -54,7 +57,7 @@ rustc-dep-of-std = ['core', 'alloc', 'compiler_builtins', 'gimli/rustc-dep-of-st
 [[test]]
 name = "output_equivalence"
 harness = false
-required-features = ["default"]
+required-features = ["bin"]
 
 [[test]]
 name = "correctness"
@@ -64,6 +67,6 @@ required-features = ["default"]
 name = "parse"
 required-features = ["std-object"]
 
-[[example]]
+[[bin]]
 name = "addr2line"
-required-features = ["default"]
+required-features = ["bin"]

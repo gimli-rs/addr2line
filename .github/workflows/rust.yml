@@ -34,9 +34,13 @@ jobs:
         rustup install ${{matrix.rust_channel}}
         rustup default ${{matrix.rust_channel}}
     - name: Test debug
-      run: cargo test --verbose
+      run: |
+        cargo test --verbose
+        cargo test --verbose --features bin
     - name: Test release
-      run: cargo test --verbose --release
+      run: |
+        cargo test --verbose --release
+        cargo test --verbose --release --features bin
 
   features:
     runs-on: ubuntu-latest
@@ -49,6 +53,7 @@ jobs:
       - run: cargo build --no-default-features --features std-object
       - run: cargo build --no-default-features --features fallible-iterator
       - run: cargo build --no-default-features --features smallvec
+      - run: cargo build --no-default-features --features bin
 
   bench:
     runs-on: ubuntu-latest
@@ -98,7 +103,7 @@ jobs:
           rustup install stable
           rustup default stable
       - name: Build addr2line
-        run: cargo build --example addr2line
+        run: cargo build --features bin
       - name: Run cargo-tarpaulin
         run: cargo tarpaulin --skip-clean --ignore-tests --out Lcov --implicit-test-threads
       - name: Upload to Coveralls
