@@ -80,6 +80,7 @@ where
     }
 
     /// Advances the iterator and returns the next frame.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let frames = match &mut self.0 {
             FrameIterState::Empty => return Ok(None),

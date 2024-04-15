@@ -26,23 +26,23 @@ fn with_file<F: FnOnce(&object::File<'_>)>(target: &path::Path, f: F) {
     f(&file)
 }
 
-fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::Dwarf<Cow<'a, [u8]>> {
+fn dwarf_load<'a>(object: &object::File<'a>) -> gimli::DwarfSections<Cow<'a, [u8]>> {
     let load_section = |id: gimli::SectionId| -> Result<Cow<'a, [u8]>, gimli::Error> {
         Ok(object
             .section_by_name(id.name())
             .map(|section| section.uncompressed_data().unwrap())
             .unwrap_or(Cow::Borrowed(&[][..])))
     };
-    gimli::Dwarf::load(&load_section).unwrap()
+    gimli::DwarfSections::load(&load_section).unwrap()
 }
 
 fn dwarf_borrow<'a>(
-    dwarf: &'a gimli::Dwarf<Cow<'_, [u8]>>,
+    dwarf: &'a gimli::DwarfSections<Cow<'_, [u8]>>,
 ) -> gimli::Dwarf<gimli::EndianSlice<'a, gimli::LittleEndian>> {
     let borrow_section: &dyn for<'b> Fn(
         &'b Cow<'_, [u8]>,
     ) -> gimli::EndianSlice<'b, gimli::LittleEndian> =
-        &|section| gimli::EndianSlice::new(&*section, gimli::LittleEndian);
+        &|section| gimli::EndianSlice::new(section, gimli::LittleEndian);
     dwarf.borrow(&borrow_section)
 }
 

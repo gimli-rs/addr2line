@@ -1,20 +1,23 @@
 use core::cell::UnsafeCell;
 
-pub struct LazyCell<T> {
+pub(crate) type LazyResult<T> = LazyCell<Result<T, crate::Error>>;
+
+pub(crate) struct LazyCell<T> {
     contents: UnsafeCell<Option<T>>,
 }
+
 impl<T> LazyCell<T> {
-    pub fn new() -> LazyCell<T> {
+    pub(crate) fn new() -> LazyCell<T> {
         LazyCell {
             contents: UnsafeCell::new(None),
         }
     }
 
-    pub fn borrow(&self) -> Option<&T> {
+    pub(crate) fn borrow(&self) -> Option<&T> {
         unsafe { &*self.contents.get() }.as_ref()
     }
 
-    pub fn borrow_with(&self, closure: impl FnOnce() -> T) -> &T {
+    pub(crate) fn borrow_with(&self, closure: impl FnOnce() -> T) -> &T {
         // First check if we're already initialized...
         let ptr = self.contents.get();
         if let Some(val) = unsafe { &*ptr } {

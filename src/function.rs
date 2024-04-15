@@ -2,18 +2,14 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use crate::lazy::LazyCell;
+use crate::lazy::LazyResult;
 use crate::maybe_small;
 use crate::{Context, DebugFile, Error, RangeAttributes};
 
 pub(crate) struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
-    pub(crate) functions: Box<
-        [(
-            gimli::UnitOffset<R::Offset>,
-            LazyCell<Result<Function<R>, Error>>,
-        )],
-    >,
+    #[allow(clippy::type_complexity)]
+    pub(crate) functions: Box<[(gimli::UnitOffset<R::Offset>, LazyResult<Function<R>>)]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     pub(crate) addresses: Box<[FunctionAddress]>,
 }
@@ -103,13 +99,14 @@ impl<R: gimli::Reader> Functions<R> {
                     }
 
                     let function_index = functions.len();
-                    if ranges.for_each_range(sections, unit, |range| {
+                    let has_address = ranges.for_each_range(sections, unit, |range| {
                         addresses.push(FunctionAddress {
                             range,
                             function: function_index,
                         });
-                    })? {
-                        functions.push((dw_die_offset, LazyCell::new()));
+                    })?;
+                    if has_address {
+                        functions.push((dw_die_offset, LazyResult::new()));
                     }
                 } else {
                     entries.skip_attributes(abbrev.attributes())?;
@@ -205,19 +202,16 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
 
-        let mut inlined_functions = Vec::new();
-        let mut inlined_addresses = Vec::new();
-        Function::parse_children(
-            &mut entries,
-            depth,
+        let mut state = InlinedState {
+            entries,
+            functions: Vec::new(),
+            addresses: Vec::new(),
             file,
             unit,
             ctx,
             sections,
-            &mut inlined_functions,
-            &mut inlined_addresses,
-            0,
-        )?;
+        };
+        Function::parse_children(&mut state, depth, 0)?;
 
         // Sort ranges in "breadth-first traversal order", i.e. first by call_depth
         // and then by range.begin. This allows finding the range containing an
@@ -229,7 +223,7 @@ impl<R: gimli::Reader> Function<R> {
         // In this example, if you want to look up address 7 at depth 0, and you
         // encounter [0..2 at depth 1], are you before or after the target range?
         // You don't know.
-        inlined_addresses.sort_by(|r1, r2| {
+        state.addresses.sort_by(|r1, r2| {
             if r1.call_depth < r2.call_depth {
                 Ordering::Less
             } else if r1.call_depth > r2.call_depth {
@@ -246,50 +240,38 @@ impl<R: gimli::Reader> Function<R> {
         Ok(Function {
             dw_die_offset,
             name,
-            inlined_functions: inlined_functions.into_boxed_slice(),
-            inlined_addresses: inlined_addresses.into_boxed_slice(),
+            inlined_functions: state.functions.into_boxed_slice(),
+            inlined_addresses: state.addresses.into_boxed_slice(),
         })
     }
 
     fn parse_children(
-        entries: &mut gimli::EntriesRaw<'_, '_, R>,
+        state: &mut InlinedState<R>,
         depth: isize,
-        file: DebugFile,
-        unit: &gimli::Unit<R>,
-        ctx: &Context<R>,
-        sections: &gimli::Dwarf<R>,
-        inlined_functions: &mut Vec<InlinedFunction<R>>,
-        inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
     ) -> Result<(), Error> {
         loop {
-            let dw_die_offset = entries.next_offset();
-            let next_depth = entries.next_depth();
+            let dw_die_offset = state.entries.next_offset();
+            let next_depth = state.entries.next_depth();
             if next_depth <= depth {
                 return Ok(());
             }
-            if let Some(abbrev) = entries.read_abbreviation()? {
+            if let Some(abbrev) = state.entries.read_abbreviation()? {
                 match abbrev.tag() {
                     gimli::DW_TAG_subprogram => {
-                        Function::skip(entries, abbrev, next_depth)?;
+                        Function::skip(&mut state.entries, abbrev, next_depth)?;
                     }
                     gimli::DW_TAG_inlined_subroutine => {
                         InlinedFunction::parse(
+                            state,
                             dw_die_offset,
-                            entries,
                             abbrev,
                             next_depth,
-                            file,
-                            unit,
-                            ctx,
-                            sections,
-                            inlined_functions,
-                            inlined_addresses,
                             inlined_depth,
                         )?;
                     }
                     _ => {
-                        entries.skip_attributes(abbrev.attributes())?;
+                        state.entries.skip_attributes(abbrev.attributes())?;
                     }
                 }
             }
@@ -352,25 +334,21 @@ impl<R: gimli::Reader> Function<R> {
 
 impl<R: gimli::Reader> InlinedFunction<R> {
     fn parse(
+        state: &mut InlinedState<R>,
         dw_die_offset: gimli::UnitOffset<R::Offset>,
-        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
-        file: DebugFile,
-        unit: &gimli::Unit<R>,
-        ctx: &Context<R>,
-        sections: &gimli::Dwarf<R>,
-        inlined_functions: &mut Vec<InlinedFunction<R>>,
-        inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
     ) -> Result<(), Error> {
+        let unit = state.unit;
+        let sections = state.sections;
         let mut ranges = RangeAttributes::default();
         let mut name = None;
         let mut call_file = None;
         let mut call_line = 0;
         let mut call_column = 0;
         for spec in abbrev.attributes() {
-            match entries.read_attribute(*spec) {
+            match state.entries.read_attribute(*spec) {
                 Ok(ref attr) => match attr.name() {
                     gimli::DW_AT_low_pc => match attr.value() {
                         gimli::AttributeValue::Addr(val) => ranges.low_pc = Some(val),
@@ -402,7 +380,8 @@ impl<R: gimli::Reader> InlinedFunction<R> {
                     }
                     gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
                         if name.is_none() {
-                            name = name_attr(attr.value(), file, unit, ctx, sections, 16)?;
+                            name =
+                                name_attr(attr.value(), state.file, unit, state.ctx, sections, 16)?;
                         }
                     }
                     gimli::DW_AT_call_file => {
@@ -433,8 +412,8 @@ impl<R: gimli::Reader> InlinedFunction<R> {
             }
         }
 
-        let function_index = inlined_functions.len();
-        inlined_functions.push(InlinedFunction {
+        let function_index = state.functions.len();
+        state.functions.push(InlinedFunction {
             dw_die_offset,
             name,
             call_file,
@@ -443,25 +422,28 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         });
 
         ranges.for_each_range(sections, unit, |range| {
-            inlined_addresses.push(InlinedFunctionAddress {
+            state.addresses.push(InlinedFunctionAddress {
                 range,
                 call_depth: inlined_depth,
                 function: function_index,
             });
         })?;
 
-        Function::parse_children(
-            entries,
-            depth,
-            file,
-            unit,
-            ctx,
-            sections,
-            inlined_functions,
-            inlined_addresses,
-            inlined_depth + 1,
-        )
+        Function::parse_children(state, depth, inlined_depth + 1)
     }
+}
+
+struct InlinedState<'a, R: gimli::Reader> {
+    // Mutable fields.
+    entries: gimli::EntriesRaw<'a, 'a, R>,
+    functions: Vec<InlinedFunction<R>>,
+    addresses: Vec<InlinedFunctionAddress>,
+
+    // Constant fields.
+    file: DebugFile,
+    unit: &'a gimli::Unit<R>,
+    ctx: &'a Context<R>,
+    sections: &'a gimli::Dwarf<R>,
 }
 
 fn name_attr<R>(

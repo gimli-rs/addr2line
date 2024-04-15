@@ -29,10 +29,11 @@ fn find_debuginfo() -> memmap2::Mmap {
         }
     }
 
-    return map;
+    map
 }
 
 #[test]
+#[allow(clippy::fn_to_numeric_cast)]
 fn correctness() {
     let map = find_debuginfo();
     let file = &object::File::parse(&*map).unwrap();
