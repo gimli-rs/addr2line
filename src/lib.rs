@@ -183,9 +183,8 @@ impl<L: LookupContinuation> LookupResult<L> {
 /// when performing lookups for many addresses in the same executable.
 pub struct Context<R: gimli::Reader> {
     sections: Arc<gimli::Dwarf<R>>,
-    unit_ranges: Box<[UnitRange]>,
-    units: Box<[ResUnit<R>]>,
-    sup_units: Box<[SupUnit<R>]>,
+    units: ResUnits<R>,
+    sup_units: SupUnits<R>,
 }
 
 /// The type of `Context` that supports the `new` method.
@@ -295,20 +294,21 @@ impl<R: gimli::Reader> Context<R> {
     #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Context<R>, Error> {
         let sections = Arc::new(sections);
-        let (unit_ranges, units) = Context::parse_units(&sections)?;
+        let units = ResUnits::parse(&sections)?;
         let sup_units = if let Some(sup) = sections.sup.as_ref() {
-            Context::parse_sup(sup)?
+            SupUnits::parse(sup)?
         } else {
-            Vec::new()
+            SupUnits::default()
         };
         Ok(Context {
             sections,
-            unit_ranges: unit_ranges.into_boxed_slice(),
-            units: units.into_boxed_slice(),
-            sup_units: sup_units.into_boxed_slice(),
+            units,
+            sup_units,
         })
     }
+}
 
+impl<R: gimli::Reader> ResUnits<R> {
     /// Finds the CUs for the function address given.
     ///
     /// There might be multiple CUs whose range contains this address.
@@ -319,9 +319,8 @@ impl<R: gimli::Reader> Context<R> {
     /// Consequently we return an iterator for all CUs which may contain the
     /// address, and the caller must check if there is actually a function or
     /// location in the CU for that address.
-    fn find_units(&self, probe: u64) -> impl Iterator<Item = &ResUnit<R>> {
-        self.find_units_range(probe, probe + 1)
-            .map(|(unit, _range)| unit)
+    pub(crate) fn find(&self, probe: u64) -> impl Iterator<Item = &ResUnit<R>> {
+        self.find_range(probe, probe + 1).map(|(unit, _range)| unit)
     }
 
     /// Finds the CUs covering the range of addresses given.
@@ -329,7 +328,7 @@ impl<R: gimli::Reader> Context<R> {
     /// The range is [low, high) (ie, the upper bound is exclusive). This can return multiple
     /// ranges for the same unit.
     #[inline]
-    fn find_units_range(
+    pub(crate) fn find_range(
         &self,
         probe_low: u64,
         probe_high: u64,
@@ -337,7 +336,7 @@ impl<R: gimli::Reader> Context<R> {
         // First up find the position in the array which could have our function
         // address.
         let pos = match self
-            .unit_ranges
+            .ranges
             .binary_search_by_key(&probe_high, |i| i.range.begin)
         {
             // Although unlikely, we could find an exact match.
@@ -351,7 +350,7 @@ impl<R: gimli::Reader> Context<R> {
 
         // Once we have our index we iterate backwards from that position
         // looking for a matching CU.
-        self.unit_ranges[..pos]
+        self.ranges[..pos]
             .iter()
             .rev()
             .take_while(move |i| {
@@ -376,6 +375,24 @@ impl<R: gimli::Reader> Context<R> {
             })
     }
 
+    pub(crate) fn find_location_range<'a>(
+        &'a self,
+        probe_low: u64,
+        probe_high: u64,
+        sections: &'a gimli::Dwarf<R>,
+    ) -> Result<LocationRangeIter<'a, R>, Error> {
+        let unit_iter = Box::new(self.find_range(probe_low, probe_high));
+        Ok(LocationRangeIter {
+            unit_iter,
+            iter: None,
+            probe_low,
+            probe_high,
+            sections,
+        })
+    }
+}
+
+impl<R: gimli::Reader> Context<R> {
     /// Find the DWARF unit corresponding to the given virtual memory address.
     pub fn find_dwarf_and_unit(
         &self,
@@ -383,7 +400,7 @@ impl<R: gimli::Reader> Context<R> {
     ) -> LookupResult<
         impl LookupContinuation<Output = Option<(&gimli::Dwarf<R>, &gimli::Unit<R>)>, Buf = R>,
     > {
-        let mut units_iter = self.find_units(probe);
+        let mut units_iter = self.units.find(probe);
         if let Some(unit) = units_iter.next() {
             return LoopingLookup::new_lookup(
                 unit.find_function_or_location(probe, self),
@@ -415,7 +432,7 @@ impl<R: gimli::Reader> Context<R> {
 
     /// Find the source file and line corresponding to the given virtual memory address.
     pub fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
-        for unit in self.find_units(probe) {
+        for unit in self.units.find(probe) {
             if let Some(location) = unit.find_location(probe, &self.sections)? {
                 return Ok(Some(location));
             }
@@ -430,7 +447,8 @@ impl<R: gimli::Reader> Context<R> {
         probe_low: u64,
         probe_high: u64,
     ) -> Result<LocationRangeIter<'_, R>, Error> {
-        LocationRangeIter::new(self, probe_low, probe_high)
+        self.units
+            .find_location_range(probe_low, probe_high, &self.sections)
     }
 
     /// Return an iterator for the function frames corresponding to the given virtual
@@ -447,7 +465,7 @@ impl<R: gimli::Reader> Context<R> {
         probe: u64,
     ) -> LookupResult<impl LookupContinuation<Output = Result<FrameIter<'_, R>, Error>, Buf = R>>
     {
-        let mut units_iter = self.find_units(probe);
+        let mut units_iter = self.units.find(probe);
         if let Some(unit) = units_iter.next() {
             LoopingLookup::new_lookup(unit.find_function_or_location(probe, self), move |r| {
                 ControlFlow::Break(match r {
@@ -517,7 +535,8 @@ impl<R: gimli::Reader> Context<R> {
             impl FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> Result<(), gimli::Error> + '_,
         ),
     > {
-        self.find_units(probe)
+        self.units
+            .find(probe)
             .filter_map(move |unit| match unit.dwarf_and_unit_dwo(self) {
                 LookupResult::Output(_) => None,
                 LookupResult::Load { load, continuation } => Some((load, |result| {
@@ -554,28 +573,33 @@ impl<R: gimli::Reader> Context<R> {
     }
 }
 
-struct UnitRange {
+pub(crate) struct UnitRange {
     unit_id: usize,
     max_end: u64,
     range: gimli::Range,
 }
 
-struct ResUnit<R: gimli::Reader> {
+pub(crate) struct ResUnit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
-    lang: Option<gimli::DwLang>,
+    pub(crate) lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, Error>>,
     funcs: LazyCell<Result<Functions<R>, Error>>,
     dwo: LazyCell<Result<Option<Box<(Arc<gimli::Dwarf<R>>, gimli::Unit<R>)>>, Error>>,
 }
 
-struct SupUnit<R: gimli::Reader> {
+pub(crate) struct SupUnit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
 }
 
-impl<R: gimli::Reader> Context<R> {
-    fn parse_units(sections: &gimli::Dwarf<R>) -> Result<(Vec<UnitRange>, Vec<ResUnit<R>>), Error> {
+pub(crate) struct ResUnits<R: gimli::Reader> {
+    ranges: Box<[UnitRange]>,
+    units: Box<[ResUnit<R>]>,
+}
+
+impl<R: gimli::Reader> ResUnits<R> {
+    pub(crate) fn parse(sections: &gimli::Dwarf<R>) -> Result<Self, Error> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -737,10 +761,45 @@ impl<R: gimli::Reader> Context<R> {
             i.max_end = max;
         }
 
-        Ok((unit_ranges, res_units))
+        Ok(ResUnits {
+            ranges: unit_ranges.into_boxed_slice(),
+            units: res_units.into_boxed_slice(),
+        })
     }
 
-    fn parse_sup(sections: &gimli::Dwarf<R>) -> Result<Vec<SupUnit<R>>, Error> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &ResUnit<R>> {
+        self.units.iter()
+    }
+
+    pub(crate) fn find_offset(
+        &self,
+        offset: gimli::DebugInfoOffset<R::Offset>,
+    ) -> Result<&gimli::Unit<R>, Error> {
+        match self
+            .units
+            .binary_search_by_key(&offset.0, |unit| unit.offset.0)
+        {
+            // There is never a DIE at the unit offset or before the first unit.
+            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
+            Err(i) => Ok(&self.units[i - 1].dw_unit),
+        }
+    }
+}
+
+pub(crate) struct SupUnits<R: gimli::Reader> {
+    units: Box<[SupUnit<R>]>,
+}
+
+impl<R: gimli::Reader> Default for SupUnits<R> {
+    fn default() -> Self {
+        SupUnits {
+            units: Box::default(),
+        }
+    }
+}
+
+impl<R: gimli::Reader> SupUnits<R> {
+    pub(crate) fn parse(sections: &gimli::Dwarf<R>) -> Result<Self, Error> {
         let mut sup_units = Vec::new();
         let mut units = sections.units();
         while let Some(header) = units.next()? {
@@ -754,9 +813,27 @@ impl<R: gimli::Reader> Context<R> {
             };
             sup_units.push(SupUnit { dw_unit, offset });
         }
-        Ok(sup_units)
+        Ok(SupUnits {
+            units: sup_units.into_boxed_slice(),
+        })
     }
 
+    pub(crate) fn find_offset(
+        &self,
+        offset: gimli::DebugInfoOffset<R::Offset>,
+    ) -> Result<&gimli::Unit<R>, Error> {
+        match self
+            .units
+            .binary_search_by_key(&offset.0, |unit| unit.offset.0)
+        {
+            // There is never a DIE at the unit offset or before the first unit.
+            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
+            Err(i) => Ok(&self.units[i - 1].dw_unit),
+        }
+    }
+}
+
+impl<R: gimli::Reader> Context<R> {
     // Find the unit containing the given offset, and convert the offset into a unit offset.
     fn find_unit(
         &self,
@@ -764,26 +841,8 @@ impl<R: gimli::Reader> Context<R> {
         file: DebugFile,
     ) -> Result<(&gimli::Unit<R>, gimli::UnitOffset<R::Offset>), Error> {
         let unit = match file {
-            DebugFile::Primary => {
-                match self
-                    .units
-                    .binary_search_by_key(&offset.0, |unit| unit.offset.0)
-                {
-                    // There is never a DIE at the unit offset or before the first unit.
-                    Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
-                    Err(i) => &self.units[i - 1].dw_unit,
-                }
-            }
-            DebugFile::Supplementary => {
-                match self
-                    .sup_units
-                    .binary_search_by_key(&offset.0, |unit| unit.offset.0)
-                {
-                    // There is never a DIE at the unit offset or before the first unit.
-                    Ok(_) | Err(0) => return Err(gimli::Error::NoEntryAtGivenOffset),
-                    Err(i) => &self.sup_units[i - 1].dw_unit,
-                }
-            }
+            DebugFile::Primary => self.units.find_offset(offset)?,
+            DebugFile::Supplementary => self.sup_units.find_offset(offset)?,
             DebugFile::Dwo => return Err(gimli::Error::NoEntryAtGivenOffset),
         };
 
@@ -953,7 +1012,7 @@ where
 }
 
 impl<R: gimli::Reader> ResUnit<R> {
-    fn dwarf_and_unit_dwo<'unit, 'ctx: 'unit>(
+    pub(crate) fn dwarf_and_unit_dwo<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
@@ -1032,7 +1091,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         }
     }
 
-    fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
+    pub(crate) fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
         // NB: line information is always stored in the main debug file so this does not need
         // to handle DWOs.
         let ilnp = match self.dw_unit.line_program {
@@ -1057,7 +1116,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             .map_err(Error::clone)
     }
 
-    fn parse_functions<'unit, 'ctx: 'unit>(
+    pub(crate) fn parse_functions<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
@@ -1067,7 +1126,8 @@ impl<R: gimli::Reader> ResUnit<R> {
             self.parse_functions_dwarf_and_unit(unit, sections)
         })
     }
-    fn parse_inlined_functions<'unit, 'ctx: 'unit>(
+
+    pub(crate) fn parse_inlined_functions<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
@@ -1081,7 +1141,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         })
     }
 
-    fn find_location(
+    pub(crate) fn find_location(
         &self,
         probe: u64,
         sections: &gimli::Dwarf<R>,
@@ -1097,7 +1157,7 @@ impl<R: gimli::Reader> ResUnit<R> {
     }
 
     #[inline]
-    fn find_location_range(
+    pub(crate) fn find_location_range(
         &self,
         probe_low: u64,
         probe_high: u64,
@@ -1109,7 +1169,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         lines.location_ranges(probe_low, probe_high).map(Some)
     }
 
-    fn find_function_or_location<'unit, 'ctx: 'unit>(
+    pub(crate) fn find_function_or_location<'unit, 'ctx: 'unit>(
         &'unit self,
         probe: u64,
         ctx: &'ctx Context<R>,
@@ -1152,19 +1212,6 @@ pub struct LocationRangeIter<'ctx, R: gimli::Reader> {
 }
 
 impl<'ctx, R: gimli::Reader> LocationRangeIter<'ctx, R> {
-    #[inline]
-    fn new(ctx: &'ctx Context<R>, probe_low: u64, probe_high: u64) -> Result<Self, Error> {
-        let sections = &ctx.sections;
-        let unit_iter = ctx.find_units_range(probe_low, probe_high);
-        Ok(Self {
-            unit_iter: Box::new(unit_iter),
-            iter: None,
-            probe_low,
-            probe_high,
-            sections,
-        })
-    }
-
     fn next_loc(&mut self) -> Result<Option<(u64, u64, Location<'ctx>)>, Error> {
         loop {
             let iter = self.iter.take();
