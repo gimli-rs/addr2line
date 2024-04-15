@@ -705,12 +705,9 @@ impl<R: gimli::Reader> Context<R> {
                         .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), sections))
                         .as_ref()
                     {
-                        for sequence in lines.sequences.iter() {
+                        for range in lines.ranges() {
                             unit_ranges.push(UnitRange {
-                                range: gimli::Range {
-                                    begin: sequence.start,
-                                    end: sequence.end,
-                                },
+                                range,
                                 unit_id,
                                 max_end: 0,
                             })
@@ -797,13 +794,13 @@ impl<R: gimli::Reader> Context<R> {
     }
 }
 
-struct Lines {
+pub(crate) struct Lines {
     files: Box<[String]>,
     sequences: Box<[LineSequence]>,
 }
 
 impl Lines {
-    fn parse<R: gimli::Reader>(
+    pub(crate) fn parse<R: gimli::Reader>(
         dw_unit: &gimli::Unit<R>,
         ilnp: gimli::IncompleteLineProgram<R, R::Offset>,
         sections: &gimli::Dwarf<R>,
@@ -871,6 +868,25 @@ impl Lines {
             files: files.into_boxed_slice(),
             sequences: sequences.into_boxed_slice(),
         })
+    }
+
+    pub(crate) fn ranges(&self) -> impl Iterator<Item = gimli::Range> + '_ {
+        self.sequences.iter().map(|sequence| gimli::Range {
+            begin: sequence.start,
+            end: sequence.end,
+        })
+    }
+
+    pub(crate) fn location_ranges(
+        &self,
+        probe_low: u64,
+        probe_high: u64,
+    ) -> Result<LineLocationRangeIter<'_>, Error> {
+        LineLocationRangeIter::new(self, probe_low, probe_high)
+    }
+
+    pub(crate) fn file(&self, index: u64) -> Option<&str> {
+        self.files.get(index as usize).map(String::as_str)
     }
 }
 
@@ -1215,13 +1231,13 @@ impl<R: gimli::Reader> ResUnit<R> {
         probe: u64,
         sections: &gimli::Dwarf<R>,
     ) -> Result<Option<Location<'_>>, Error> {
-        if let Some(mut iter) = LocationRangeUnitIter::new(self, sections, probe, probe + 1)? {
-            match iter.next() {
-                None => Ok(None),
-                Some((_addr, _len, loc)) => Ok(Some(loc)),
-            }
-        } else {
-            Ok(None)
+        let Some(lines) = self.parse_lines(sections)? else {
+            return Ok(None);
+        };
+        let mut iter = lines.location_ranges(probe, probe + 1)?;
+        match iter.next() {
+            None => Ok(None),
+            Some((_addr, _len, loc)) => Ok(Some(loc)),
         }
     }
 
@@ -1231,8 +1247,11 @@ impl<R: gimli::Reader> ResUnit<R> {
         probe_low: u64,
         probe_high: u64,
         sections: &gimli::Dwarf<R>,
-    ) -> Result<Option<LocationRangeUnitIter<'_>>, Error> {
-        LocationRangeUnitIter::new(self, sections, probe_low, probe_high)
+    ) -> Result<Option<LineLocationRangeIter<'_>>, Error> {
+        let Some(lines) = self.parse_lines(sections)? else {
+            return Ok(None);
+        };
+        lines.location_ranges(probe_low, probe_high).map(Some)
     }
 
     fn find_function_or_location<'unit, 'ctx: 'unit>(
@@ -1270,7 +1289,7 @@ impl<R: gimli::Reader> ResUnit<R> {
 /// Iterator over `Location`s in a range of addresses, returned by `Context::find_location_range`.
 pub struct LocationRangeIter<'ctx, R: gimli::Reader> {
     unit_iter: Box<dyn Iterator<Item = (&'ctx ResUnit<R>, &'ctx gimli::Range)> + 'ctx>,
-    iter: Option<LocationRangeUnitIter<'ctx>>,
+    iter: Option<LineLocationRangeIter<'ctx>>,
 
     probe_low: u64,
     probe_high: u64,
@@ -1345,7 +1364,7 @@ where
     }
 }
 
-struct LocationRangeUnitIter<'ctx> {
+pub(crate) struct LineLocationRangeIter<'ctx> {
     lines: &'ctx Lines,
     seqs: &'ctx [LineSequence],
     seq_idx: usize,
@@ -1353,57 +1372,46 @@ struct LocationRangeUnitIter<'ctx> {
     probe_high: u64,
 }
 
-impl<'ctx> LocationRangeUnitIter<'ctx> {
-    fn new<R: gimli::Reader>(
-        resunit: &'ctx ResUnit<R>,
-        sections: &gimli::Dwarf<R>,
-        probe_low: u64,
-        probe_high: u64,
-    ) -> Result<Option<Self>, Error> {
-        let lines = resunit.parse_lines(sections)?;
+impl<'ctx> LineLocationRangeIter<'ctx> {
+    fn new(lines: &'ctx Lines, probe_low: u64, probe_high: u64) -> Result<Self, Error> {
+        // Find index for probe_low.
+        let seq_idx = lines.sequences.binary_search_by(|sequence| {
+            if probe_low < sequence.start {
+                Ordering::Greater
+            } else if probe_low >= sequence.end {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        });
+        let seq_idx = match seq_idx {
+            Ok(x) => x,
+            Err(0) => 0, // probe below sequence, but range could overlap
+            Err(_) => lines.sequences.len(),
+        };
 
-        if let Some(lines) = lines {
-            // Find index for probe_low.
-            let seq_idx = lines.sequences.binary_search_by(|sequence| {
-                if probe_low < sequence.start {
-                    Ordering::Greater
-                } else if probe_low >= sequence.end {
-                    Ordering::Less
-                } else {
-                    Ordering::Equal
-                }
-            });
-            let seq_idx = match seq_idx {
+        let row_idx = if let Some(seq) = lines.sequences.get(seq_idx) {
+            let idx = seq.rows.binary_search_by(|row| row.address.cmp(&probe_low));
+            match idx {
                 Ok(x) => x,
                 Err(0) => 0, // probe below sequence, but range could overlap
-                Err(_) => lines.sequences.len(),
-            };
-
-            let row_idx = if let Some(seq) = lines.sequences.get(seq_idx) {
-                let idx = seq.rows.binary_search_by(|row| row.address.cmp(&probe_low));
-                match idx {
-                    Ok(x) => x,
-                    Err(0) => 0, // probe below sequence, but range could overlap
-                    Err(x) => x - 1,
-                }
-            } else {
-                0
-            };
-
-            Ok(Some(Self {
-                lines,
-                seqs: &*lines.sequences,
-                seq_idx,
-                row_idx,
-                probe_high,
-            }))
+                Err(x) => x - 1,
+            }
         } else {
-            Ok(None)
-        }
+            0
+        };
+
+        Ok(Self {
+            lines,
+            seqs: &*lines.sequences,
+            seq_idx,
+            row_idx,
+            probe_high,
+        })
     }
 }
 
-impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
+impl<'ctx> Iterator for LineLocationRangeIter<'ctx> {
     type Item = (u64, u64, Location<'ctx>);
 
     fn next(&mut self) -> Option<(u64, u64, Location<'ctx>)> {
@@ -1610,7 +1618,7 @@ where
         };
         if let Some(call_file) = func.call_file {
             if let Some(lines) = frames.unit.parse_lines(frames.sections)? {
-                next.file = lines.files.get(call_file as usize).map(String::as_str);
+                next.file = lines.file(call_file);
             }
         }
         frames.next = Some(next);
