@@ -388,29 +388,27 @@ impl<R: gimli::Reader> Context<R> {
                     Err(e) => Err(e),
                     Ok((Some(function), location)) => {
                         let inlined_functions = function.find_inlined_functions(probe);
-                        Ok(FrameIter(FrameIterState::Frames(FrameIterFrames {
+                        Ok(FrameIter::new_frames(
                             unit,
-                            sections: &self.sections,
+                            &self.sections,
                             function,
                             inlined_functions,
-                            next: location,
-                        })))
+                            location,
+                        ))
                     }
-                    Ok((None, Some(location))) => {
-                        Ok(FrameIter(FrameIterState::Location(Some(location))))
-                    }
+                    Ok((None, Some(location))) => Ok(FrameIter::new_location(location)),
                     Ok((None, None)) => match units_iter.next() {
                         Some(next_unit) => {
                             return ControlFlow::Continue(
                                 next_unit.find_function_or_location(probe, self),
                             );
                         }
-                        None => Ok(FrameIter(FrameIterState::Empty)),
+                        None => Ok(FrameIter::new_empty()),
                     },
                 })
             })
         } else {
-            LoopingLookup::new_complete(Ok(FrameIter(FrameIterState::Empty)))
+            LoopingLookup::new_complete(Ok(FrameIter::new_empty()))
         }
     }
 
@@ -745,6 +743,30 @@ impl<'ctx, R> FrameIter<'ctx, R>
 where
     R: gimli::Reader + 'ctx,
 {
+    pub(crate) fn new_empty() -> Self {
+        FrameIter(FrameIterState::Empty)
+    }
+
+    pub(crate) fn new_location(location: Location<'ctx>) -> Self {
+        FrameIter(FrameIterState::Location(Some(location)))
+    }
+
+    pub(crate) fn new_frames(
+        unit: &'ctx ResUnit<R>,
+        sections: &'ctx gimli::Dwarf<R>,
+        function: &'ctx Function<R>,
+        inlined_functions: maybe_small::Vec<&'ctx InlinedFunction<R>>,
+        location: Option<Location<'ctx>>,
+    ) -> Self {
+        FrameIter(FrameIterState::Frames(FrameIterFrames {
+            unit,
+            sections,
+            function,
+            inlined_functions: inlined_functions.into_iter().rev(),
+            next: location,
+        }))
+    }
+
     /// Advances the iterator and returns the next frame.
     pub fn next(&mut self) -> Result<Option<Frame<'ctx, R>>, Error> {
         let frames = match &mut self.0 {

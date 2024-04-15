@@ -1,7 +1,6 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::iter;
 
 use crate::lazy::LazyCell;
 use crate::maybe_small;
@@ -316,7 +315,7 @@ impl<R: gimli::Reader> Function<R> {
     pub(crate) fn find_inlined_functions(
         &self,
         probe: u64,
-    ) -> iter::Rev<maybe_small::IntoIter<&InlinedFunction<R>>> {
+    ) -> maybe_small::Vec<&InlinedFunction<R>> {
         // `inlined_functions` is ordered from outside to inside.
         let mut inlined_functions = maybe_small::Vec::new();
         let mut inlined_addresses = &self.inlined_addresses[..];
@@ -347,7 +346,7 @@ impl<R: gimli::Reader> Function<R> {
                 break;
             }
         }
-        inlined_functions.into_iter().rev()
+        inlined_functions
     }
 }
 
