@@ -20,9 +20,9 @@ pub struct SplitDwarfLoad<R> {
 
 /// Operations that consult debug information may require additional files
 /// to be loaded if split DWARF is being used. This enum returns the result
-/// of the operation in the `Break` variant, or information about the split
+/// of the operation in the `Output` variant, or information about the split
 /// DWARF that is required and a continuation to invoke once it is available
-/// in the `Continue` variant.
+/// in the `Load` variant.
 ///
 /// This enum is intended to be used in a loop like so:
 /// ```no_run
