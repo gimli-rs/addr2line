@@ -158,7 +158,10 @@ impl<L: LookupContinuation> LookupResult<L> {
         }
     }
 
-    fn map<T, F: FnOnce(L::Output) -> T>(self, f: F) -> LookupResult<MappedLookup<T, L, F>> {
+    pub(crate) fn map<T, F: FnOnce(L::Output) -> T>(
+        self,
+        f: F,
+    ) -> LookupResult<MappedLookup<T, L, F>> {
         match self {
             LookupResult::Output(t) => LookupResult::Output(f(t)),
             LookupResult::Load { load, continuation } => LookupResult::Load {
@@ -171,7 +174,7 @@ impl<L: LookupContinuation> LookupResult<L> {
         }
     }
 
-    fn unwrap(self) -> L::Output {
+    pub(crate) fn unwrap(self) -> L::Output {
         match self {
             LookupResult::Output(t) => t,
             LookupResult::Load { .. } => unreachable!("Internal API misuse"),
@@ -525,7 +528,7 @@ pub struct SplitDwarfLoad<R> {
     pub parent: Arc<gimli::Dwarf<R>>,
 }
 
-struct SimpleLookup<T, R, F>
+pub(crate) struct SimpleLookup<T, R, F>
 where
     F: FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> T,
     R: gimli::Reader,
@@ -539,11 +542,14 @@ where
     F: FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> T,
     R: gimli::Reader,
 {
-    fn new_complete(t: F::Output) -> LookupResult<SimpleLookup<T, R, F>> {
+    pub(crate) fn new_complete(t: F::Output) -> LookupResult<SimpleLookup<T, R, F>> {
         LookupResult::Output(t)
     }
 
-    fn new_needs_load(load: SplitDwarfLoad<R>, f: F) -> LookupResult<SimpleLookup<T, R, F>> {
+    pub(crate) fn new_needs_load(
+        load: SplitDwarfLoad<R>,
+        f: F,
+    ) -> LookupResult<SimpleLookup<T, R, F>> {
         LookupResult::Load {
             load,
             continuation: SimpleLookup {
@@ -567,7 +573,7 @@ where
     }
 }
 
-struct MappedLookup<T, L, F>
+pub(crate) struct MappedLookup<T, L, F>
 where
     L: LookupContinuation,
     F: FnOnce(L::Output) -> T,
@@ -610,7 +616,7 @@ where
 /// continuation or a final result is produced. And finally, the impl of
 /// `LookupContinuation::resume` will call `new_lookup` each time the
 /// computation is resumed.
-struct LoopingLookup<T, L, F>
+pub(crate) struct LoopingLookup<T, L, F>
 where
     L: LookupContinuation,
     F: FnMut(L::Output) -> ControlFlow<T, LookupResult<L>>,
@@ -624,11 +630,11 @@ where
     L: LookupContinuation,
     F: FnMut(L::Output) -> ControlFlow<T, LookupResult<L>>,
 {
-    fn new_complete(t: T) -> LookupResult<Self> {
+    pub(crate) fn new_complete(t: T) -> LookupResult<Self> {
         LookupResult::Output(t)
     }
 
-    fn new_lookup(mut r: LookupResult<L>, mut mutator: F) -> LookupResult<Self> {
+    pub(crate) fn new_lookup(mut r: LookupResult<L>, mut mutator: F) -> LookupResult<Self> {
         // Drive the loop eagerly so that we only ever have to represent one state
         // (the r == ControlFlow::Continue state) in LoopingLookup.
         loop {
