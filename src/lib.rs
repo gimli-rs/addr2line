@@ -46,7 +46,7 @@ use alloc::sync::Arc;
 use core::ops::ControlFlow;
 use core::u64;
 
-use crate::function::{Function, Functions, InlinedFunction};
+use crate::function::{Function, Functions, InlinedFunction, LazyFunctions};
 use crate::line::{LineLocationRangeIter, Lines};
 use crate::lookup::{LoopingLookup, SimpleLookup};
 use crate::unit::{ResUnit, ResUnits, SupUnits};

@@ -6,6 +6,25 @@ use crate::lazy::LazyResult;
 use crate::maybe_small;
 use crate::{Context, DebugFile, Error, RangeAttributes};
 
+pub(crate) struct LazyFunctions<R: gimli::Reader>(LazyResult<Functions<R>>);
+
+impl<R: gimli::Reader> LazyFunctions<R> {
+    pub(crate) fn new() -> Self {
+        LazyFunctions(LazyResult::new())
+    }
+
+    pub(crate) fn borrow(
+        &self,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<&Functions<R>, Error> {
+        self.0
+            .borrow_with(|| Functions::parse(unit, sections))
+            .as_ref()
+            .map_err(Error::clone)
+    }
+}
+
 pub(crate) struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
     pub(crate) functions: Box<[LazyFunction<R>]>,
@@ -76,10 +95,7 @@ pub(crate) struct InlinedFunction<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Functions<R> {
-    pub(crate) fn parse(
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<Functions<R>, Error> {
+    fn parse(unit: &gimli::Unit<R>, sections: &gimli::Dwarf<R>) -> Result<Functions<R>, Error> {
         let mut functions = Vec::new();
         let mut addresses = Vec::new();
         let mut entries = unit.entries_raw(None)?;
@@ -185,7 +201,7 @@ impl<R: gimli::Reader> Functions<R> {
 }
 
 impl<R: gimli::Reader> Function<R> {
-    pub(crate) fn parse(
+    fn parse(
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         file: DebugFile,
         unit: &gimli::Unit<R>,

@@ -5,8 +5,8 @@ use core::cmp;
 
 use crate::lazy::LazyResult;
 use crate::{
-    Context, DebugFile, Error, Function, Functions, LineLocationRangeIter, Lines, Location,
-    LookupContinuation, LookupResult, RangeAttributes, SimpleLookup, SplitDwarfLoad,
+    Context, DebugFile, Error, Function, Functions, LazyFunctions, LineLocationRangeIter, Lines,
+    Location, LookupContinuation, LookupResult, RangeAttributes, SimpleLookup, SplitDwarfLoad,
 };
 
 pub(crate) struct UnitRange {
@@ -20,7 +20,7 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
     dw_unit: gimli::Unit<R>,
     pub(crate) lang: Option<gimli::DwLang>,
     lines: LazyResult<Lines>,
-    funcs: LazyResult<Functions<R>>,
+    functions: LazyFunctions<R>,
     dwo: LazyResult<Option<Box<DwoUnit<R>>>>,
 }
 
@@ -119,17 +119,6 @@ impl<R: gimli::Reader> ResUnit<R> {
             .map_err(Error::clone)
     }
 
-    fn parse_functions_dwarf_and_unit(
-        &self,
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<&Functions<R>, Error> {
-        self.funcs
-            .borrow_with(|| Functions::parse(unit, sections))
-            .as_ref()
-            .map_err(Error::clone)
-    }
-
     pub(crate) fn parse_functions<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
@@ -137,7 +126,7 @@ impl<R: gimli::Reader> ResUnit<R> {
     {
         self.dwarf_and_unit(ctx).map(move |r| {
             let (_file, sections, unit) = r?;
-            self.parse_functions_dwarf_and_unit(unit, sections)
+            self.functions.borrow(unit, sections)
         })
     }
 
@@ -147,10 +136,8 @@ impl<R: gimli::Reader> ResUnit<R> {
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
         self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
-            self.funcs
-                .borrow_with(|| Functions::parse(unit, sections))
-                .as_ref()
-                .map_err(Error::clone)?
+            self.functions
+                .borrow(unit, sections)?
                 .parse_inlined_functions(file, unit, ctx, sections)
         })
     }
@@ -195,7 +182,7 @@ impl<R: gimli::Reader> ResUnit<R> {
     > {
         self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
-            let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
+            let functions = self.functions.borrow(unit, sections)?;
             let function = match functions.find_address(probe) {
                 Some(address) => {
                     let function_index = functions.addresses[address].function;
@@ -362,7 +349,7 @@ impl<R: gimli::Reader> ResUnits<R> {
                 dw_unit,
                 lang,
                 lines,
-                funcs: LazyResult::new(),
+                functions: LazyFunctions::new(),
                 dwo: LazyResult::new(),
             });
         }
