@@ -3,7 +3,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp;
 
-use crate::lazy::LazyCell;
+use crate::lazy::LazyResult;
 use crate::{
     Context, DebugFile, Error, Function, Functions, LineLocationRangeIter, Lines, Location,
     LookupContinuation, LookupResult, RangeAttributes, SimpleLookup, SplitDwarfLoad,
@@ -19,10 +19,12 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
     pub(crate) lang: Option<gimli::DwLang>,
-    lines: LazyCell<Result<Lines, Error>>,
-    funcs: LazyCell<Result<Functions<R>, Error>>,
-    dwo: LazyCell<Result<Option<Box<(Arc<gimli::Dwarf<R>>, gimli::Unit<R>)>>, Error>>,
+    lines: LazyResult<Lines>,
+    funcs: LazyResult<Functions<R>>,
+    dwo: LazyResult<Option<Box<DwoUnit<R>>>>,
 }
+
+type UnitRef<'unit, R> = (DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>);
 
 impl<R: gimli::Reader> ResUnit<R> {
     pub(crate) fn dwarf_and_unit_dwo<'unit, 'ctx: 'unit>(
@@ -30,17 +32,14 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
         SimpleLookup<
-            Result<(DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
+            Result<UnitRef<'unit, R>, Error>,
             R,
-            impl FnOnce(
-                Option<Arc<gimli::Dwarf<R>>>,
-            )
-                -> Result<(DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>), Error>,
+            impl FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> Result<UnitRef<'unit, R>, Error>,
         >,
     > {
         loop {
             break SimpleLookup::new_complete(match self.dwo.borrow() {
-                Some(Ok(Some(v))) => Ok((DebugFile::Dwo, &*v.0, &v.1)),
+                Some(Ok(Some(dwo))) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
                 Some(Ok(None)) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
                 Some(Err(e)) => Err(*e),
                 None => {
@@ -83,7 +82,10 @@ impl<R: gimli::Reader> ResUnit<R> {
 
                         let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
                         dwo_unit.copy_relocated_attributes(&self.dw_unit);
-                        Ok(Some(Box::new((dwo_dwarf, dwo_unit))))
+                        Ok(Some(Box::new(DwoUnit {
+                            sections: dwo_dwarf,
+                            dw_unit: dwo_unit,
+                        })))
                     };
 
                     return SimpleLookup::new_needs_load(
@@ -94,7 +96,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                             parent: ctx.sections.clone(),
                         },
                         move |dwo_dwarf| match self.dwo.borrow_with(|| process_dwo(dwo_dwarf)) {
-                            Ok(Some(v)) => Ok((DebugFile::Dwo, &*v.0, &v.1)),
+                            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
                             Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
                             Err(e) => Err(*e),
                         },
@@ -341,7 +343,7 @@ impl<R: gimli::Reader> ResUnits<R> {
                 }
             }
 
-            let lines = LazyCell::new();
+            let lines = LazyResult::new();
             if !have_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
@@ -366,8 +368,8 @@ impl<R: gimli::Reader> ResUnits<R> {
                 dw_unit,
                 lang,
                 lines,
-                funcs: LazyCell::new(),
-                dwo: LazyCell::new(),
+                funcs: LazyResult::new(),
+                dwo: LazyResult::new(),
             });
         }
 
@@ -487,6 +489,12 @@ impl<R: gimli::Reader> ResUnits<R> {
             sections,
         })
     }
+}
+
+/// A DWO unit has its own DWARF sections.
+struct DwoUnit<R: gimli::Reader> {
+    sections: Arc<gimli::Dwarf<R>>,
+    dw_unit: gimli::Unit<R>,
 }
 
 pub(crate) struct SupUnit<R: gimli::Reader> {
