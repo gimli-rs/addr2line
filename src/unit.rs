@@ -5,8 +5,9 @@ use core::cmp;
 
 use crate::lazy::LazyResult;
 use crate::{
-    Context, DebugFile, Error, Function, Functions, LazyFunctions, LineLocationRangeIter, Lines,
-    Location, LookupContinuation, LookupResult, RangeAttributes, SimpleLookup, SplitDwarfLoad,
+    Context, DebugFile, Error, Function, Functions, LazyFunctions, LazyLines,
+    LineLocationRangeIter, Lines, Location, LookupContinuation, LookupResult, RangeAttributes,
+    SimpleLookup, SplitDwarfLoad,
 };
 
 pub(crate) struct UnitRange {
@@ -19,7 +20,7 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
     pub(crate) lang: Option<gimli::DwLang>,
-    lines: LazyResult<Lines>,
+    lines: LazyLines,
     functions: LazyFunctions<R>,
     dwo: LazyResult<Option<Box<DwoUnit<R>>>>,
 }
@@ -112,11 +113,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             Some(ref ilnp) => ilnp,
             None => return Ok(None),
         };
-        self.lines
-            .borrow_with(|| Lines::parse(&self.dw_unit, ilnp.clone(), sections))
-            .as_ref()
-            .map(Some)
-            .map_err(Error::clone)
+        self.lines.borrow(&self.dw_unit, ilnp, sections).map(Some)
     }
 
     pub(crate) fn parse_functions<'unit, 'ctx: 'unit>(
@@ -324,15 +321,12 @@ impl<R: gimli::Reader> ResUnits<R> {
                 }
             }
 
-            let lines = LazyResult::new();
+            let lines = LazyLines::new();
             if !have_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit.line_program {
-                    if let Ok(lines) = lines
-                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), sections))
-                        .as_ref()
-                    {
+                    if let Ok(lines) = lines.borrow(&dw_unit, ilnp, sections) {
                         for range in lines.ranges() {
                             unit_ranges.push(UnitRange {
                                 range,
