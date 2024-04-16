@@ -8,8 +8,7 @@ use crate::{Context, DebugFile, Error, RangeAttributes};
 
 pub(crate) struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
-    #[allow(clippy::type_complexity)]
-    pub(crate) functions: Box<[(gimli::UnitOffset<R::Offset>, LazyResult<Function<R>>)]>,
+    pub(crate) functions: Box<[LazyFunction<R>]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     pub(crate) addresses: Box<[FunctionAddress]>,
 }
@@ -23,6 +22,33 @@ pub(crate) struct FunctionAddress {
     range: gimli::Range,
     /// An index into `Functions::functions`.
     pub(crate) function: usize,
+}
+
+pub(crate) struct LazyFunction<R: gimli::Reader> {
+    dw_die_offset: gimli::UnitOffset<R::Offset>,
+    lazy: LazyResult<Function<R>>,
+}
+
+impl<R: gimli::Reader> LazyFunction<R> {
+    fn new(dw_die_offset: gimli::UnitOffset<R::Offset>) -> Self {
+        LazyFunction {
+            dw_die_offset,
+            lazy: LazyResult::new(),
+        }
+    }
+
+    pub(crate) fn borrow(
+        &self,
+        file: DebugFile,
+        unit: &gimli::Unit<R>,
+        ctx: &Context<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<&Function<R>, Error> {
+        self.lazy
+            .borrow_with(|| Function::parse(self.dw_die_offset, file, unit, ctx, sections))
+            .as_ref()
+            .map_err(Error::clone)
+    }
 }
 
 pub(crate) struct Function<R: gimli::Reader> {
@@ -106,7 +132,7 @@ impl<R: gimli::Reader> Functions<R> {
                         });
                     })?;
                     if has_address {
-                        functions.push((dw_die_offset, LazyResult::new()));
+                        functions.push(LazyFunction::new(dw_die_offset));
                     }
                 } else {
                     entries.skip_attributes(abbrev.attributes())?;
@@ -152,11 +178,7 @@ impl<R: gimli::Reader> Functions<R> {
         sections: &gimli::Dwarf<R>,
     ) -> Result<(), Error> {
         for function in &*self.functions {
-            function
-                .1
-                .borrow_with(|| Function::parse(function.0, file, unit, ctx, sections))
-                .as_ref()
-                .map_err(Error::clone)?;
+            function.borrow(file, unit, ctx, sections)?;
         }
         Ok(())
     }

@@ -199,13 +199,8 @@ impl<R: gimli::Reader> ResUnit<R> {
             let function = match functions.find_address(probe) {
                 Some(address) => {
                     let function_index = functions.addresses[address].function;
-                    let (offset, ref function) = functions.functions[function_index];
-                    Some(
-                        function
-                            .borrow_with(|| Function::parse(offset, file, unit, ctx, sections))
-                            .as_ref()
-                            .map_err(Error::clone)?,
-                    )
+                    let function = &functions.functions[function_index];
+                    Some(function.borrow(file, unit, ctx, sections)?)
                 }
                 None => None,
             };
