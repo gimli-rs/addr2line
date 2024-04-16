@@ -236,7 +236,7 @@ impl<R: gimli::Reader> Context<R> {
                     ControlFlow::Break(match r {
                         Ok((Some(_), _)) | Ok((_, Some(_))) => {
                             let (_file, sections, unit) = unit
-                                .dwarf_and_unit_dwo(self)
+                                .dwarf_and_unit(self)
                                 // We've already been through both error cases here to get to this point.
                                 .unwrap()
                                 .unwrap();
@@ -363,7 +363,7 @@ impl<R: gimli::Reader> Context<R> {
     > {
         self.units
             .find(probe)
-            .filter_map(move |unit| match unit.dwarf_and_unit_dwo(self) {
+            .filter_map(move |unit| match unit.dwarf_and_unit(self) {
                 LookupResult::Output(_) => None,
                 LookupResult::Load { load, continuation } => Some((load, |result| {
                     continuation.resume(result).unwrap().map(|_| ())

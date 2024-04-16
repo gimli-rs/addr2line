@@ -27,7 +27,10 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
 type UnitRef<'unit, R> = (DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>);
 
 impl<R: gimli::Reader> ResUnit<R> {
-    pub(crate) fn dwarf_and_unit_dwo<'unit, 'ctx: 'unit>(
+    /// Returns the DWARF sections and the unit.
+    ///
+    /// Loads the DWO unit if necessary.
+    pub(crate) fn dwarf_and_unit<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
@@ -37,73 +40,69 @@ impl<R: gimli::Reader> ResUnit<R> {
             impl FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> Result<UnitRef<'unit, R>, Error>,
         >,
     > {
-        loop {
-            break SimpleLookup::new_complete(match self.dwo.borrow() {
-                Some(Ok(Some(dwo))) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
-                Some(Ok(None)) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
-                Some(Err(e)) => Err(*e),
-                None => {
-                    let dwo_id = match self.dw_unit.dwo_id {
-                        None => {
-                            self.dwo.borrow_with(|| Ok(None));
-                            continue;
-                        }
-                        Some(dwo_id) => dwo_id,
-                    };
+        let map_dwo = move |dwo: &'unit Result<Option<Box<DwoUnit<R>>>, Error>| match dwo {
+            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
+            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
+            Err(e) => Err(*e),
+        };
+        let complete = |dwo| SimpleLookup::new_complete(map_dwo(dwo));
 
-                    let comp_dir = self.dw_unit.comp_dir.clone();
-
-                    let dwo_name = self.dw_unit.dwo_name().and_then(|s| {
-                        if let Some(s) = s {
-                            Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
-                        } else {
-                            Ok(None)
-                        }
-                    });
-
-                    let path = match dwo_name {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.dwo.borrow_with(|| Err(e));
-                            continue;
-                        }
-                    };
-
-                    let process_dwo = move |dwo_dwarf: Option<Arc<gimli::Dwarf<R>>>| {
-                        let dwo_dwarf = match dwo_dwarf {
-                            None => return Ok(None),
-                            Some(dwo_dwarf) => dwo_dwarf,
-                        };
-                        let mut dwo_units = dwo_dwarf.units();
-                        let dwo_header = match dwo_units.next()? {
-                            Some(dwo_header) => dwo_header,
-                            None => return Ok(None),
-                        };
-
-                        let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
-                        dwo_unit.copy_relocated_attributes(&self.dw_unit);
-                        Ok(Some(Box::new(DwoUnit {
-                            sections: dwo_dwarf,
-                            dw_unit: dwo_unit,
-                        })))
-                    };
-
-                    return SimpleLookup::new_needs_load(
-                        SplitDwarfLoad {
-                            dwo_id,
-                            comp_dir,
-                            path,
-                            parent: ctx.sections.clone(),
-                        },
-                        move |dwo_dwarf| match self.dwo.borrow_with(|| process_dwo(dwo_dwarf)) {
-                            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
-                            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
-                            Err(e) => Err(*e),
-                        },
-                    );
-                }
-            });
+        if let Some(dwo) = self.dwo.borrow() {
+            return complete(dwo);
         }
+
+        let dwo_id = match self.dw_unit.dwo_id {
+            None => {
+                return complete(self.dwo.borrow_with(|| Ok(None)));
+            }
+            Some(dwo_id) => dwo_id,
+        };
+
+        let comp_dir = self.dw_unit.comp_dir.clone();
+
+        let dwo_name = self.dw_unit.dwo_name().and_then(|s| {
+            if let Some(s) = s {
+                Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
+            } else {
+                Ok(None)
+            }
+        });
+
+        let path = match dwo_name {
+            Ok(v) => v,
+            Err(e) => {
+                return complete(self.dwo.borrow_with(|| Err(e)));
+            }
+        };
+
+        let process_dwo = move |dwo_dwarf: Option<Arc<gimli::Dwarf<R>>>| {
+            let dwo_dwarf = match dwo_dwarf {
+                None => return Ok(None),
+                Some(dwo_dwarf) => dwo_dwarf,
+            };
+            let mut dwo_units = dwo_dwarf.units();
+            let dwo_header = match dwo_units.next()? {
+                Some(dwo_header) => dwo_header,
+                None => return Ok(None),
+            };
+
+            let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
+            dwo_unit.copy_relocated_attributes(&self.dw_unit);
+            Ok(Some(Box::new(DwoUnit {
+                sections: dwo_dwarf,
+                dw_unit: dwo_unit,
+            })))
+        };
+
+        SimpleLookup::new_needs_load(
+            SplitDwarfLoad {
+                dwo_id,
+                comp_dir,
+                path,
+                parent: ctx.sections.clone(),
+            },
+            move |dwo_dwarf| map_dwo(self.dwo.borrow_with(|| process_dwo(dwo_dwarf))),
+        )
     }
 
     pub(crate) fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
@@ -136,7 +135,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
     {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (_file, sections, unit) = r?;
             self.parse_functions_dwarf_and_unit(unit, sections)
         })
@@ -146,7 +145,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
             self.funcs
                 .borrow_with(|| Functions::parse(unit, sections))
@@ -194,7 +193,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             Buf = R,
         >,
     > {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
             let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
             let function = match functions.find_address(probe) {
