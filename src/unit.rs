@@ -5,8 +5,9 @@ use core::cmp;
 
 use crate::lazy::LazyResult;
 use crate::{
-    Context, DebugFile, Error, Function, Functions, LineLocationRangeIter, Lines, Location,
-    LookupContinuation, LookupResult, RangeAttributes, SimpleLookup, SplitDwarfLoad,
+    Context, DebugFile, Error, Function, Functions, LazyFunctions, LazyLines,
+    LineLocationRangeIter, Lines, Location, LookupContinuation, LookupResult, RangeAttributes,
+    SimpleLookup, SplitDwarfLoad,
 };
 
 pub(crate) struct UnitRange {
@@ -19,15 +20,18 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
     pub(crate) lang: Option<gimli::DwLang>,
-    lines: LazyResult<Lines>,
-    funcs: LazyResult<Functions<R>>,
+    lines: LazyLines,
+    functions: LazyFunctions<R>,
     dwo: LazyResult<Option<Box<DwoUnit<R>>>>,
 }
 
 type UnitRef<'unit, R> = (DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>);
 
 impl<R: gimli::Reader> ResUnit<R> {
-    pub(crate) fn dwarf_and_unit_dwo<'unit, 'ctx: 'unit>(
+    /// Returns the DWARF sections and the unit.
+    ///
+    /// Loads the DWO unit if necessary.
+    pub(crate) fn dwarf_and_unit<'unit, 'ctx: 'unit>(
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<
@@ -37,73 +41,69 @@ impl<R: gimli::Reader> ResUnit<R> {
             impl FnOnce(Option<Arc<gimli::Dwarf<R>>>) -> Result<UnitRef<'unit, R>, Error>,
         >,
     > {
-        loop {
-            break SimpleLookup::new_complete(match self.dwo.borrow() {
-                Some(Ok(Some(dwo))) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
-                Some(Ok(None)) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
-                Some(Err(e)) => Err(*e),
-                None => {
-                    let dwo_id = match self.dw_unit.dwo_id {
-                        None => {
-                            self.dwo.borrow_with(|| Ok(None));
-                            continue;
-                        }
-                        Some(dwo_id) => dwo_id,
-                    };
+        let map_dwo = move |dwo: &'unit Result<Option<Box<DwoUnit<R>>>, Error>| match dwo {
+            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
+            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
+            Err(e) => Err(*e),
+        };
+        let complete = |dwo| SimpleLookup::new_complete(map_dwo(dwo));
 
-                    let comp_dir = self.dw_unit.comp_dir.clone();
-
-                    let dwo_name = self.dw_unit.dwo_name().and_then(|s| {
-                        if let Some(s) = s {
-                            Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
-                        } else {
-                            Ok(None)
-                        }
-                    });
-
-                    let path = match dwo_name {
-                        Ok(v) => v,
-                        Err(e) => {
-                            self.dwo.borrow_with(|| Err(e));
-                            continue;
-                        }
-                    };
-
-                    let process_dwo = move |dwo_dwarf: Option<Arc<gimli::Dwarf<R>>>| {
-                        let dwo_dwarf = match dwo_dwarf {
-                            None => return Ok(None),
-                            Some(dwo_dwarf) => dwo_dwarf,
-                        };
-                        let mut dwo_units = dwo_dwarf.units();
-                        let dwo_header = match dwo_units.next()? {
-                            Some(dwo_header) => dwo_header,
-                            None => return Ok(None),
-                        };
-
-                        let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
-                        dwo_unit.copy_relocated_attributes(&self.dw_unit);
-                        Ok(Some(Box::new(DwoUnit {
-                            sections: dwo_dwarf,
-                            dw_unit: dwo_unit,
-                        })))
-                    };
-
-                    return SimpleLookup::new_needs_load(
-                        SplitDwarfLoad {
-                            dwo_id,
-                            comp_dir,
-                            path,
-                            parent: ctx.sections.clone(),
-                        },
-                        move |dwo_dwarf| match self.dwo.borrow_with(|| process_dwo(dwo_dwarf)) {
-                            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
-                            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
-                            Err(e) => Err(*e),
-                        },
-                    );
-                }
-            });
+        if let Some(dwo) = self.dwo.borrow() {
+            return complete(dwo);
         }
+
+        let dwo_id = match self.dw_unit.dwo_id {
+            None => {
+                return complete(self.dwo.borrow_with(|| Ok(None)));
+            }
+            Some(dwo_id) => dwo_id,
+        };
+
+        let comp_dir = self.dw_unit.comp_dir.clone();
+
+        let dwo_name = self.dw_unit.dwo_name().and_then(|s| {
+            if let Some(s) = s {
+                Ok(Some(ctx.sections.attr_string(&self.dw_unit, s)?))
+            } else {
+                Ok(None)
+            }
+        });
+
+        let path = match dwo_name {
+            Ok(v) => v,
+            Err(e) => {
+                return complete(self.dwo.borrow_with(|| Err(e)));
+            }
+        };
+
+        let process_dwo = move |dwo_dwarf: Option<Arc<gimli::Dwarf<R>>>| {
+            let dwo_dwarf = match dwo_dwarf {
+                None => return Ok(None),
+                Some(dwo_dwarf) => dwo_dwarf,
+            };
+            let mut dwo_units = dwo_dwarf.units();
+            let dwo_header = match dwo_units.next()? {
+                Some(dwo_header) => dwo_header,
+                None => return Ok(None),
+            };
+
+            let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
+            dwo_unit.copy_relocated_attributes(&self.dw_unit);
+            Ok(Some(Box::new(DwoUnit {
+                sections: dwo_dwarf,
+                dw_unit: dwo_unit,
+            })))
+        };
+
+        SimpleLookup::new_needs_load(
+            SplitDwarfLoad {
+                dwo_id,
+                comp_dir,
+                path,
+                parent: ctx.sections.clone(),
+            },
+            move |dwo_dwarf| map_dwo(self.dwo.borrow_with(|| process_dwo(dwo_dwarf))),
+        )
     }
 
     pub(crate) fn parse_lines(&self, sections: &gimli::Dwarf<R>) -> Result<Option<&Lines>, Error> {
@@ -113,22 +113,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             Some(ref ilnp) => ilnp,
             None => return Ok(None),
         };
-        self.lines
-            .borrow_with(|| Lines::parse(&self.dw_unit, ilnp.clone(), sections))
-            .as_ref()
-            .map(Some)
-            .map_err(Error::clone)
-    }
-
-    fn parse_functions_dwarf_and_unit(
-        &self,
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<&Functions<R>, Error> {
-        self.funcs
-            .borrow_with(|| Functions::parse(unit, sections))
-            .as_ref()
-            .map_err(Error::clone)
+        self.lines.borrow(&self.dw_unit, ilnp, sections).map(Some)
     }
 
     pub(crate) fn parse_functions<'unit, 'ctx: 'unit>(
@@ -136,9 +121,9 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
     {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (_file, sections, unit) = r?;
-            self.parse_functions_dwarf_and_unit(unit, sections)
+            self.functions.borrow(unit, sections)
         })
     }
 
@@ -146,12 +131,10 @@ impl<R: gimli::Reader> ResUnit<R> {
         &'unit self,
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
-            self.funcs
-                .borrow_with(|| Functions::parse(unit, sections))
-                .as_ref()
-                .map_err(Error::clone)?
+            self.functions
+                .borrow(unit, sections)?
                 .parse_inlined_functions(file, unit, ctx, sections)
         })
     }
@@ -194,19 +177,14 @@ impl<R: gimli::Reader> ResUnit<R> {
             Buf = R,
         >,
     > {
-        self.dwarf_and_unit_dwo(ctx).map(move |r| {
+        self.dwarf_and_unit(ctx).map(move |r| {
             let (file, sections, unit) = r?;
-            let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
+            let functions = self.functions.borrow(unit, sections)?;
             let function = match functions.find_address(probe) {
                 Some(address) => {
                     let function_index = functions.addresses[address].function;
-                    let (offset, ref function) = functions.functions[function_index];
-                    Some(
-                        function
-                            .borrow_with(|| Function::parse(offset, file, unit, ctx, sections))
-                            .as_ref()
-                            .map_err(Error::clone)?,
-                    )
+                    let function = &functions.functions[function_index];
+                    Some(function.borrow(file, unit, ctx, sections)?)
                 }
                 None => None,
             };
@@ -343,15 +321,12 @@ impl<R: gimli::Reader> ResUnits<R> {
                 }
             }
 
-            let lines = LazyResult::new();
+            let lines = LazyLines::new();
             if !have_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit.line_program {
-                    if let Ok(lines) = lines
-                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), sections))
-                        .as_ref()
-                    {
+                    if let Ok(lines) = lines.borrow(&dw_unit, ilnp, sections) {
                         for range in lines.ranges() {
                             unit_ranges.push(UnitRange {
                                 range,
@@ -368,7 +343,7 @@ impl<R: gimli::Reader> ResUnits<R> {
                 dw_unit,
                 lang,
                 lines,
-                funcs: LazyResult::new(),
+                functions: LazyFunctions::new(),
                 dwo: LazyResult::new(),
             });
         }

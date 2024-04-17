@@ -5,7 +5,28 @@ use core::cmp::Ordering;
 use core::mem;
 use core::num::NonZeroU64;
 
+use crate::lazy::LazyResult;
 use crate::{Error, Location};
+
+pub(crate) struct LazyLines(LazyResult<Lines>);
+
+impl LazyLines {
+    pub(crate) fn new() -> Self {
+        LazyLines(LazyResult::new())
+    }
+
+    pub(crate) fn borrow<R: gimli::Reader>(
+        &self,
+        dw_unit: &gimli::Unit<R>,
+        ilnp: &gimli::IncompleteLineProgram<R, R::Offset>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<&Lines, Error> {
+        self.0
+            .borrow_with(|| Lines::parse(dw_unit, ilnp.clone(), sections))
+            .as_ref()
+            .map_err(Error::clone)
+    }
+}
 
 struct LineSequence {
     start: u64,
@@ -26,7 +47,7 @@ pub(crate) struct Lines {
 }
 
 impl Lines {
-    pub(crate) fn parse<R: gimli::Reader>(
+    fn parse<R: gimli::Reader>(
         dw_unit: &gimli::Unit<R>,
         ilnp: gimli::IncompleteLineProgram<R, R::Offset>,
         sections: &gimli::Dwarf<R>,
