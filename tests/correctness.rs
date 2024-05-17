@@ -1,74 +1,13 @@
-use addr2line::Context;
+use addr2line::Loader;
 use fallible_iterator::FallibleIterator;
 use findshlibs::{IterationControl, SharedLibrary, TargetSharedLibrary};
-use object::Object;
-use std::borrow::Cow;
-use std::fs::File;
-use std::sync::Arc;
-
-fn find_debuginfo() -> memmap2::Mmap {
-    let path = std::env::current_exe().unwrap();
-    let file = File::open(&path).unwrap();
-    let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
-    let file = &object::File::parse(&*map).unwrap();
-    if let Ok(uuid) = file.mach_uuid() {
-        for candidate in path.parent().unwrap().read_dir().unwrap() {
-            let path = candidate.unwrap().path();
-            if !path.to_str().unwrap().ends_with(".dSYM") {
-                continue;
-            }
-            for candidate in path.join("Contents/Resources/DWARF").read_dir().unwrap() {
-                let path = candidate.unwrap().path();
-                let file = File::open(&path).unwrap();
-                let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
-                let file = &object::File::parse(&*map).unwrap();
-                if file.mach_uuid().unwrap() == uuid {
-                    return map;
-                }
-            }
-        }
-    }
-
-    map
-}
 
 #[test]
 #[allow(clippy::fn_to_numeric_cast)]
 fn correctness() {
-    let map = find_debuginfo();
-    let file = &object::File::parse(&*map).unwrap();
-    let module_base = file.relative_address_base();
-
-    let endian = if file.is_little_endian() {
-        gimli::RunTimeEndian::Little
-    } else {
-        gimli::RunTimeEndian::Big
-    };
-
-    fn load_section<'data, O, Endian>(
-        id: gimli::SectionId,
-        file: &O,
-        endian: Endian,
-    ) -> Result<gimli::EndianArcSlice<Endian>, gimli::Error>
-    where
-        O: object::Object<'data>,
-        Endian: gimli::Endianity,
-    {
-        use object::ObjectSection;
-
-        let data = file
-            .section_by_name(id.name())
-            .and_then(|section| section.uncompressed_data().ok())
-            .unwrap_or(Cow::Borrowed(&[]));
-        Ok(gimli::EndianArcSlice::new(Arc::from(&*data), endian))
-    }
-
-    let dwarf = gimli::Dwarf::load(|id| load_section(id, file, endian)).unwrap();
-    let ctx = Context::from_dwarf(dwarf).unwrap();
-    let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
-        |data, endian| gimli::EndianArcSlice::new(Arc::from(&*data), endian),
-        None,
-    );
+    let path = std::env::current_exe().unwrap();
+    let ctx = Loader::new(&path).unwrap();
+    let module_base = ctx.relative_address_base();
 
     let mut bias = None;
     TargetSharedLibrary::each(|lib| {
@@ -80,8 +19,7 @@ fn correctness() {
     let mut test = |sym: u64, expected_prefix: &str| {
         let ip = sym.wrapping_sub(bias.unwrap());
 
-        let frames = ctx.find_frames(ip);
-        let frames = split_dwarf_loader.run(frames).unwrap();
+        let frames = ctx.find_frames(ip).unwrap();
         let frame = frames.last().unwrap().unwrap();
         let name = frame.function.as_ref().unwrap().demangle().unwrap();
         // Old rust versions generate DWARF with wrong linkage name,
@@ -111,17 +49,9 @@ fn test_function() {
 
 #[test]
 fn zero_function() {
-    let map = find_debuginfo();
-    let file = &object::File::parse(&*map).unwrap();
-    let ctx = Context::new(file).unwrap();
+    let path = std::env::current_exe().unwrap();
+    let ctx = Loader::new(&path).unwrap();
     for probe in 0..10 {
-        assert!(
-            ctx.find_frames(probe)
-                .skip_all_loads()
-                .unwrap()
-                .count()
-                .unwrap()
-                < 10
-        );
+        assert!(ctx.find_frames(probe).unwrap().count().unwrap() < 10);
     }
 }

@@ -50,16 +50,7 @@ fn dwarf_borrow<'a>(
 }
 
 #[test]
-fn parse_base_rc() {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        addr2line::ObjectContext::new(file).unwrap();
-    });
-}
-
-#[test]
-fn parse_base_slice() {
+fn parse_base() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -70,17 +61,7 @@ fn parse_base_slice() {
 }
 
 #[test]
-fn parse_lines_rc() {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let context = addr2line::ObjectContext::new(file).unwrap();
-        context.parse_lines().unwrap();
-    });
-}
-
-#[test]
-fn parse_lines_slice() {
+fn parse_lines() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -92,17 +73,7 @@ fn parse_lines_slice() {
 }
 
 #[test]
-fn parse_functions_rc() {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let context = addr2line::ObjectContext::new(file).unwrap();
-        context.parse_functions().unwrap();
-    });
-}
-
-#[test]
-fn parse_functions_slice() {
+fn parse_functions() {
     let target = release_fixture_path();
 
     with_file(&target, |file| {

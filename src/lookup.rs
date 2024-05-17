@@ -28,8 +28,8 @@ pub struct SplitDwarfLoad<R> {
 /// ```no_run
 ///   # use addr2line::*;
 ///   # use std::sync::Arc;
-///   # let ctx: Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> = todo!();
-///   # let do_split_dwarf_load = |load: SplitDwarfLoad<gimli::EndianRcSlice<gimli::RunTimeEndian>>| -> Option<Arc<gimli::Dwarf<gimli::EndianRcSlice<gimli::RunTimeEndian>>>> { None };
+///   # let ctx: Context<gimli::EndianSlice<gimli::RunTimeEndian>> = todo!();
+///   # let do_split_dwarf_load = |load: SplitDwarfLoad<gimli::EndianSlice<gimli::RunTimeEndian>>| -> Option<Arc<gimli::Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>>> { None };
 ///   const ADDRESS: u64 = 0xdeadbeef;
 ///   let mut r = ctx.find_frames(ADDRESS);
 ///   let result = loop {
