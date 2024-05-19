@@ -1,29 +1,34 @@
-//! This crate provides a cross-platform library and binary for translating addresses into
-//! function names, file names and line numbers. Given an address in an executable or an
-//! offset in a section of a relocatable object, it uses the debugging information to
-//! figure out which file name and line number are associated with it.
+//! `addr2line` provides a cross-platform library for retrieving per-address debug information
+//! from files with DWARF debug information. Given an address, it can return the file name,
+//! line number, and function name associated with that address, as well as the inline call
+//! stack leading to that address.
 //!
-//! When used as a library, files must first be loaded using the
-//! [`object`](https://github.com/gimli-rs/object) crate.
-//! A context can then be created with [`Context::new`](./struct.Context.html#method.new).
-//! The context caches some of the parsed information so that multiple lookups are
-//! efficient.
-//! Location information is obtained with
-//! [`Context::find_location`](./struct.Context.html#method.find_location) or
-//! [`Context::find_location_range`](./struct.Context.html#method.find_location_range).
-//! Function information is obtained with
-//! [`Context::find_frames`](./struct.Context.html#method.find_frames), which returns
-//! a frame for each inline function. Each frame contains both name and location.
+//! At the lowest level, the library uses a [`Context`] to cache parsed information so that
+//! multiple lookups are efficient. To create a `Context`, you first need to open and parse the
+//! file using an object file parser such as [`object`](https://github.com/gimli-rs/object),
+//! create a [`gimli::Dwarf`], and finally call [`Context::from_dwarf`].
 //!
-//! The crate has an example CLI wrapper around the library which provides some of
-//! the functionality of the `addr2line` command line tool distributed with [GNU
-//! binutils](https://www.gnu.org/software/binutils/).
+//! Location information is obtained with [`Context::find_location`] or
+//! [`Context::find_location_range`]. Function information is obtained with
+//! [`Context::find_frames`], which returns a frame for each inline function. Each frame
+//! contains both name and location.
 //!
-//! Currently this library only provides information from the DWARF debugging information,
-//! which is parsed using [`gimli`](https://github.com/gimli-rs/gimli).  The example CLI
-//! wrapper also uses symbol table information provided by the `object` crate.
+//! The library also provides a [`Loader`] which internally memory maps the files,
+//! uses the `object` crate to do the parsing, and creates a `Context`.
+//! The `Context` is not exposed, but the `Loader` provides the same functionality
+//! via [`Loader::find_location`], [`Loader::find_location_range`], and
+//! [`Loader::find_frames`]. The `Loader` also provides [`Loader::find_symbol`]
+//! to use the symbol table instead of DWARF debugging information.
+//! The `Loader` will load Mach-O dSYM files and split DWARF files as needed.
+//!
+//! The crate has a CLI wrapper around the library which provides some of
+//! the functionality of the `addr2line` command line tool distributed with
+//! [GNU binutils](https://sourceware.org/binutils/docs/binutils/addr2line.html).
 #![deny(missing_docs)]
 #![no_std]
+
+#[cfg(feature = "cargo-all")]
+compile_error!("'--all-features' is not supported; use '--features all' instead");
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -35,14 +40,8 @@ extern crate alloc;
 #[cfg(feature = "fallible-iterator")]
 pub extern crate fallible_iterator;
 pub extern crate gimli;
-#[cfg(feature = "object")]
-pub extern crate object;
 
-use alloc::borrow::Cow;
-#[cfg(feature = "object")]
-use alloc::rc::Rc;
 use alloc::sync::Arc;
-
 use core::ops::ControlFlow;
 use core::u64;
 
@@ -62,16 +61,17 @@ mod maybe_small {
     pub type IntoIter<T> = alloc::vec::IntoIter<T>;
 }
 
-#[cfg(all(feature = "std", feature = "object", feature = "memmap2"))]
-/// A simple builtin split DWARF loader.
-pub mod builtin_split_dwarf_loader;
-
 mod frame;
 pub use frame::{demangle, demangle_auto, Frame, FrameIter, FunctionName, Location};
 
 mod function;
 mod lazy;
 mod line;
+
+#[cfg(feature = "loader")]
+mod loader;
+#[cfg(feature = "loader")]
+pub use loader::Loader;
 
 mod lookup;
 pub use lookup::{LookupContinuation, LookupResult, SplitDwarfLoad};
@@ -96,71 +96,6 @@ pub struct Context<R: gimli::Reader> {
     sections: Arc<gimli::Dwarf<R>>,
     units: ResUnits<R>,
     sup_units: SupUnits<R>,
-}
-
-/// The type of `Context` that supports the `new` method.
-#[cfg(feature = "std-object")]
-pub type ObjectContext = Context<gimli::EndianRcSlice<gimli::RunTimeEndian>>;
-
-#[cfg(feature = "std-object")]
-impl Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> {
-    /// Construct a new `Context`.
-    ///
-    /// The resulting `Context` uses `gimli::EndianRcSlice<gimli::RunTimeEndian>`.
-    /// This means it is not thread safe, has no lifetime constraints (since it copies
-    /// the input data), and works for any endianity.
-    ///
-    /// Performance sensitive applications may want to use `Context::from_dwarf`
-    /// with a more specialised `gimli::Reader` implementation.
-    #[inline]
-    pub fn new<'data, O: object::Object<'data>>(file: &O) -> Result<Self, Error> {
-        Self::new_with_sup(file, None)
-    }
-
-    /// Construct a new `Context`.
-    ///
-    /// Optionally also use a supplementary object file.
-    ///
-    /// The resulting `Context` uses `gimli::EndianRcSlice<gimli::RunTimeEndian>`.
-    /// This means it is not thread safe, has no lifetime constraints (since it copies
-    /// the input data), and works for any endianity.
-    ///
-    /// Performance sensitive applications may want to use `Context::from_dwarf`
-    /// with a more specialised `gimli::Reader` implementation.
-    pub fn new_with_sup<'data, O: object::Object<'data>>(
-        file: &O,
-        sup_file: Option<&O>,
-    ) -> Result<Self, Error> {
-        let endian = if file.is_little_endian() {
-            gimli::RunTimeEndian::Little
-        } else {
-            gimli::RunTimeEndian::Big
-        };
-
-        fn load_section<'data, O, Endian>(
-            id: gimli::SectionId,
-            file: &O,
-            endian: Endian,
-        ) -> Result<gimli::EndianRcSlice<Endian>, Error>
-        where
-            O: object::Object<'data>,
-            Endian: gimli::Endianity,
-        {
-            use object::ObjectSection;
-
-            let data = file
-                .section_by_name(id.name())
-                .and_then(|section| section.uncompressed_data().ok())
-                .unwrap_or(Cow::Borrowed(&[]));
-            Ok(gimli::EndianRcSlice::new(Rc::from(&*data), endian))
-        }
-
-        let mut dwarf = gimli::Dwarf::load(|id| load_section(id, file, endian))?;
-        if let Some(sup_file) = sup_file {
-            dwarf.load_sup(|id| load_section(id, sup_file, endian))?;
-        }
-        Context::from_dwarf(dwarf)
-    }
 }
 
 impl<R: gimli::Reader> Context<R> {
@@ -337,8 +272,8 @@ impl<R: gimli::Reader> Context<R> {
     /// ```no_run
     ///   # use addr2line::*;
     ///   # use std::sync::Arc;
-    ///   # let ctx: Context<gimli::EndianRcSlice<gimli::RunTimeEndian>> = todo!();
-    ///   # let do_split_dwarf_load = |load: SplitDwarfLoad<gimli::EndianRcSlice<gimli::RunTimeEndian>>| -> Option<Arc<gimli::Dwarf<gimli::EndianRcSlice<gimli::RunTimeEndian>>>> { None };
+    ///   # let ctx: Context<gimli::EndianSlice<gimli::RunTimeEndian>> = todo!();
+    ///   # let do_split_dwarf_load = |load: SplitDwarfLoad<gimli::EndianSlice<gimli::RunTimeEndian>>| -> Option<Arc<gimli::Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>>> { None };
     ///   const ADDRESS: u64 = 0xdeadbeef;
     ///   ctx.preload_units(ADDRESS).for_each(|(load, callback)| {
     ///     let dwo = do_split_dwarf_load(load);

@@ -66,18 +66,7 @@ fn get_test_addresses(target: &object::File<'_>) -> Vec<u64> {
 }
 
 #[bench]
-fn context_new_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        b.iter(|| {
-            addr2line::Context::new(file).unwrap();
-        });
-    });
-}
-
-#[bench]
-fn context_new_slice(b: &mut test::Bencher) {
+fn context_new(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -90,19 +79,7 @@ fn context_new_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_parse_lines_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        b.iter(|| {
-            let context = addr2line::Context::new(file).unwrap();
-            context.parse_lines().unwrap();
-        });
-    });
-}
-
-#[bench]
-fn context_new_parse_lines_slice(b: &mut test::Bencher) {
+fn context_new_parse_lines(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -116,19 +93,7 @@ fn context_new_parse_lines_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_parse_functions_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        b.iter(|| {
-            let context = addr2line::Context::new(file).unwrap();
-            context.parse_functions().unwrap();
-        });
-    });
-}
-
-#[bench]
-fn context_new_parse_functions_slice(b: &mut test::Bencher) {
+fn context_new_parse_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -142,19 +107,7 @@ fn context_new_parse_functions_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_parse_inlined_functions_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        b.iter(|| {
-            let context = addr2line::Context::new(file).unwrap();
-            context.parse_inlined_functions().unwrap();
-        });
-    });
-}
-
-#[bench]
-fn context_new_parse_inlined_functions_slice(b: &mut test::Bencher) {
+fn context_new_parse_inlined_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -168,28 +121,7 @@ fn context_new_parse_inlined_functions_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_query_location_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let addresses = get_test_addresses(file);
-
-        let ctx = addr2line::Context::new(file).unwrap();
-        // Ensure nothing is lazily loaded.
-        for addr in &addresses {
-            test::black_box(ctx.find_location(*addr)).ok();
-        }
-
-        b.iter(|| {
-            for addr in &addresses {
-                test::black_box(ctx.find_location(*addr)).ok();
-            }
-        });
-    });
-}
-
-#[bench]
-fn context_query_location_slice(b: &mut test::Bencher) {
+fn context_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -212,34 +144,7 @@ fn context_query_location_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_query_with_functions_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let addresses = get_test_addresses(file);
-
-        let ctx = addr2line::Context::new(file).unwrap();
-        // Ensure nothing is lazily loaded.
-        for addr in &addresses {
-            let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
-            while let Ok(Some(ref frame)) = frames.next() {
-                test::black_box(frame);
-            }
-        }
-
-        b.iter(|| {
-            for addr in &addresses {
-                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
-                while let Ok(Some(ref frame)) = frames.next() {
-                    test::black_box(frame);
-                }
-            }
-        });
-    });
-}
-
-#[bench]
-fn context_query_with_functions_slice(b: &mut test::Bencher) {
+fn context_query_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -268,23 +173,7 @@ fn context_query_with_functions_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_and_query_location_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let addresses = get_test_addresses(file);
-
-        b.iter(|| {
-            let ctx = addr2line::Context::new(file).unwrap();
-            for addr in addresses.iter().take(100) {
-                test::black_box(ctx.find_location(*addr)).ok();
-            }
-        });
-    });
-}
-
-#[bench]
-fn context_new_and_query_location_slice(b: &mut test::Bencher) {
+fn context_new_and_query_location(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -302,25 +191,7 @@ fn context_new_and_query_location_slice(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn context_new_and_query_with_functions_rc(b: &mut test::Bencher) {
-    let target = release_fixture_path();
-
-    with_file(&target, |file| {
-        let addresses = get_test_addresses(file);
-
-        b.iter(|| {
-            let ctx = addr2line::Context::new(file).unwrap();
-            for addr in addresses.iter().take(100) {
-                let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
-                while let Ok(Some(ref frame)) = frames.next() {
-                    test::black_box(frame);
-                }
-            }
-        });
-    });
-}
-#[bench]
-fn context_new_and_query_with_functions_slice(b: &mut test::Bencher) {
+fn context_new_and_query_with_functions(b: &mut test::Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {

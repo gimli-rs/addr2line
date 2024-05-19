@@ -36,11 +36,11 @@ jobs:
     - name: Test debug
       run: |
         cargo test --verbose
-        cargo test --verbose --features bin
+        cargo test --verbose --features all
     - name: Test release
       run: |
         cargo test --verbose --release
-        cargo test --verbose --release --features bin
+        cargo test --verbose --release --features all
 
   features:
     runs-on: ubuntu-latest
@@ -50,10 +50,11 @@ jobs:
       - run: cargo build --no-default-features --features std
       - run: cargo build --no-default-features --features std,cpp_demangle
       - run: cargo build --no-default-features --features std,rustc-demangle
-      - run: cargo build --no-default-features --features std-object
+      - run: cargo build --no-default-features --features loader
       - run: cargo build --no-default-features --features fallible-iterator
       - run: cargo build --no-default-features --features smallvec
       - run: cargo build --no-default-features --features bin
+      - run: cargo build --no-default-features --features all
 
   bench:
     runs-on: ubuntu-latest

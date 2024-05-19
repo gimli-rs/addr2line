@@ -1,14 +1,10 @@
 use std::borrow::Cow;
-use std::fs::File;
 use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, Command};
-use fallible_iterator::FallibleIterator;
-use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
-use typed_arena::Arena;
 
-use addr2line::{Context, Location};
+use addr2line::{Loader, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
     if string.len() > 2 && string.starts_with("0x") {
@@ -74,30 +70,6 @@ fn print_function(name: Option<&str>, language: Option<gimli::DwLang>, demangle:
     } else {
         print!("??");
     }
-}
-
-fn load_file_section<'input, 'arena, Endian: gimli::Endianity>(
-    id: gimli::SectionId,
-    file: &object::File<'input>,
-    endian: Endian,
-    arena_data: &'arena Arena<Cow<'input, [u8]>>,
-) -> Result<gimli::EndianSlice<'arena, Endian>, ()> {
-    // TODO: Unify with dwarfdump.rs in gimli.
-    let name = id.name();
-    match file.section_by_name(name) {
-        Some(section) => match section.uncompressed_data().unwrap() {
-            Cow::Borrowed(b) => Ok(gimli::EndianSlice::new(b, endian)),
-            Cow::Owned(b) => Ok(gimli::EndianSlice::new(arena_data.alloc(b.into()), endian)),
-        },
-        None => Ok(gimli::EndianSlice::new(&[][..], endian)),
-    }
-}
-
-fn find_name_from_symbols<'a>(
-    symbols: &'a SymbolMap<SymbolMapName<'_>>,
-    probe: u64,
-) -> Option<&'a str> {
-    symbols.get(probe).map(|x| x.name())
 }
 
 struct Options<'a> {
@@ -175,8 +147,6 @@ fn main() {
         ])
         .get_matches();
 
-    let arena_data = Arena::new();
-
     let opts = Options {
         do_functions: matches.get_flag("functions"),
         do_inlines: matches.get_flag("inlines"),
@@ -189,45 +159,7 @@ fn main() {
         sup: matches.get_one::<PathBuf>("sup"),
     };
 
-    let file = File::open(opts.exe).unwrap();
-    let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
-    let object = &object::File::parse(&*map).unwrap();
-
-    let endian = if object.is_little_endian() {
-        gimli::RunTimeEndian::Little
-    } else {
-        gimli::RunTimeEndian::Big
-    };
-
-    let mut load_section = |id: gimli::SectionId| -> Result<_, _> {
-        load_file_section(id, object, endian, &arena_data)
-    };
-
-    let sup_map;
-    let sup_object = if let Some(sup_path) = opts.sup {
-        let sup_file = File::open(sup_path).unwrap();
-        sup_map = unsafe { memmap2::Mmap::map(&sup_file).unwrap() };
-        Some(object::File::parse(&*sup_map).unwrap())
-    } else {
-        None
-    };
-
-    let symbols = object.symbol_map();
-    let mut dwarf = gimli::Dwarf::load(&mut load_section).unwrap();
-    if let Some(ref sup_object) = sup_object {
-        let mut load_sup_section = |id: gimli::SectionId| -> Result<_, _> {
-            load_file_section(id, sup_object, endian, &arena_data)
-        };
-        dwarf.load_sup(&mut load_sup_section).unwrap();
-    }
-
-    let mut split_dwarf_loader = addr2line::builtin_split_dwarf_loader::SplitDwarfLoader::new(
-        |data, endian| {
-            gimli::EndianSlice::new(arena_data.alloc(Cow::Owned(data.into_owned())), endian)
-        },
-        Some(opts.exe.clone()),
-    );
-    let ctx = Context::from_dwarf(dwarf).unwrap();
+    let ctx = Loader::new_with_sup(opts.exe, opts.sup).unwrap();
 
     let stdin = std::io::stdin();
     let addrs = matches
@@ -253,13 +185,13 @@ fn main() {
         if opts.do_functions || opts.do_inlines {
             let mut printed_anything = false;
             if let Some(probe) = probe {
-                let frames = ctx.find_frames(probe);
-                let frames = split_dwarf_loader.run(frames).unwrap();
-                let mut frames = frames.enumerate();
-                while let Some((i, frame)) = frames.next().unwrap() {
-                    if opts.pretty && i != 0 {
+                let mut frames = ctx.find_frames(probe).unwrap();
+                let mut first = true;
+                while let Some(frame) = frames.next().unwrap() {
+                    if opts.pretty && !first {
                         print!(" (inlined by) ");
                     }
+                    first = false;
 
                     if opts.do_functions {
                         if let Some(func) = frame.function {
@@ -269,7 +201,7 @@ fn main() {
                                 opts.demangle,
                             );
                         } else {
-                            let name = find_name_from_symbols(&symbols, probe);
+                            let name = ctx.find_symbol(probe);
                             print_function(name, None, opts.demangle);
                         }
 
@@ -292,7 +224,7 @@ fn main() {
 
             if !printed_anything {
                 if opts.do_functions {
-                    let name = probe.and_then(|probe| find_name_from_symbols(&symbols, probe));
+                    let name = probe.and_then(|probe| ctx.find_symbol(probe));
                     print_function(name, None, opts.demangle);
 
                     if opts.pretty {
