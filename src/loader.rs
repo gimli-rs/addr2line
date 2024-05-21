@@ -294,7 +294,11 @@ impl<'a> LoaderInternal<'a> {
             let mut dwo_dwarf =
                 gimli::Dwarf::load(|id| load_section(id.dwo_name(), &object, endian, arena_data))
                     .ok()?;
-            // TODO: verify dwo_id
+            let dwo_unit_header = dwo_dwarf.units().next().ok()??;
+            let dwo_unit = dwo_dwarf.unit(dwo_unit_header).ok()?;
+            if dwo_unit.dwo_id != Some(load.dwo_id) {
+                return None;
+            }
             dwo_dwarf.make_dwo(&load.parent);
             Some(Arc::new(dwo_dwarf))
         })();
