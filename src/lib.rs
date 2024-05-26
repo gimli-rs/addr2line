@@ -160,9 +160,7 @@ impl<R: gimli::Reader> Context<R> {
     pub fn find_dwarf_and_unit(
         &self,
         probe: u64,
-    ) -> LookupResult<
-        impl LookupContinuation<Output = Option<(&gimli::Dwarf<R>, &gimli::Unit<R>)>, Buf = R>,
-    > {
+    ) -> LookupResult<impl LookupContinuation<Output = Option<gimli::UnitRef<R>>, Buf = R>> {
         let mut units_iter = self.units.find(probe);
         if let Some(unit) = units_iter.next() {
             return LoopingLookup::new_lookup(
@@ -170,12 +168,12 @@ impl<R: gimli::Reader> Context<R> {
                 move |r| {
                     ControlFlow::Break(match r {
                         Ok((Some(_), _)) | Ok((_, Some(_))) => {
-                            let (_file, sections, unit) = unit
+                            let (_file, unit) = unit
                                 .dwarf_and_unit(self)
                                 // We've already been through both error cases here to get to this point.
                                 .unwrap()
                                 .unwrap();
-                            Some((sections, unit))
+                            Some(unit)
                         }
                         _ => match units_iter.next() {
                             Some(next_unit) => {
@@ -375,8 +373,7 @@ impl<R: gimli::Reader> Default for RangeAttributes<R> {
 impl<R: gimli::Reader> RangeAttributes<R> {
     fn for_each_range<F: FnMut(gimli::Range)>(
         &self,
-        sections: &gimli::Dwarf<R>,
-        unit: &gimli::Unit<R>,
+        unit: gimli::UnitRef<R>,
         mut f: F,
     ) -> Result<bool, Error> {
         let mut added_any = false;
@@ -387,7 +384,7 @@ impl<R: gimli::Reader> RangeAttributes<R> {
             }
         };
         if let Some(ranges_offset) = self.ranges_offset {
-            let mut range_list = sections.ranges(unit, ranges_offset)?;
+            let mut range_list = unit.ranges(ranges_offset)?;
             while let Some(range) = range_list.next()? {
                 add_range(range);
             }

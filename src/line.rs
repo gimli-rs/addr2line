@@ -17,12 +17,11 @@ impl LazyLines {
 
     pub(crate) fn borrow<R: gimli::Reader>(
         &self,
-        dw_unit: &gimli::Unit<R>,
+        dw_unit: gimli::UnitRef<R>,
         ilnp: &gimli::IncompleteLineProgram<R, R::Offset>,
-        sections: &gimli::Dwarf<R>,
     ) -> Result<&Lines, Error> {
         self.0
-            .borrow_with(|| Lines::parse(dw_unit, ilnp.clone(), sections))
+            .borrow_with(|| Lines::parse(dw_unit, ilnp.clone()))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -48,9 +47,8 @@ pub(crate) struct Lines {
 
 impl Lines {
     fn parse<R: gimli::Reader>(
-        dw_unit: &gimli::Unit<R>,
+        dw_unit: gimli::UnitRef<R>,
         ilnp: gimli::IncompleteLineProgram<R, R::Offset>,
-        sections: &gimli::Dwarf<R>,
     ) -> Result<Self, Error> {
         let mut sequences = Vec::new();
         let mut sequence_rows = Vec::<LineRow>::new();
@@ -102,12 +100,12 @@ impl Lines {
         let mut files = Vec::new();
         let header = rows.header();
         match header.file(0) {
-            Some(file) => files.push(render_file(dw_unit, file, header, sections)?),
+            Some(file) => files.push(render_file(dw_unit, file, header)?),
             None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
         }
         let mut index = 1;
         while let Some(file) = header.file(index) {
-            files.push(render_file(dw_unit, file, header, sections)?);
+            files.push(render_file(dw_unit, file, header)?);
             index += 1;
         }
 
@@ -239,10 +237,9 @@ impl<'ctx> Iterator for LineLocationRangeIter<'ctx> {
 }
 
 fn render_file<R: gimli::Reader>(
-    dw_unit: &gimli::Unit<R>,
+    dw_unit: gimli::UnitRef<R>,
     file: &gimli::FileEntry<R, R::Offset>,
     header: &gimli::LineProgramHeader<R, R::Offset>,
-    sections: &gimli::Dwarf<R>,
 ) -> Result<String, gimli::Error> {
     let mut path = if let Some(ref comp_dir) = dw_unit.comp_dir {
         comp_dir.to_string_lossy()?.into_owned()
@@ -255,18 +252,15 @@ fn render_file<R: gimli::Reader>(
         if let Some(directory) = file.directory(header) {
             path_push(
                 &mut path,
-                sections
-                    .attr_string(dw_unit, directory)?
-                    .to_string_lossy()?
-                    .as_ref(),
+                dw_unit.attr_string(directory)?.to_string_lossy()?.as_ref(),
             );
         }
     }
 
     path_push(
         &mut path,
-        sections
-            .attr_string(dw_unit, file.path_name())?
+        dw_unit
+            .attr_string(file.path_name())?
             .to_string_lossy()?
             .as_ref(),
     );
