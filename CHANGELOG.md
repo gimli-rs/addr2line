@@ -2,6 +2,39 @@
 
 --------------------------------------------------------------------------------
 
+## 0.23.0 (2024/05/26)
+
+### Breaking changes
+
+* Updated `gimli` dependency.
+
+* Deleted `Context::new`, `Context::new_with_sup`, and `builtin_split_dwarf_loader`.
+  Use `Context::from_dwarf` or `Loader::new` instead.
+  This removes `object` from the public API.
+  [#296](https://github.com/gimli-rs/addr2line/pull/296)
+
+### Changed
+
+* Fixed handling of column 0 in the line table.
+  [#290](https://github.com/gimli-rs/addr2line/pull/290)
+
+* Moved `addr2line` from `examples` to `bin`. Requires the `bin` feature.
+  [#291](https://github.com/gimli-rs/addr2line/pull/291)
+
+* Split up `lib.rs` into smaller modules.
+  [#292](https://github.com/gimli-rs/addr2line/pull/292)
+
+### Added
+
+* Added `Loader`. Requires the `loader` feature.
+  [#296](https://github.com/gimli-rs/addr2line/pull/296)
+  [#297](https://github.com/gimli-rs/addr2line/pull/297)
+
+* Added unpacked Mach-O support to `Loader`.
+  [#298](https://github.com/gimli-rs/addr2line/pull/298)
+
+--------------------------------------------------------------------------------
+
 ## 0.22.0 (2024/04/11)
 
 ### Breaking changes
