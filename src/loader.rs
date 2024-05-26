@@ -7,7 +7,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
-use object::{Object, ObjectSection, SymbolMap, SymbolMapName};
+use object::{Object, ObjectMapFile, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
 use crate::lazy::LazyCell;
@@ -372,15 +372,13 @@ struct ObjectContext<'a> {
 
 impl<'a> ObjectContext<'a> {
     fn new(
-        object_name: &[u8],
+        object: &ObjectMapFile<'a>,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
     ) -> Option<Self> {
-        // `N_OSO` symbol names can be either `/path/to/object.o` or `/path/to/archive.a(object.o)`.
-        let (path, member_name) = split_archive_path(object_name).unwrap_or((object_name, None));
-        let file = File::open(convert_path(path).ok()?).ok()?;
+        let file = File::open(convert_path(object.path()).ok()?).ok()?;
         let map = &**arena_mmap.alloc(unsafe { Mmap::map(&file) }.ok()?);
-        let data = if let Some(member_name) = member_name {
+        let data = if let Some(member_name) = object.member() {
             let archive = object::read::archive::ArchiveFile::parse(map).ok()?;
             let member = archive.members().find_map(|member| {
                 let member = member.ok()?;
@@ -444,14 +442,4 @@ fn convert_path(bytes: &[u8]) -> Result<PathBuf> {
 fn convert_path(bytes: &[u8]) -> Result<PathBuf> {
     let s = std::str::from_utf8(bytes)?;
     Ok(PathBuf::from(s))
-}
-
-fn split_archive_path(path: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
-    let (last, path) = path.split_last()?;
-    if *last != b')' {
-        return None;
-    }
-    let index = path.iter().position(|&x| x == b'(')?;
-    let (archive, rest) = path.split_at(index);
-    Some((archive, Some(&rest[1..])))
 }
