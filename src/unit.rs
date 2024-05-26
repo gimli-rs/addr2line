@@ -25,9 +25,13 @@ pub(crate) struct ResUnit<R: gimli::Reader> {
     dwo: LazyResult<Option<Box<DwoUnit<R>>>>,
 }
 
-type UnitRef<'unit, R> = (DebugFile, &'unit gimli::Dwarf<R>, &'unit gimli::Unit<R>);
+type UnitRef<'unit, R> = (DebugFile, gimli::UnitRef<'unit, R>);
 
 impl<R: gimli::Reader> ResUnit<R> {
+    pub(crate) fn unit_ref<'a>(&'a self, sections: &'a gimli::Dwarf<R>) -> gimli::UnitRef<'a, R> {
+        gimli::UnitRef::new(sections, &self.dw_unit)
+    }
+
     /// Returns the DWARF sections and the unit.
     ///
     /// Loads the DWO unit if necessary.
@@ -42,8 +46,8 @@ impl<R: gimli::Reader> ResUnit<R> {
         >,
     > {
         let map_dwo = move |dwo: &'unit Result<Option<Box<DwoUnit<R>>>, Error>| match dwo {
-            Ok(Some(dwo)) => Ok((DebugFile::Dwo, &*dwo.sections, &dwo.dw_unit)),
-            Ok(None) => Ok((DebugFile::Primary, &*ctx.sections, &self.dw_unit)),
+            Ok(Some(dwo)) => Ok((DebugFile::Dwo, dwo.unit_ref())),
+            Ok(None) => Ok((DebugFile::Primary, self.unit_ref(&*ctx.sections))),
             Err(e) => Err(*e),
         };
         let complete = |dwo| SimpleLookup::new_complete(map_dwo(dwo));
@@ -113,7 +117,7 @@ impl<R: gimli::Reader> ResUnit<R> {
             Some(ref ilnp) => ilnp,
             None => return Ok(None),
         };
-        self.lines.borrow(&self.dw_unit, ilnp, sections).map(Some)
+        self.lines.borrow(self.unit_ref(sections), ilnp).map(Some)
     }
 
     pub(crate) fn parse_functions<'unit, 'ctx: 'unit>(
@@ -122,8 +126,8 @@ impl<R: gimli::Reader> ResUnit<R> {
     ) -> LookupResult<impl LookupContinuation<Output = Result<&'unit Functions<R>, Error>, Buf = R>>
     {
         self.dwarf_and_unit(ctx).map(move |r| {
-            let (_file, sections, unit) = r?;
-            self.functions.borrow(unit, sections)
+            let (_file, unit) = r?;
+            self.functions.borrow(unit)
         })
     }
 
@@ -132,10 +136,10 @@ impl<R: gimli::Reader> ResUnit<R> {
         ctx: &'ctx Context<R>,
     ) -> LookupResult<impl LookupContinuation<Output = Result<(), Error>, Buf = R> + 'unit> {
         self.dwarf_and_unit(ctx).map(move |r| {
-            let (file, sections, unit) = r?;
+            let (file, unit) = r?;
             self.functions
-                .borrow(unit, sections)?
-                .parse_inlined_functions(file, unit, ctx, sections)
+                .borrow(unit)?
+                .parse_inlined_functions(file, unit, ctx)
         })
     }
 
@@ -178,17 +182,17 @@ impl<R: gimli::Reader> ResUnit<R> {
         >,
     > {
         self.dwarf_and_unit(ctx).map(move |r| {
-            let (file, sections, unit) = r?;
-            let functions = self.functions.borrow(unit, sections)?;
+            let (file, unit) = r?;
+            let functions = self.functions.borrow(unit)?;
             let function = match functions.find_address(probe) {
                 Some(address) => {
                     let function_index = functions.addresses[address].function;
                     let function = &functions.functions[function_index];
-                    Some(function.borrow(file, unit, ctx, sections)?)
+                    Some(function.borrow(file, unit, ctx)?)
                 }
                 None => None,
             };
-            let location = self.find_location(probe, sections)?;
+            let location = self.find_location(probe, unit.dwarf)?;
             Ok((function, location))
         })
     }
@@ -230,11 +234,12 @@ impl<R: gimli::Reader> ResUnits<R> {
                 Ok(dw_unit) => dw_unit,
                 Err(_) => continue,
             };
+            let dw_unit_ref = gimli::UnitRef::new(sections, &dw_unit);
 
             let mut lang = None;
             let mut have_unit_range = false;
             {
-                let mut entries = dw_unit.entries_raw(None)?;
+                let mut entries = dw_unit_ref.entries_raw(None)?;
 
                 let abbrev = match entries.read_abbreviation()? {
                     Some(abbrev) => abbrev,
@@ -248,21 +253,20 @@ impl<R: gimli::Reader> ResUnits<R> {
                         gimli::DW_AT_low_pc => match attr.value() {
                             gimli::AttributeValue::Addr(val) => ranges.low_pc = Some(val),
                             gimli::AttributeValue::DebugAddrIndex(index) => {
-                                ranges.low_pc = Some(sections.address(&dw_unit, index)?);
+                                ranges.low_pc = Some(dw_unit_ref.address(index)?);
                             }
                             _ => {}
                         },
                         gimli::DW_AT_high_pc => match attr.value() {
                             gimli::AttributeValue::Addr(val) => ranges.high_pc = Some(val),
                             gimli::AttributeValue::DebugAddrIndex(index) => {
-                                ranges.high_pc = Some(sections.address(&dw_unit, index)?);
+                                ranges.high_pc = Some(dw_unit_ref.address(index)?);
                             }
                             gimli::AttributeValue::Udata(val) => ranges.size = Some(val),
                             _ => {}
                         },
                         gimli::DW_AT_ranges => {
-                            ranges.ranges_offset =
-                                sections.attr_ranges_offset(&dw_unit, attr.value())?;
+                            ranges.ranges_offset = dw_unit_ref.attr_ranges_offset(attr.value())?;
                         }
                         gimli::DW_AT_language => {
                             if let gimli::AttributeValue::Language(val) = attr.value() {
@@ -311,7 +315,7 @@ impl<R: gimli::Reader> ResUnits<R> {
                         }
                     }
                 } else {
-                    have_unit_range |= ranges.for_each_range(sections, &dw_unit, |range| {
+                    have_unit_range |= ranges.for_each_range(dw_unit_ref, |range| {
                         unit_ranges.push(UnitRange {
                             range,
                             unit_id,
@@ -325,8 +329,8 @@ impl<R: gimli::Reader> ResUnits<R> {
             if !have_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
-                if let Some(ref ilnp) = dw_unit.line_program {
-                    if let Ok(lines) = lines.borrow(&dw_unit, ilnp, sections) {
+                if let Some(ref ilnp) = dw_unit_ref.line_program {
+                    if let Ok(lines) = lines.borrow(dw_unit_ref, ilnp) {
                         for range in lines.ranges() {
                             unit_ranges.push(UnitRange {
                                 range,
@@ -470,6 +474,12 @@ impl<R: gimli::Reader> ResUnits<R> {
 struct DwoUnit<R: gimli::Reader> {
     sections: Arc<gimli::Dwarf<R>>,
     dw_unit: gimli::Unit<R>,
+}
+
+impl<R: gimli::Reader> DwoUnit<R> {
+    fn unit_ref(&self) -> gimli::UnitRef<R> {
+        gimli::UnitRef::new(&self.sections, &self.dw_unit)
+    }
 }
 
 pub(crate) struct SupUnit<R: gimli::Reader> {
