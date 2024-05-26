@@ -41,6 +41,16 @@ jobs:
       run: |
         cargo test --verbose --release
         cargo test --verbose --release --features all
+    - name: Test unpacked debuginfo
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macOS-latest'
+      run: cargo clean && cargo test correctness --features loader
+      env:
+        RUSTFLAGS: "-C split-debuginfo=unpacked"
+    - name: Test packed debuginfo
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macOS-latest'
+      run: cargo clean && cargo test correctness --features loader
+      env:
+        RUSTFLAGS: "-C split-debuginfo=packed"
 
   features:
     runs-on: ubuntu-latest
@@ -75,7 +85,7 @@ jobs:
       - name: Install rust
         run: rustup update 1.65.0 && rustup default 1.65.0
       - name: Build
-        run: cargo build
+        run: cargo build --features loader
 
   rustfmt:
     runs-on: ubuntu-latest
