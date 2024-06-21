@@ -352,7 +352,7 @@ impl<R: gimli::Reader> ResUnits<R> {
             });
         }
 
-        // Sort this for faster lookup in `find_unit_and_address` below.
+        // Sort this for faster lookup in `Self::find_range`.
         unit_ranges.sort_by_key(|i| i.range.begin);
 
         // Calculate the `max_end` field now that we've determined the order of
@@ -411,28 +411,21 @@ impl<R: gimli::Reader> ResUnits<R> {
         probe_low: u64,
         probe_high: u64,
     ) -> impl Iterator<Item = (&ResUnit<R>, &gimli::Range)> {
-        // First up find the position in the array which could have our function
-        // address.
+        // Find the position of a range which begins at `probe_high` or higher.
         let pos = match self
             .ranges
             .binary_search_by_key(&probe_high, |i| i.range.begin)
         {
-            // Although unlikely, we could find an exact match.
-            Ok(i) => i + 1,
-            // No exact match was found, but this probe would fit at slot `i`.
-            // This means that slot `i` is bigger than `probe`, along with all
-            // indices greater than `i`, so we need to search all previous
-            // entries.
-            Err(i) => i,
+            Ok(i) => i,  // Range `i` begins at exactly `probe_high`.
+            Err(i) => i, // Range `i` begins at a higher address.
         };
 
-        // Once we have our index we iterate backwards from that position
-        // looking for a matching CU.
+        // Iterate backwards from that position to find matching CUs.
         self.ranges[..pos]
             .iter()
             .rev()
             .take_while(move |i| {
-                // We know that this CU's start is beneath the probe already because
+                // We know that this CU's start is no more than `probe_high` because
                 // of our sorted array.
                 debug_assert!(i.range.begin <= probe_high);
 
