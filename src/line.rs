@@ -157,8 +157,7 @@ impl<'ctx> LineLocationRangeIter<'ctx> {
         });
         let seq_idx = match seq_idx {
             Ok(x) => x,
-            Err(0) => 0, // probe below sequence, but range could overlap
-            Err(_) => lines.sequences.len(),
+            Err(x) => x, // probe below sequence, but range could overlap
         };
 
         let row_idx = if let Some(seq) = lines.sequences.get(seq_idx) {
