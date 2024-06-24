@@ -151,11 +151,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         let Some(lines) = self.parse_lines(sections)? else {
             return Ok(None);
         };
-        let mut iter = lines.location_ranges(probe, probe + 1)?;
-        match iter.next() {
-            None => Ok(None),
-            Some((_addr, _len, loc)) => Ok(Some(loc)),
-        }
+        lines.find_location(probe)
     }
 
     #[inline]
@@ -168,7 +164,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         let Some(lines) = self.parse_lines(sections)? else {
             return Ok(None);
         };
-        lines.location_ranges(probe_low, probe_high).map(Some)
+        lines.find_location_range(probe_low, probe_high).map(Some)
     }
 
     pub(crate) fn find_function_or_location<'unit, 'ctx: 'unit>(

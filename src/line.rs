@@ -126,27 +126,54 @@ impl Lines {
         })
     }
 
-    pub(crate) fn location_ranges(
+    fn row_location(&self, row: &LineRow) -> Location<'_> {
+        let file = self.files.get(row.file_index as usize).map(String::as_str);
+        Location {
+            file,
+            line: if row.line != 0 { Some(row.line) } else { None },
+            // If row.line is specified then row.column always has meaning.
+            column: if row.line != 0 {
+                Some(row.column)
+            } else {
+                None
+            },
+        }
+    }
+
+    pub(crate) fn find_location(&self, probe: u64) -> Result<Option<Location<'_>>, Error> {
+        let seq_idx = self.sequences.binary_search_by(|sequence| {
+            if probe < sequence.start {
+                Ordering::Greater
+            } else if probe >= sequence.end {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        });
+        let seq_idx = match seq_idx {
+            Ok(x) => x,
+            Err(_) => return Ok(None),
+        };
+        let sequence = &self.sequences[seq_idx];
+
+        let idx = sequence
+            .rows
+            .binary_search_by(|row| row.address.cmp(&probe));
+        let idx = match idx {
+            Ok(x) => x,
+            Err(0) => return Ok(None),
+            Err(x) => x - 1,
+        };
+        Ok(Some(self.row_location(&sequence.rows[idx])))
+    }
+
+    pub(crate) fn find_location_range(
         &self,
         probe_low: u64,
         probe_high: u64,
     ) -> Result<LineLocationRangeIter<'_>, Error> {
-        LineLocationRangeIter::new(self, probe_low, probe_high)
-    }
-}
-
-pub(crate) struct LineLocationRangeIter<'ctx> {
-    lines: &'ctx Lines,
-    seqs: &'ctx [LineSequence],
-    seq_idx: usize,
-    row_idx: usize,
-    probe_high: u64,
-}
-
-impl<'ctx> LineLocationRangeIter<'ctx> {
-    fn new(lines: &'ctx Lines, probe_low: u64, probe_high: u64) -> Result<Self, Error> {
         // Find index for probe_low.
-        let seq_idx = lines.sequences.binary_search_by(|sequence| {
+        let seq_idx = self.sequences.binary_search_by(|sequence| {
             if probe_low < sequence.start {
                 Ordering::Greater
             } else if probe_low >= sequence.end {
@@ -160,7 +187,7 @@ impl<'ctx> LineLocationRangeIter<'ctx> {
             Err(x) => x, // probe below sequence, but range could overlap
         };
 
-        let row_idx = if let Some(seq) = lines.sequences.get(seq_idx) {
+        let row_idx = if let Some(seq) = self.sequences.get(seq_idx) {
             let idx = seq.rows.binary_search_by(|row| row.address.cmp(&probe_low));
             match idx {
                 Ok(x) => x,
@@ -171,9 +198,8 @@ impl<'ctx> LineLocationRangeIter<'ctx> {
             0
         };
 
-        Ok(Self {
-            lines,
-            seqs: &*lines.sequences,
+        Ok(LineLocationRangeIter {
+            lines: self,
             seq_idx,
             row_idx,
             probe_high,
@@ -181,11 +207,18 @@ impl<'ctx> LineLocationRangeIter<'ctx> {
     }
 }
 
+pub(crate) struct LineLocationRangeIter<'ctx> {
+    lines: &'ctx Lines,
+    seq_idx: usize,
+    row_idx: usize,
+    probe_high: u64,
+}
+
 impl<'ctx> Iterator for LineLocationRangeIter<'ctx> {
     type Item = (u64, u64, Location<'ctx>);
 
     fn next(&mut self) -> Option<(u64, u64, Location<'ctx>)> {
-        while let Some(seq) = self.seqs.get(self.seq_idx) {
+        while let Some(seq) = self.lines.sequences.get(self.seq_idx) {
             if seq.start >= self.probe_high {
                 break;
             }
@@ -196,11 +229,6 @@ impl<'ctx> Iterator for LineLocationRangeIter<'ctx> {
                         break;
                     }
 
-                    let file = self
-                        .lines
-                        .files
-                        .get(row.file_index as usize)
-                        .map(String::as_str);
                     let nextaddr = seq
                         .rows
                         .get(self.row_idx + 1)
@@ -210,16 +238,7 @@ impl<'ctx> Iterator for LineLocationRangeIter<'ctx> {
                     let item = (
                         row.address,
                         nextaddr - row.address,
-                        Location {
-                            file,
-                            line: if row.line != 0 { Some(row.line) } else { None },
-                            // If row.line is specified then row.column always has meaning.
-                            column: if row.line != 0 {
-                                Some(row.column)
-                            } else {
-                                None
-                            },
-                        },
+                        self.lines.row_location(row),
                     );
                     self.row_idx += 1;
 
