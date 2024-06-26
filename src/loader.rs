@@ -16,7 +16,12 @@ use crate::{
     SplitDwarfLoad,
 };
 
-type Reader<'a> = gimli::EndianSlice<'a, gimli::RunTimeEndian>;
+/// The type used by [`Loader`] for reading DWARF data.
+///
+/// This is used in the return types of the methods of [`Loader`].
+// TODO: use impl Trait when stable
+pub type LoaderReader<'a> = gimli::EndianSlice<'a, gimli::RunTimeEndian>;
+
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
@@ -106,7 +111,7 @@ impl Loader {
         &self,
         probe_low: u64,
         probe_high: u64,
-    ) -> Result<LocationRangeIter<'_, Reader>> {
+    ) -> Result<LocationRangeIter<'_, LoaderReader>> {
         self.borrow_internal(|i, data, mmap| {
             i.find_location_range(probe_low, probe_high, data, mmap)
         })
@@ -116,7 +121,7 @@ impl Loader {
     /// memory address.
     ///
     /// This calls [`Context::find_frames`] with the given address.
-    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<'_, Reader<'_>>> {
+    pub fn find_frames(&self, probe: u64) -> Result<FrameIter<'_, LoaderReader<'_>>> {
         self.borrow_internal(|i, data, mmap| i.find_frames(probe, data, mmap))
     }
 
@@ -127,10 +132,10 @@ impl Loader {
 }
 
 struct LoaderInternal<'a> {
-    ctx: Context<Reader<'a>>,
+    ctx: Context<LoaderReader<'a>>,
     relative_address_base: u64,
     symbols: SymbolMap<SymbolMapName<'a>>,
-    dwarf_package: Option<gimli::DwarfPackage<Reader<'a>>>,
+    dwarf_package: Option<gimli::DwarfPackage<LoaderReader<'a>>>,
     // Map from address to Mach-O object file path.
     object_map: object::ObjectMap<'a>,
     // A context for each Mach-O object file.
@@ -251,7 +256,7 @@ impl<'a> LoaderInternal<'a> {
         probe: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> (&Context<Reader<'a>>, u64) {
+    ) -> (&Context<LoaderReader<'a>>, u64) {
         self.object_ctx(probe, arena_data, arena_mmap)
             .unwrap_or((&self.ctx, probe))
     }
@@ -261,7 +266,7 @@ impl<'a> LoaderInternal<'a> {
         probe: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Option<(&Context<Reader<'a>>, u64)> {
+    ) -> Option<(&Context<LoaderReader<'a>>, u64)> {
         let symbol = self.object_map.get(probe)?;
         let object_context = self.objects[symbol.object_index()]
             .borrow_with(|| {
@@ -291,7 +296,7 @@ impl<'a> LoaderInternal<'a> {
         probe_high: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Result<LocationRangeIter<'a, Reader>> {
+    ) -> Result<LocationRangeIter<'a, LoaderReader>> {
         let (ctx, probe) = self.ctx(probe_low, arena_data, arena_mmap);
         // TODO: handle ranges that cover multiple objects
         let probe_high = probe + (probe_high - probe_low);
@@ -303,7 +308,7 @@ impl<'a> LoaderInternal<'a> {
         probe: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Result<FrameIter<'a, Reader>> {
+    ) -> Result<FrameIter<'a, LoaderReader>> {
         let (ctx, probe) = self.ctx(probe, arena_data, arena_mmap);
         let mut frames = ctx.find_frames(probe);
         loop {
@@ -319,10 +324,10 @@ impl<'a> LoaderInternal<'a> {
 
     fn load_dwo(
         &self,
-        load: SplitDwarfLoad<Reader<'a>>,
+        load: SplitDwarfLoad<LoaderReader<'a>>,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Result<Option<Arc<gimli::Dwarf<Reader<'a>>>>> {
+    ) -> Result<Option<Arc<gimli::Dwarf<LoaderReader<'a>>>>> {
         // Load the DWO file from the DWARF package, if available.
         if let Some(dwp) = self.dwarf_package.as_ref() {
             if let Some(cu) = dwp.find_cu(load.dwo_id, &load.parent)? {
@@ -366,7 +371,7 @@ impl<'a> LoaderInternal<'a> {
 }
 
 struct ObjectContext<'a> {
-    ctx: Context<Reader<'a>>,
+    ctx: Context<LoaderReader<'a>>,
     symbols: SymbolMap<SymbolMapName<'a>>,
 }
 
@@ -406,7 +411,7 @@ impl<'a> ObjectContext<'a> {
         Some(ObjectContext { ctx, symbols })
     }
 
-    fn ctx(&self, symbol_name: &[u8], probe: u64) -> Option<(&Context<Reader<'a>>, u64)> {
+    fn ctx(&self, symbol_name: &[u8], probe: u64) -> Option<(&Context<LoaderReader<'a>>, u64)> {
         self.symbols
             .symbols()
             .iter()

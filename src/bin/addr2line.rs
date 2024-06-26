@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, Command};
 
-use addr2line::{Loader, Location};
+use addr2line::{Loader, LoaderReader, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
     if string.len() > 2 && string.starts_with("0x") {
@@ -17,15 +17,28 @@ fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
 enum Addrs<'a> {
     Args(clap::parser::ValuesRef<'a, String>),
     Stdin(Lines<StdinLock<'a>>),
+    All {
+        iter: addr2line::LocationRangeIter<'a, LoaderReader<'a>>,
+        max: u64,
+    },
 }
 
 impl<'a> Iterator for Addrs<'a> {
     type Item = Option<u64>;
 
     fn next(&mut self) -> Option<Option<u64>> {
-        let text = match *self {
-            Addrs::Args(ref mut vals) => vals.next().map(Cow::from),
-            Addrs::Stdin(ref mut lines) => lines.next().map(Result::unwrap).map(Cow::from),
+        let text = match self {
+            Addrs::Args(vals) => vals.next().map(Cow::from),
+            Addrs::Stdin(lines) => lines.next().map(Result::unwrap).map(Cow::from),
+            Addrs::All { iter, max } => {
+                for (addr, _len, _loc) in iter {
+                    if addr >= *max {
+                        *max = addr + 1;
+                        return Some(Some(addr));
+                    }
+                }
+                return None;
+            }
         };
         text.as_ref()
             .map(Cow::as_ref)
@@ -104,6 +117,11 @@ fn main() {
                 .value_name("filename")
                 .value_parser(clap::value_parser!(PathBuf))
                 .help("Path to supplementary object file."),
+            Arg::new("all")
+                .long("all")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("addrs")
+                .help("Display all addresses that have line number information."),
             Arg::new("functions")
                 .short('f')
                 .long("functions")
@@ -162,10 +180,17 @@ fn main() {
     let ctx = Loader::new_with_sup(opts.exe, opts.sup).unwrap();
 
     let stdin = std::io::stdin();
-    let addrs = matches
-        .get_many::<String>("addrs")
-        .map(Addrs::Args)
-        .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()));
+    let addrs = if matches.get_flag("all") {
+        Addrs::All {
+            iter: ctx.find_location_range(0, !0).unwrap(),
+            max: 0,
+        }
+    } else {
+        matches
+            .get_many::<String>("addrs")
+            .map(Addrs::Args)
+            .unwrap_or_else(|| Addrs::Stdin(stdin.lock().lines()))
+    };
 
     for probe in addrs {
         if opts.print_addrs {

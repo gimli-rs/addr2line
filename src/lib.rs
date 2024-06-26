@@ -71,7 +71,7 @@ mod line;
 #[cfg(feature = "loader")]
 mod loader;
 #[cfg(feature = "loader")]
-pub use loader::Loader;
+pub use loader::{Loader, LoaderReader};
 
 mod lookup;
 pub use lookup::{LookupContinuation, LookupResult, SplitDwarfLoad};
