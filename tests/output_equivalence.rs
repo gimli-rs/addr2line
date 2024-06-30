@@ -117,10 +117,9 @@ fn make_tests() -> Vec<Trial> {
             }
         })
         .map(|param| {
-            Trial::test(
-                format!("addr2line {}", param.as_ref().map_or("", String::as_str)),
-                move || run_test(param.as_ref().map(String::as_str)),
-            )
+            Trial::test(format!("addr2line {}", param.as_deref()), move || {
+                run_test(param.as_deref())
+            })
         })
         .collect()
 }

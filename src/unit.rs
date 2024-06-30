@@ -566,10 +566,7 @@ where
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self.next_loc() {
-            Err(_) => None,
-            Ok(loc) => loc,
-        }
+        self.next_loc().unwrap_or_default()
     }
 }
 
