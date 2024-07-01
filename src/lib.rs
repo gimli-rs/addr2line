@@ -43,7 +43,6 @@ pub extern crate gimli;
 
 use alloc::sync::Arc;
 use core::ops::ControlFlow;
-use core::u64;
 
 use crate::function::{Function, Functions, InlinedFunction, LazyFunctions};
 use crate::line::{LazyLines, LineLocationRangeIter, Lines};

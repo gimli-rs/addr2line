@@ -221,7 +221,7 @@ fn main() {
                     if opts.do_functions {
                         if let Some(func) = frame.function {
                             print_function(
-                                func.raw_name().ok().as_ref().map(AsRef::as_ref),
+                                func.raw_name().ok().as_deref(),
                                 func.language,
                                 opts.demangle,
                             );
