@@ -85,7 +85,10 @@ jobs:
       - name: Install rust
         run: rustup update 1.65.0 && rustup default 1.65.0
       - name: Build
-        run: cargo build --features loader
+        run: |
+          # ruzstd needs rust 1.73.0
+          cargo update -p object --precise 0.36.0
+          cargo build --features loader
 
   rustfmt:
     runs-on: ubuntu-latest
