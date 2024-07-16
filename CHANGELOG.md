@@ -2,6 +2,33 @@
 
 --------------------------------------------------------------------------------
 
+## 0.24.0 (2024/07/16)
+
+### Breaking changes
+
+* Updated `gimli` dependency.
+
+### Changed
+
+* Changed the order of ranges returned by `Context::find_location_range`, and
+  fixed handling in rare situations.
+  [#303](https://github.com/gimli-rs/addr2line/pull/303)
+  [#304](https://github.com/gimli-rs/addr2line/pull/304)
+  [#306](https://github.com/gimli-rs/addr2line/pull/306)
+
+* Improved the performance of `Context::find_location`.
+  [#305](https://github.com/gimli-rs/addr2line/pull/305)
+
+### Added
+
+* Added `LoaderReader`.
+  [#307](https://github.com/gimli-rs/addr2line/pull/307)
+
+* Added `--all` option to `addr2line`.
+  [#307](https://github.com/gimli-rs/addr2line/pull/307)
+
+--------------------------------------------------------------------------------
+
 ## 0.23.0 (2024/05/26)
 
 ### Breaking changes
