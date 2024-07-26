@@ -222,10 +222,15 @@ impl<R: gimli::Reader> ResUnits<R> {
             };
             // We mainly want compile units, but we may need to follow references to entries
             // within other units for function names.  We don't need anything from type units.
-            match header.type_() {
+            let mut need_unit_range = match header.type_() {
                 gimli::UnitType::Type { .. } | gimli::UnitType::SplitType { .. } => continue,
-                _ => {}
-            }
+                gimli::UnitType::Partial => {
+                    // Partial units are only needed for references from other units.
+                    // They shouldn't have any address ranges.
+                    false
+                }
+                _ => true,
+            };
             let dw_unit = match sections.unit(header) {
                 Ok(dw_unit) => dw_unit,
                 Err(_) => continue,
@@ -233,8 +238,7 @@ impl<R: gimli::Reader> ResUnits<R> {
             let dw_unit_ref = gimli::UnitRef::new(sections, &dw_unit);
 
             let mut lang = None;
-            let mut have_unit_range = false;
-            {
+            if need_unit_range {
                 let mut entries = dw_unit_ref.entries_raw(None)?;
 
                 let abbrev = match entries.read_abbreviation()? {
@@ -306,12 +310,12 @@ impl<R: gimli::Reader> ResUnits<R> {
                                     unit_id,
                                     min_begin: 0,
                                 });
-                                have_unit_range = true;
+                                need_unit_range = false;
                             }
                         }
                     }
                 } else {
-                    have_unit_range |= ranges.for_each_range(dw_unit_ref, |range| {
+                    need_unit_range &= !ranges.for_each_range(dw_unit_ref, |range| {
                         unit_ranges.push(UnitRange {
                             range,
                             unit_id,
@@ -322,7 +326,7 @@ impl<R: gimli::Reader> ResUnits<R> {
             }
 
             let lines = LazyLines::new();
-            if !have_unit_range {
+            if need_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit_ref.line_program {
