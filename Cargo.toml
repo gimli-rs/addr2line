@@ -3,7 +3,6 @@ name = "addr2line"
 version = "0.24.0"
 description = "A cross-platform symbolication library written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
-exclude = ["/benches/*", "/fixtures/*", ".github", "*.sh", "*.r"]
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
 categories = ["development-tools::debugging"]
 license = "Apache-2.0 OR MIT"
@@ -11,6 +10,16 @@ readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 edition = "2018"
 rust-version = "1.65"
+include = [
+    "/CHANGELOG.md",
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/README.md",
+    "/src",
+    "/tests",
+]
 
 [dependencies]
 gimli = { version = "0.31.0", default-features = false, features = ["read"] }
