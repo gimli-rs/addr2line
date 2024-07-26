@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "addr2line"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "auxiliary",
  "backtrace",
