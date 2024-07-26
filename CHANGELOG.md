@@ -2,6 +2,15 @@
 
 --------------------------------------------------------------------------------
 
+## 0.24.1 (2024/07/26)
+
+### Changed
+
+* Fixed parsing of partial units, which are found in supplementary object files.
+  [#313](https://github.com/gimli-rs/addr2line/pull/313)
+
+--------------------------------------------------------------------------------
+
 ## 0.24.0 (2024/07/16)
 
 ### Breaking changes

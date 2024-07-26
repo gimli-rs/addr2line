@@ -1,6 +1,6 @@
 [package]
 name = "addr2line"
-version = "0.24.0"
+version = "0.24.1"
 description = "A cross-platform symbolication library written in Rust, using `gimli`"
 documentation = "https://docs.rs/addr2line"
 keywords = ["DWARF", "debug", "elf", "symbolicate", "atos"]
