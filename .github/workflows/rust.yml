@@ -80,18 +80,9 @@ jobs:
 
   bench-addr2line:
     runs-on: ubuntu-latest
-    container:
-      image: opensuse/tumbleweed
     steps:
       - uses: actions/checkout@v3
-      - name: Enable debuginfo repository
-        run: zypper modifyrepo --enable repo-debug repo-source
-      - name: Install packages
-        run: zypper in -y rustup binutils elfutils llvm hyperfine clang18-debuginfo MozillaFirefox-debuginfo postgresql16-server-debuginfo mold-debuginfo
-      - name: Install rust
-        run: rustup update stable
-      - run: cargo build --release --features bin
-      - run: ./benchmark-addr2line.sh
+      - run: ./benchmark-addr2line-docker.sh
 
   msrv:
     runs-on: ubuntu-latest
