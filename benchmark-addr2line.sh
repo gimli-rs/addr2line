@@ -6,7 +6,7 @@ SYMBOLS_PATH="symbols.txt"
 benchmark() {
     $ADDR2LINE_BINARY --all -a -e $1 | grep 0x | shuf --random-source=<(yes 123456789) | head -n $2 > $SYMBOLS_PATH
     BINARY_NAME=`basename -s .debug $1`
-    hyperfine -n "gimli-addr2line $BINARY_NAME" -n "binutils-addr2line $BINARY_NAME" -n "llvm-addr2line $BINARY_NAME" -n "elfutils-addr2line $BINARY_NAME" \
+    hyperfine --style=color -n "gimli-addr2line $BINARY_NAME" -n "binutils-addr2line $BINARY_NAME" -n "llvm-addr2line $BINARY_NAME" -n "elfutils-addr2line $BINARY_NAME" \
         --min-runs=1 --sort=command -L tool $ADDR2LINE_BINARY,/usr/bin/addr2line,/usr/bin/llvm-addr2line,/usr/bin/eu-addr2line "{tool} -af -e $1 < $SYMBOLS_PATH"
 }
 
