@@ -1,0 +1,4 @@
+FROM opensuse/tumbleweed
+RUN zypper modifyrepo --enable repo-debug repo-source
+RUN zypper in -y rustup binutils elfutils llvm hyperfine clang18-debuginfo MozillaFirefox-debuginfo postgresql16-server-debuginfo mold-debuginfo
+RUN rustup update stable
