@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - run: ./benchmark-addr2line-docker.sh
+      - run: ./scripts/benchmark-addr2line-docker.sh
 
   msrv:
     runs-on: ubuntu-latest
