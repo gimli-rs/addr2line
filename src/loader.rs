@@ -209,6 +209,7 @@ impl<'a> LoaderInternal<'a> {
         if let Some(sup_object) = &sup_object {
             dwarf.load_sup(|id| load_section(Some(id.name()), sup_object, endian, arena_data))?;
         }
+        dwarf.populate_abbreviations_cache(gimli::AbbreviationsCacheStrategy::Duplicates);
 
         let ctx = Context::from_dwarf(dwarf)?;
 
