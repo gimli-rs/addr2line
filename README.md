@@ -31,8 +31,10 @@ The DWARF information is parsed lazily where possible.
 
 The library aims to perform similarly to equivalent existing tools such
 as `addr2line` from binutils, `eu-addr2line` from elfutils, and
-`llvm-symbolize` from the llvm project, and in the past some benchmarking
-was done that indicates a comparable performance.
+`llvm-addr2line` from the llvm project. Current benchmarks show a performance
+improvement in all cases:
+
+![addr2line runtime](benchmark-time.png)
 
 ## License
 
