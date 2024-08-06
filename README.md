@@ -34,7 +34,7 @@ as `addr2line` from binutils, `eu-addr2line` from elfutils, and
 `llvm-addr2line` from the llvm project. Current benchmarks show a performance
 improvement in all cases:
 
-![addr2line runtime](benchmark-time.png)
+![addr2line runtime](benchmark-time.svg)
 
 ## License
 
