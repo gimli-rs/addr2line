@@ -24,7 +24,7 @@ for filename in sorted(glob.glob("scripts/tmp/benchmark-*.json")):
     input = results[0]["parameters"]["input"]
     binary_size = results[0]["parameters"]["size"]
     symbol_queries = results[0]["parameters"]["symbol_queries"]
-    inputs.append(f"{input}\n({binary_size}, {symbol_queries} qrs)")
+    inputs.append(f"{input}\n({binary_size}B,\n{symbol_queries} queries)")
 
 data = np.transpose(data)
 
