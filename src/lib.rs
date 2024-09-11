@@ -139,7 +139,12 @@ impl<R: gimli::Reader> Context<R> {
     /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
     #[inline]
     pub fn from_dwarf(sections: gimli::Dwarf<R>) -> Result<Context<R>, Error> {
-        let sections = Arc::new(sections);
+        Self::from_arc_dwarf(Arc::new(sections))
+    }
+
+    /// Construct a new `Context` from an existing [`gimli::Dwarf`] object.
+    #[inline]
+    pub fn from_arc_dwarf(sections: Arc<gimli::Dwarf<R>>) -> Result<Context<R>, Error> {
         let units = ResUnits::parse(&sections)?;
         let sup_units = if let Some(sup) = sections.sup.as_ref() {
             SupUnits::parse(sup)?
