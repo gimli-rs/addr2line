@@ -1,0 +1,12 @@
+0x0000000000000000
+_Z2f1v
+/object/testfiles/dwarf/tombstone.cpp:3
+0x0000000000000004
+_Z2f1v
+/object/testfiles/dwarf/tombstone.cpp:8
+0x0000000000001040
+main
+/object/testfiles/dwarf/tombstone.cpp:9
+0x0000000000001044
+main
+/object/testfiles/dwarf/tombstone.cpp:14
