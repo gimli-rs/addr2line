@@ -76,6 +76,11 @@ harness = false
 required-features = ["bin"]
 
 [[test]]
+name = "testinput"
+harness = false
+required-features = ["bin"]
+
+[[test]]
 name = "correctness"
 required-features = ["loader", "fallible-iterator"]
 

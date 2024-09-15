@@ -395,10 +395,10 @@ impl<R: gimli::Reader> RangeAttributes<R> {
         } else if let (Some(begin), Some(end)) = (self.low_pc, self.high_pc) {
             add_range(gimli::Range { begin, end });
         } else if let (Some(begin), Some(size)) = (self.low_pc, self.size) {
-            add_range(gimli::Range {
-                begin,
-                end: begin + size,
-            });
+            // If `begin` is a -1 tombstone, this will overflow and the check in
+            // `add_range` will ignore it.
+            let end = begin.wrapping_add(size);
+            add_range(gimli::Range { begin, end });
         }
         Ok(added_any)
     }
