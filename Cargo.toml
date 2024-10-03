@@ -59,7 +59,7 @@ codegen-units = 1
 default = ["rustc-demangle", "cpp_demangle", "loader", "fallible-iterator", "smallvec"]
 std = ["gimli/std"]
 loader = ["std", "dep:object", "dep:memmap2", "dep:typed-arena"]
-bin = ["loader", "rustc-demangle", "cpp_demangle", "smallvec", "dep:clap"]
+bin = ["loader", "rustc-demangle", "cpp_demangle", "fallible-iterator", "smallvec", "dep:clap"]
 all = ["bin"]
 
 # Use of --all-features is not supported.
