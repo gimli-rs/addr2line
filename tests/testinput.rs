@@ -67,9 +67,16 @@ fn run_test(in_path: PathBuf, out_path: PathBuf) -> Result<(), Failed> {
     if out_data != expect_out_data {
         let out_str = String::from_utf8_lossy(&out_data);
         let expect_out_str = String::from_utf8_lossy(&expect_out_data);
-        return Err(
-            format!("output mismatch\nexpected:\n{expect_out_str}\nactual:\n{out_str}").into(),
-        );
+        return Err(format!(
+            "\
+            output mismatch\n\
+            expected:\n\
+            {expect_out_str}\n\
+            actual:\n\
+            {out_str}\n\
+            Set ADDR2LINE_TESTOUTPUT_UPDATE=1 to update expected output"
+        )
+        .into());
     }
 
     Ok(())
