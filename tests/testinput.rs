@@ -33,15 +33,32 @@ fn make_tests() -> Vec<Trial> {
             } else if file_type.is_file() {
                 tests.push(Trial::test(
                     format!("addr2line -e {}", in_path.display()),
-                    move || run_test(in_path, out_path),
+                    move || run_test(in_path, out_path, "-afi"),
                 ));
             }
         }
     }
+
+    let in_path = PathBuf::from("testinput/dwarf/base-gcc-g2");
+    const FLAGS: &str = "aipsf";
+    for bits in 1..(1 << FLAGS.len()) {
+        let mut flags = String::new();
+        flags.push('-');
+        for (i, flag) in FLAGS.chars().enumerate() {
+            if (bits & (1 << i)) != 0 {
+                flags.push(flag);
+            }
+        }
+        let in_path = in_path.clone();
+        let out_path = PathBuf::from(format!("testoutput/flags/base{}", flags));
+        tests.push(Trial::test(format!("addr2line {}", flags), move || {
+            run_test(in_path, out_path, &flags)
+        }));
+    }
     tests
 }
 
-fn run_test(in_path: PathBuf, out_path: PathBuf) -> Result<(), Failed> {
+fn run_test(in_path: PathBuf, out_path: PathBuf, flags: &str) -> Result<(), Failed> {
     let mut exe = env::current_exe().unwrap();
     assert!(exe.pop());
     if exe.file_name().unwrap().to_str().unwrap() == "deps" {
@@ -52,7 +69,7 @@ fn run_test(in_path: PathBuf, out_path: PathBuf) -> Result<(), Failed> {
 
     let mut cmd = Command::new(exe);
     cmd.env("RUST_BACKTRACE", "1");
-    cmd.arg("--exe").arg(in_path).arg("--all").arg("-afi");
+    cmd.arg("--exe").arg(in_path).arg("--all").arg(flags);
 
     let output = cmd.output().unwrap();
     assert!(output.status.success());
