@@ -18,7 +18,6 @@ include = [
     "/LICENSE-MIT",
     "/README.md",
     "/src",
-    "/tests",
 ]
 
 [dependencies]
