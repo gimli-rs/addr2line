@@ -1,3 +1,4 @@
+use fallible_iterator::FallibleIterator;
 use std::borrow::Cow;
 use std::io::{BufRead, Lines, StdinLock, Write};
 use std::path::{Path, PathBuf};
@@ -210,7 +211,7 @@ fn main() {
         if opts.do_functions || opts.do_inlines {
             let mut printed_anything = false;
             if let Some(probe) = probe {
-                let mut frames = ctx.find_frames(probe).unwrap();
+                let mut frames = ctx.find_frames(probe).unwrap().peekable();
                 let mut first = true;
                 while let Some(frame) = frames.next().unwrap() {
                     if opts.pretty && !first {
@@ -219,15 +220,25 @@ fn main() {
                     first = false;
 
                     if opts.do_functions {
-                        if let Some(func) = frame.function {
+                        // Only use the symbol table if this isn't an inlined function.
+                        let symbol = if matches!(frames.peek(), Ok(None)) {
+                            ctx.find_symbol(probe)
+                        } else {
+                            None
+                        };
+                        if symbol.is_some() {
+                            // Prefer the symbol table over the DWARF name because:
+                            // - the symbol can include a clone suffix
+                            // - llvm may omit the linkage name in the DWARF with -g1
+                            print_function(symbol, None, opts.demangle);
+                        } else if let Some(func) = frame.function {
                             print_function(
                                 func.raw_name().ok().as_deref(),
                                 func.language,
                                 opts.demangle,
                             );
                         } else {
-                            let name = ctx.find_symbol(probe);
-                            print_function(name, None, opts.demangle);
+                            print_function(None, None, opts.demangle);
                         }
 
                         if opts.pretty {
