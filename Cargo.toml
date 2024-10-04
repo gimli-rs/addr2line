@@ -71,11 +71,6 @@ cargo-all = []
 rustc-dep-of-std = ['core', 'alloc', 'compiler_builtins', 'gimli/rustc-dep-of-std']
 
 [[test]]
-name = "output_equivalence"
-harness = false
-required-features = ["bin"]
-
-[[test]]
 name = "testinput"
 harness = false
 required-features = ["bin"]
