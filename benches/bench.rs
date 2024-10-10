@@ -1,6 +1,4 @@
-#![feature(test)]
-
-extern crate test;
+use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
 
 use std::borrow::Cow;
 use std::env;
@@ -65,8 +63,7 @@ fn get_test_addresses(target: &object::File<'_>) -> Vec<u64> {
     addresses
 }
 
-#[bench]
-fn context_new(b: &mut test::Bencher) {
+fn context_new(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -78,8 +75,11 @@ fn context_new(b: &mut test::Bencher) {
     });
 }
 
-#[bench]
-fn context_new_parse_lines(b: &mut test::Bencher) {
+fn bench_context_new(c: &mut Criterion) {
+    c.bench_function("context_new", context_new);
+}
+
+fn context_new_parse_lines(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -92,8 +92,11 @@ fn context_new_parse_lines(b: &mut test::Bencher) {
     });
 }
 
-#[bench]
-fn context_new_parse_functions(b: &mut test::Bencher) {
+fn bench_context_new_parse_lines(c: &mut Criterion) {
+    c.bench_function("context_new_parse_lines", context_new_parse_lines);
+}
+
+fn context_new_parse_functions(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -106,8 +109,11 @@ fn context_new_parse_functions(b: &mut test::Bencher) {
     });
 }
 
-#[bench]
-fn context_new_parse_inlined_functions(b: &mut test::Bencher) {
+fn bench_context_new_parse_functions(c: &mut Criterion) {
+    c.bench_function("context_new_parse_functions", context_new_parse_functions);
+}
+
+fn context_new_parse_inlined_functions(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -120,8 +126,14 @@ fn context_new_parse_inlined_functions(b: &mut test::Bencher) {
     });
 }
 
-#[bench]
-fn context_query_location(b: &mut test::Bencher) {
+fn bench_context_new_parse_inlined_functions(c: &mut Criterion) {
+    c.bench_function(
+        "context_new_parse_inlined_functions",
+        context_new_parse_inlined_functions,
+    );
+}
+
+fn context_query_location(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -132,19 +144,22 @@ fn context_query_location(b: &mut test::Bencher) {
         let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
         // Ensure nothing is lazily loaded.
         for addr in &addresses {
-            test::black_box(ctx.find_location(*addr)).ok();
+            black_box(ctx.find_location(*addr)).ok();
         }
 
         b.iter(|| {
             for addr in &addresses {
-                test::black_box(ctx.find_location(*addr)).ok();
+                black_box(ctx.find_location(*addr)).ok();
             }
         });
     });
 }
 
-#[bench]
-fn context_query_with_functions(b: &mut test::Bencher) {
+fn bench_context_query_location(c: &mut Criterion) {
+    c.bench_function("context_query_location", context_query_location);
+}
+
+fn context_query_with_functions(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -157,7 +172,7 @@ fn context_query_with_functions(b: &mut test::Bencher) {
         for addr in &addresses {
             let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
             while let Ok(Some(ref frame)) = frames.next() {
-                test::black_box(frame);
+                black_box(frame);
             }
         }
 
@@ -165,15 +180,18 @@ fn context_query_with_functions(b: &mut test::Bencher) {
             for addr in &addresses {
                 let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
-                    test::black_box(frame);
+                    black_box(frame);
                 }
             }
         });
     });
 }
 
-#[bench]
-fn context_new_and_query_location(b: &mut test::Bencher) {
+fn bench_context_query_with_functions(c: &mut Criterion) {
+    c.bench_function("context_query_with_functions", context_query_with_functions);
+}
+
+fn context_new_and_query_location(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -184,14 +202,20 @@ fn context_new_and_query_location(b: &mut test::Bencher) {
             let dwarf = dwarf_borrow(&dwarf);
             let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
             for addr in addresses.iter().take(100) {
-                test::black_box(ctx.find_location(*addr)).ok();
+                black_box(ctx.find_location(*addr)).ok();
             }
         });
     });
 }
 
-#[bench]
-fn context_new_and_query_with_functions(b: &mut test::Bencher) {
+fn bench_context_new_and_query_location(c: &mut Criterion) {
+    c.bench_function(
+        "context_new_and_query_location",
+        context_new_and_query_location,
+    );
+}
+
+fn context_new_and_query_with_functions(b: &mut Bencher) {
     let target = release_fixture_path();
 
     with_file(&target, |file| {
@@ -204,9 +228,29 @@ fn context_new_and_query_with_functions(b: &mut test::Bencher) {
             for addr in addresses.iter().take(100) {
                 let mut frames = ctx.find_frames(*addr).skip_all_loads().unwrap();
                 while let Ok(Some(ref frame)) = frames.next() {
-                    test::black_box(frame);
+                    black_box(frame);
                 }
             }
         });
     });
 }
+
+fn bench_context_new_and_query_with_functions(c: &mut Criterion) {
+    c.bench_function(
+        "context_new_and_query_with_functions",
+        context_new_and_query_with_functions,
+    );
+}
+
+criterion_group!(
+    benches,
+    bench_context_new,
+    bench_context_new_parse_lines,
+    bench_context_new_parse_functions,
+    bench_context_new_parse_inlined_functions,
+    bench_context_query_location,
+    bench_context_query_with_functions,
+    bench_context_new_and_query_location,
+    bench_context_new_and_query_with_functions,
+);
+criterion_main!(benches);
