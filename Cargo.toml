@@ -43,6 +43,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
 backtrace = "0.3.13"
+criterion = "0.5"
 findshlibs = "0.10"
 libtest-mimic = "0.7.2"
 auxiliary = { path = "tests/auxiliary" }
@@ -85,3 +86,7 @@ required-features = ["loader"]
 [[bin]]
 name = "addr2line"
 required-features = ["bin"]
+
+[[bench]]
+name = "bench"
+harness = false
