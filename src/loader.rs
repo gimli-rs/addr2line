@@ -129,6 +129,12 @@ impl Loader {
     pub fn find_symbol(&self, probe: u64) -> Option<&str> {
         self.borrow_internal(|i, _data, _mmap| i.find_symbol(probe))
     }
+
+    /// Find the symbol table entry corresponding to the given virtual memory address.
+    /// Return the symbol name and the symbol base address.
+    pub fn find_symbol_and_addr(&self, probe: u64) -> Option<(&str, u64)> {
+        self.borrow_internal(|i, _data, _mmap| i.find_symbol_and_addr(probe))
+    }
 }
 
 struct LoaderInternal<'a> {
@@ -279,6 +285,10 @@ impl<'a> LoaderInternal<'a> {
 
     fn find_symbol(&self, probe: u64) -> Option<&str> {
         self.symbols.get(probe).map(|x| x.name())
+    }
+
+    fn find_symbol_and_addr(&self, probe: u64) -> Option<(&str, u64)> {
+        self.symbols.get(probe).map(|x| (x.name(), x.address()))
     }
 
     fn find_location(
