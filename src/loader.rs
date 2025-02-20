@@ -44,6 +44,14 @@ pub struct Loader {
     arena_mmap: Arena<Mmap>,
 }
 
+/// Information from a symbol table entry.
+pub struct Symbol<'a> {
+    /// The symbol name
+    pub name: &'a str,
+    /// The symbol address
+    pub address: u64,
+}
+
 impl Loader {
     /// Load the DWARF data for an executable file and create a `Context`.
     #[inline]
@@ -126,8 +134,14 @@ impl Loader {
     }
 
     /// Find the symbol table entry corresponding to the given virtual memory address.
+    /// Return the symbol name.
     pub fn find_symbol(&self, probe: u64) -> Option<&str> {
-        self.borrow_internal(|i, _data, _mmap| i.find_symbol(probe))
+        self.find_symbol_info(probe).map(|symbol| symbol.name)
+    }
+
+    /// Find the symbol table entry corresponding to the given virtual memory address.
+    pub fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
+        self.borrow_internal(|i, _data, _mmap| i.find_symbol_info(probe))
     }
 }
 
@@ -277,8 +291,11 @@ impl<'a> LoaderInternal<'a> {
         object_context.ctx(symbol.name(), probe - symbol.address())
     }
 
-    fn find_symbol(&self, probe: u64) -> Option<&str> {
-        self.symbols.get(probe).map(|x| x.name())
+    fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
+        self.symbols.get(probe).map(|x| Symbol {
+            name: x.name(),
+            address: x.address(),
+        })
     }
 
     fn find_location(
