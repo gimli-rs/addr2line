@@ -44,7 +44,7 @@ pub struct Loader {
     arena_mmap: Arena<Mmap>,
 }
 
-/// Information on a symbol - its name and address
+/// Information from a symbol table entry.
 pub struct Symbol<'a> {
     /// The symbol name
     pub name: &'a str,
