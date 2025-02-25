@@ -310,5 +310,5 @@ fn has_unix_root(p: &str) -> bool {
 
 /// Check if the path in the given string has a windows style root
 fn has_windows_root(p: &str) -> bool {
-    p.starts_with('\\') || p.get(1..3) == Some(":\\")
+    p.starts_with('\\') || p.get(1..3) == Some(":\\") || p.get(1..3) == Some(":/")
 }
