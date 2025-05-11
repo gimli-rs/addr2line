@@ -143,10 +143,16 @@ impl Loader {
     pub fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
         self.borrow_internal(|i, _data, _mmap| i.find_symbol_info(probe))
     }
+
+    /// Get the address of a section
+    pub fn get_section_address(&self, section_name: &str) -> Option<u64> {
+        self.borrow_internal(|i, _data, _mmap| i.get_section_address(section_name))
+    }
 }
 
 struct LoaderInternal<'a> {
     ctx: Context<LoaderReader<'a>>,
+    object: object::File<'a>,
     relative_address_base: u64,
     symbols: SymbolMap<SymbolMapName<'a>>,
     dwarf_package: Option<gimli::DwarfPackage<LoaderReader<'a>>>,
@@ -258,6 +264,7 @@ impl<'a> LoaderInternal<'a> {
 
         Ok(LoaderInternal {
             ctx,
+            object,
             relative_address_base,
             symbols,
             dwarf_package,
@@ -296,6 +303,12 @@ impl<'a> LoaderInternal<'a> {
             name: x.name(),
             address: x.address(),
         })
+    }
+
+    fn get_section_address(&self, section_name: &str) -> Option<u64> {
+        self.object
+            .section_by_name(section_name)
+            .map(|section| section.address())
     }
 
     fn find_location(

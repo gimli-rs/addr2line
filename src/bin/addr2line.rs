@@ -96,6 +96,7 @@ struct Options<'a> {
     llvm: bool,
     exe: &'a PathBuf,
     sup: Option<&'a PathBuf>,
+    section: Option<&'a String>,
 }
 
 fn main() {
@@ -118,6 +119,13 @@ fn main() {
                 .value_name("filename")
                 .value_parser(clap::value_parser!(PathBuf))
                 .help("Path to supplementary object file."),
+            Arg::new("section")
+                .short('j')
+                .long("section")
+                .value_name("name")
+                .help(
+                    "Read offsets relative to the specified section instead of absolute addresses.",
+                ),
             Arg::new("all")
                 .long("all")
                 .action(ArgAction::SetTrue)
@@ -176,9 +184,15 @@ fn main() {
         llvm: matches.get_flag("llvm"),
         exe: matches.get_one::<PathBuf>("exe").unwrap(),
         sup: matches.get_one::<PathBuf>("sup"),
+        section: matches.get_one::<String>("section"),
     };
 
     let ctx = Loader::new_with_sup(opts.exe, opts.sup).unwrap();
+
+    let section_addr = opts.section.map(|section_name| {
+        ctx.get_section_address(section_name)
+            .unwrap_or_else(|| panic!("cannot find section {}", section_name))
+    });
 
     let stdin = std::io::stdin();
     let addrs = if matches.get_flag("all") {
@@ -207,6 +221,9 @@ fn main() {
                 println!();
             }
         }
+
+        // If --section is given, add the section address to probe.
+        let probe = probe.map(|x| x + section_addr.unwrap_or(0));
 
         if opts.do_functions || opts.do_inlines {
             let mut printed_anything = false;
