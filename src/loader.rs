@@ -227,8 +227,9 @@ impl<'a> LoaderInternal<'a> {
         } else {
             gimli::RunTimeEndian::Big
         };
-        let mut dwarf =
-            gimli::Dwarf::load(|id| load_section(Some(id.name()), dwarf_object, endian, arena_data))?;
+        let mut dwarf = gimli::Dwarf::load(|id| {
+            load_section(Some(id.name()), dwarf_object, endian, arena_data)
+        })?;
         if let Some(sup_object) = &sup_object {
             dwarf.load_sup(|id| load_section(Some(id.name()), sup_object, endian, arena_data))?;
         }
