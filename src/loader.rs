@@ -171,7 +171,7 @@ impl<'a> LoaderInternal<'a> {
     ) -> Result<Self> {
         let file = File::open(path)?;
         let map = arena_mmap.alloc(unsafe { Mmap::map(&file)? });
-        let mut object = object::File::parse(&**map)?;
+        let object = object::File::parse(&**map)?;
 
         let relative_address_base = object.relative_address_base();
         let symbols = object.symbol_map();
@@ -191,7 +191,7 @@ impl<'a> LoaderInternal<'a> {
         };
 
         // Load Mach-O dSYM file, ignoring errors.
-        if let Some(map) = (|| {
+        let object1 = if let Some(map) = (|| {
             let uuid = object.mach_uuid().ok()??;
             path.parent()?.read_dir().ok()?.find_map(|candidate| {
                 let candidate = candidate.ok()?;
@@ -215,17 +215,19 @@ impl<'a> LoaderInternal<'a> {
             })
         })() {
             let map = arena_mmap.alloc(map);
-            object = object::File::parse(&**map)?;
-        }
+            &object::File::parse(&**map)?
+        } else {
+            &object
+        };
 
         // Load the DWARF sections.
-        let endian = if object.is_little_endian() {
+        let endian = if object1.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
         let mut dwarf =
-            gimli::Dwarf::load(|id| load_section(Some(id.name()), &object, endian, arena_data))?;
+            gimli::Dwarf::load(|id| load_section(Some(id.name()), object1, endian, arena_data))?;
         if let Some(sup_object) = &sup_object {
             dwarf.load_sup(|id| load_section(Some(id.name()), sup_object, endian, arena_data))?;
         }
