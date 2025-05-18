@@ -219,16 +219,16 @@ impl<'a> LoaderInternal<'a> {
         } else {
             None
         };
-        let object1 = dsym.as_ref().unwrap_or(&object);
+        let dwarf_object = dsym.as_ref().unwrap_or(&object);
 
         // Load the DWARF sections.
-        let endian = if object1.is_little_endian() {
+        let endian = if dwarf_object.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
         let mut dwarf =
-            gimli::Dwarf::load(|id| load_section(Some(id.name()), object1, endian, arena_data))?;
+            gimli::Dwarf::load(|id| load_section(Some(id.name()), dwarf_object, endian, arena_data))?;
         if let Some(sup_object) = &sup_object {
             dwarf.load_sup(|id| load_section(Some(id.name()), sup_object, endian, arena_data))?;
         }

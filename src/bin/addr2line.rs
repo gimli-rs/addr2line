@@ -223,16 +223,16 @@ fn main() {
         }
 
         // If --section is given, add the section address to probe.
-        let probe = probe.map(|probe| {
+        let probe = probe.and_then(|probe| {
             if let Some(section_range) = section_range {
                 if probe < (section_range.end - section_range.begin) {
-                    probe + section_range.begin
+                    Some(probe + section_range.begin)
                 } else {
                     // If addr >= section size, treat it as if no line number information was found.
-                    0
+                    None
                 }
             } else {
-                probe
+                Some(probe)
             }
         });
 
