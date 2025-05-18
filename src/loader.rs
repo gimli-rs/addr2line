@@ -145,8 +145,8 @@ impl Loader {
     }
 
     /// Get the address of a section
-    pub fn get_section_address(&self, section_name: &[u8]) -> Option<u64> {
-        self.borrow_internal(|i, _data, _mmap| i.get_section_address(section_name))
+    pub fn get_section_range(&self, section_name: &[u8]) -> Option<gimli::Range> {
+        self.borrow_internal(|i, _data, _mmap| i.get_section_range(section_name))
     }
 }
 
@@ -307,10 +307,14 @@ impl<'a> LoaderInternal<'a> {
         })
     }
 
-    fn get_section_address(&self, section_name: &[u8]) -> Option<u64> {
+    fn get_section_range(&self, section_name: &[u8]) -> Option<gimli::Range> {
         self.object
             .section_by_name_bytes(section_name)
-            .map(|section| section.address())
+            .map(|section| {
+                let begin = section.address();
+                let end = begin + section.size();
+                gimli::Range { begin, end }
+            })
     }
 
     fn find_location(

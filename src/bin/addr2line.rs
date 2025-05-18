@@ -189,8 +189,8 @@ fn main() {
 
     let ctx = Loader::new_with_sup(opts.exe, opts.sup).unwrap();
 
-    let section_addr = opts.section.map(|section_name| {
-        ctx.get_section_address(section_name.as_bytes())
+    let section_range = opts.section.map(|section_name| {
+        ctx.get_section_range(section_name.as_bytes())
             .unwrap_or_else(|| panic!("cannot find section {}", section_name))
     });
 
@@ -223,7 +223,18 @@ fn main() {
         }
 
         // If --section is given, add the section address to probe.
-        let probe = probe.map(|x| x + section_addr.unwrap_or(0));
+        let probe = probe.map(|probe| {
+            if let Some(section_range) = section_range {
+                if probe < (section_range.end - section_range.begin) {
+                    probe + section_range.begin
+                } else {
+                    // If addr >= section size, treat it as if no line number information was found.
+                    0
+                }
+            } else {
+                probe
+            }
+        });
 
         if opts.do_functions || opts.do_inlines {
             let mut printed_anything = false;
