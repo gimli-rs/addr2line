@@ -191,7 +191,7 @@ impl<'a> LoaderInternal<'a> {
         };
 
         // Load Mach-O dSYM file, ignoring errors.
-        let object1 = if let Some(map) = (|| {
+        let dsym = if let Some(map) = (|| {
             let uuid = object.mach_uuid().ok()??;
             path.parent()?.read_dir().ok()?.find_map(|candidate| {
                 let candidate = candidate.ok()?;
@@ -215,10 +215,11 @@ impl<'a> LoaderInternal<'a> {
             })
         })() {
             let map = arena_mmap.alloc(map);
-            &object::File::parse(&**map)?
+            Some(object::File::parse(&**map)?)
         } else {
-            &object
+            None
         };
+        let object1 = dsym.as_ref().unwrap_or(&object);
 
         // Load the DWARF sections.
         let endian = if object1.is_little_endian() {
