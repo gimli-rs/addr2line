@@ -145,7 +145,7 @@ impl Loader {
     }
 
     /// Get the address of a section
-    pub fn get_section_address(&self, section_name: &str) -> Option<u64> {
+    pub fn get_section_address(&self, section_name: &[u8]) -> Option<u64> {
         self.borrow_internal(|i, _data, _mmap| i.get_section_address(section_name))
     }
 }
@@ -307,9 +307,9 @@ impl<'a> LoaderInternal<'a> {
         })
     }
 
-    fn get_section_address(&self, section_name: &str) -> Option<u64> {
+    fn get_section_address(&self, section_name: &[u8]) -> Option<u64> {
         self.object
-            .section_by_name(section_name)
+            .section_by_name_bytes(section_name)
             .map(|section| section.address())
     }
 

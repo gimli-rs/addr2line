@@ -190,7 +190,7 @@ fn main() {
     let ctx = Loader::new_with_sup(opts.exe, opts.sup).unwrap();
 
     let section_addr = opts.section.map(|section_name| {
-        ctx.get_section_address(section_name)
+        ctx.get_section_address(section_name.as_bytes())
             .unwrap_or_else(|| panic!("cannot find section {}", section_name))
     });
 
