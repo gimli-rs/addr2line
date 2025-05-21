@@ -143,10 +143,16 @@ impl Loader {
     pub fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
         self.borrow_internal(|i, _data, _mmap| i.find_symbol_info(probe))
     }
+
+    /// Get the address of a section
+    pub fn get_section_range(&self, section_name: &[u8]) -> Option<gimli::Range> {
+        self.borrow_internal(|i, _data, _mmap| i.get_section_range(section_name))
+    }
 }
 
 struct LoaderInternal<'a> {
     ctx: Context<LoaderReader<'a>>,
+    object: object::File<'a>,
     relative_address_base: u64,
     symbols: SymbolMap<SymbolMapName<'a>>,
     dwarf_package: Option<gimli::DwarfPackage<LoaderReader<'a>>>,
@@ -165,7 +171,7 @@ impl<'a> LoaderInternal<'a> {
     ) -> Result<Self> {
         let file = File::open(path)?;
         let map = arena_mmap.alloc(unsafe { Mmap::map(&file)? });
-        let mut object = object::File::parse(&**map)?;
+        let object = object::File::parse(&**map)?;
 
         let relative_address_base = object.relative_address_base();
         let symbols = object.symbol_map();
@@ -185,7 +191,7 @@ impl<'a> LoaderInternal<'a> {
         };
 
         // Load Mach-O dSYM file, ignoring errors.
-        if let Some(map) = (|| {
+        let dsym = if let Some(map) = (|| {
             let uuid = object.mach_uuid().ok()??;
             path.parent()?.read_dir().ok()?.find_map(|candidate| {
                 let candidate = candidate.ok()?;
@@ -209,17 +215,21 @@ impl<'a> LoaderInternal<'a> {
             })
         })() {
             let map = arena_mmap.alloc(map);
-            object = object::File::parse(&**map)?;
-        }
+            Some(object::File::parse(&**map)?)
+        } else {
+            None
+        };
+        let dwarf_object = dsym.as_ref().unwrap_or(&object);
 
         // Load the DWARF sections.
-        let endian = if object.is_little_endian() {
+        let endian = if dwarf_object.is_little_endian() {
             gimli::RunTimeEndian::Little
         } else {
             gimli::RunTimeEndian::Big
         };
-        let mut dwarf =
-            gimli::Dwarf::load(|id| load_section(Some(id.name()), &object, endian, arena_data))?;
+        let mut dwarf = gimli::Dwarf::load(|id| {
+            load_section(Some(id.name()), dwarf_object, endian, arena_data)
+        })?;
         if let Some(sup_object) = &sup_object {
             dwarf.load_sup(|id| load_section(Some(id.name()), sup_object, endian, arena_data))?;
         }
@@ -258,6 +268,7 @@ impl<'a> LoaderInternal<'a> {
 
         Ok(LoaderInternal {
             ctx,
+            object,
             relative_address_base,
             symbols,
             dwarf_package,
@@ -296,6 +307,16 @@ impl<'a> LoaderInternal<'a> {
             name: x.name(),
             address: x.address(),
         })
+    }
+
+    fn get_section_range(&self, section_name: &[u8]) -> Option<gimli::Range> {
+        self.object
+            .section_by_name_bytes(section_name)
+            .map(|section| {
+                let begin = section.address();
+                let end = begin + section.size();
+                gimli::Range { begin, end }
+            })
     }
 
     fn find_location(
