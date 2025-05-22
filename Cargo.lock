@@ -547,6 +547,7 @@ dependencies = [
  "flate2",
  "memchr",
  "ruzstd",
+ "wasmparser",
 ]
 
 [[package]]
@@ -914,6 +915,15 @@ name = "wasm-bindgen-shared"
 version = "0.2.94"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a42f6c679374623f295a8623adfe63d9284091245c3504bde47c17a3ce2777d9"
+
+[[package]]
+name = "wasmparser"
+version = "0.218.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "059739c2eac26eea736389a7d6d30b41a8201490bea204d0facde19183359849"
+dependencies = [
+ "bitflags",
+]
 
 [[package]]
 name = "web-sys"

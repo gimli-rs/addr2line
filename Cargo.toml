@@ -61,6 +61,7 @@ std = ["gimli/std"]
 loader = ["std", "dep:object", "dep:memmap2", "dep:typed-arena"]
 bin = ["loader", "rustc-demangle", "cpp_demangle", "fallible-iterator", "smallvec", "dep:clap"]
 all = ["bin"]
+wasm = ["loader", "object/wasm"]
 
 # Use of --all-features is not supported.
 # This is a dummy feature to detect when --all-features is used.
