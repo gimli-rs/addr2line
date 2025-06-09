@@ -2,9 +2,8 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use crate::lazy::LazyResult;
 use crate::maybe_small;
-use crate::{Context, DebugFile, Error, RangeAttributes};
+use crate::{Context, DebugFile, Error, LazyResult, RangeAttributes};
 
 pub(crate) struct LazyFunctions<R: gimli::Reader>(LazyResult<Functions<R>>);
 
@@ -15,7 +14,7 @@ impl<R: gimli::Reader> LazyFunctions<R> {
 
     pub(crate) fn borrow(&self, unit: gimli::UnitRef<R>) -> Result<&Functions<R>, Error> {
         self.0
-            .borrow_with(|| Functions::parse(unit))
+            .get_or_init(|| Functions::parse(unit))
             .as_ref()
             .map_err(Error::clone)
     }
@@ -59,7 +58,7 @@ impl<R: gimli::Reader> LazyFunction<R> {
         ctx: &Context<R>,
     ) -> Result<&Function<R>, Error> {
         self.lazy
-            .borrow_with(|| Function::parse(self.dw_die_offset, file, unit, ctx))
+            .get_or_init(|| Function::parse(self.dw_die_offset, file, unit, ctx))
             .as_ref()
             .map_err(Error::clone)
     }

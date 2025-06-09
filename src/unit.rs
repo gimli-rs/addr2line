@@ -3,9 +3,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp;
 
-use crate::lazy::LazyResult;
 use crate::{
-    Context, DebugFile, Error, Function, Functions, LazyFunctions, LazyLines,
+    Context, DebugFile, Error, Function, Functions, LazyFunctions, LazyLines, LazyResult,
     LineLocationRangeIter, Lines, Location, LookupContinuation, LookupResult, RangeAttributes,
     SimpleLookup, SplitDwarfLoad,
 };
@@ -52,13 +51,13 @@ impl<R: gimli::Reader> ResUnit<R> {
         };
         let complete = |dwo| SimpleLookup::new_complete(map_dwo(dwo));
 
-        if let Some(dwo) = self.dwo.borrow() {
+        if let Some(dwo) = self.dwo.get() {
             return complete(dwo);
         }
 
         let dwo_id = match self.dw_unit.dwo_id {
             None => {
-                return complete(self.dwo.borrow_with(|| Ok(None)));
+                return complete(self.dwo.get_or_init(|| Ok(None)));
             }
             Some(dwo_id) => dwo_id,
         };
@@ -76,7 +75,7 @@ impl<R: gimli::Reader> ResUnit<R> {
         let path = match dwo_name {
             Ok(v) => v,
             Err(e) => {
-                return complete(self.dwo.borrow_with(|| Err(e)));
+                return complete(self.dwo.get_or_init(|| Err(e)));
             }
         };
 
@@ -106,7 +105,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 path,
                 parent: ctx.sections.clone(),
             },
-            move |dwo_dwarf| map_dwo(self.dwo.borrow_with(|| process_dwo(dwo_dwarf))),
+            move |dwo_dwarf| map_dwo(self.dwo.get_or_init(|| process_dwo(dwo_dwarf))),
         )
     }
 

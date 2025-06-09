@@ -2,6 +2,7 @@ use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::OnceCell;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,6 @@ use memmap2::Mmap;
 use object::{Object, ObjectMapFile, ObjectSection, SymbolMap, SymbolMapName};
 use typed_arena::Arena;
 
-use crate::lazy::LazyCell;
 use crate::{
     Context, FrameIter, Location, LocationRangeIter, LookupContinuation, LookupResult,
     SplitDwarfLoad,
@@ -159,7 +159,7 @@ struct LoaderInternal<'a> {
     // Map from address to Mach-O object file path.
     object_map: object::ObjectMap<'a>,
     // A context for each Mach-O object file.
-    objects: Vec<LazyCell<Option<ObjectContext<'a>>>>,
+    objects: Vec<OnceCell<Option<ObjectContext<'a>>>>,
 }
 
 impl<'a> LoaderInternal<'a> {
@@ -177,7 +177,7 @@ impl<'a> LoaderInternal<'a> {
         let symbols = object.symbol_map();
         let object_map = object.object_map();
         let mut objects = Vec::new();
-        objects.resize_with(object_map.objects().len(), LazyCell::new);
+        objects.resize_with(object_map.objects().len(), OnceCell::new);
 
         // Load supplementary object file.
         // TODO: use debuglink and debugaltlink
@@ -295,7 +295,7 @@ impl<'a> LoaderInternal<'a> {
     ) -> Option<(&Context<LoaderReader<'a>>, u64)> {
         let symbol = self.object_map.get(probe)?;
         let object_context = self.objects[symbol.object_index()]
-            .borrow_with(|| {
+            .get_or_init(|| {
                 ObjectContext::new(symbol.object(&self.object_map), arena_data, arena_mmap)
             })
             .as_ref()?;
