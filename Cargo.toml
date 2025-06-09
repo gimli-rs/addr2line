@@ -58,9 +58,10 @@ codegen-units = 1
 [features]
 default = ["rustc-demangle", "cpp_demangle", "loader", "fallible-iterator", "smallvec"]
 std = ["gimli/std"]
+wasm = ["object/wasm"]
 loader = ["std", "dep:object", "dep:memmap2", "dep:typed-arena"]
 bin = ["loader", "rustc-demangle", "cpp_demangle", "fallible-iterator", "smallvec", "dep:clap"]
-all = ["bin"]
+all = ["bin", "wasm"]
 
 # Use of --all-features is not supported.
 # This is a dummy feature to detect when --all-features is used.
