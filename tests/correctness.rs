@@ -52,6 +52,9 @@ fn zero_function() {
     let path = std::env::current_exe().unwrap();
     let ctx = Loader::new(&path).unwrap();
     for probe in 0..10 {
-        assert!(ctx.find_frames(probe).unwrap().count().unwrap() < 10);
+        // Test that we aren't finding large numbers of functions all at
+        // low addresses. We do need to allow for a large amount of
+        // inlined functions, so we allow for 20 frames.
+        assert!(ctx.find_frames(probe).unwrap().count().unwrap() < 20);
     }
 }
