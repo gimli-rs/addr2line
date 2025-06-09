@@ -91,11 +91,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install rust
-        run: rustup update 1.70.0 && rustup default 1.70.0
+        run: rustup update 1.81.0 && rustup default 1.81.0
       - name: Build
         run: |
-          # ruzstd needs rust 1.73.0
-          cargo update -p object --precise 0.36.0
           cargo build --features loader
 
   rustfmt:

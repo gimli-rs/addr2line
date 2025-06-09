@@ -9,7 +9,7 @@ license = "Apache-2.0 OR MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 edition = "2018"
-rust-version = "1.70"
+rust-version = "1.81"
 include = [
     "/CHANGELOG.md",
     "/Cargo.lock",
@@ -28,7 +28,7 @@ rustc-demangle = { version = "0.1", optional = true }
 cpp_demangle = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 
 # loader dependencies
-object = { version = "0.36.0", default-features = false, features = ["read", "compression"], optional = true }
+object = { version = "0.37.0", default-features = false, features = ["read", "compression"], optional = true }
 memmap2 = { version = "0.9.4", optional = true }
 typed-arena = { version = "2", optional = true }
 
@@ -43,9 +43,9 @@ compiler_builtins = { version = '0.1.2', optional = true }
 
 [dev-dependencies]
 backtrace = "0.3.13"
-criterion = "0.5"
+criterion = "0.6.0"
 findshlibs = "0.10"
-libtest-mimic = "0.7.2"
+libtest-mimic = "0.8.1"
 auxiliary = { path = "tests/auxiliary" }
 
 [profile.release]
