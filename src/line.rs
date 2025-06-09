@@ -5,8 +5,7 @@ use core::cmp::Ordering;
 use core::mem;
 use core::num::NonZeroU64;
 
-use crate::lazy::LazyResult;
-use crate::{Error, Location};
+use crate::{Error, LazyResult, Location};
 
 pub(crate) struct LazyLines(LazyResult<Lines>);
 
@@ -21,7 +20,7 @@ impl LazyLines {
         ilnp: &gimli::IncompleteLineProgram<R, R::Offset>,
     ) -> Result<&Lines, Error> {
         self.0
-            .borrow_with(|| Lines::parse(dw_unit, ilnp.clone()))
+            .get_or_init(|| Lines::parse(dw_unit, ilnp.clone()))
             .as_ref()
             .map_err(Error::clone)
     }

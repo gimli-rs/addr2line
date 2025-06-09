@@ -9,7 +9,7 @@ license = "Apache-2.0 OR MIT"
 readme = "./README.md"
 repository = "https://github.com/gimli-rs/addr2line"
 edition = "2018"
-rust-version = "1.65"
+rust-version = "1.70"
 include = [
     "/CHANGELOG.md",
     "/Cargo.lock",
