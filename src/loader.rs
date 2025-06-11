@@ -44,14 +44,6 @@ pub struct Loader {
     arena_mmap: Arena<Mmap>,
 }
 
-/// Information from a symbol table entry.
-pub struct Symbol<'a> {
-    /// The symbol name
-    pub name: &'a str,
-    /// The symbol address
-    pub address: u64,
-}
-
 impl Loader {
     /// Load the DWARF data for an executable file and create a `Context`.
     #[inline]
@@ -486,4 +478,22 @@ fn convert_path(bytes: &[u8]) -> Result<PathBuf> {
 fn convert_path(bytes: &[u8]) -> Result<PathBuf> {
     let s = std::str::from_utf8(bytes)?;
     Ok(PathBuf::from(s))
+}
+
+/// Information from a symbol table entry.
+pub struct Symbol<'a> {
+    name: &'a str,
+    address: u64,
+}
+
+impl<'a> Symbol<'a> {
+    /// Get the symbol name.
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// Get the symbol address.
+    pub fn address(&self) -> u64 {
+        self.address
+    }
 }
