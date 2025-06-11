@@ -9,7 +9,6 @@ dependencies = [
  "auxiliary",
  "backtrace",
  "clap",
- "compiler_builtins",
  "cpp_demangle",
  "criterion",
  "fallible-iterator",
