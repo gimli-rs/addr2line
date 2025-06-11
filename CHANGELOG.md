@@ -2,6 +2,35 @@
 
 --------------------------------------------------------------------------------
 
+## 0.25.0 (2025/06/11)
+
+### Breaking changes
+
+* Updated `gimli` dependency.
+
+### Added
+
+* Added `Loader::find_symbol`.
+  [#341](https://github.com/gimli-rs/addr2line/pull/341)
+  [#349](https://github.com/gimli-rs/addr2line/pull/349)
+
+* Added `Loader::get_section_range`.
+  Added `--section` option to `addr2line` binary.
+  [#343](https://github.com/gimli-rs/addr2line/pull/343)
+
+* Added `wasm` feature.
+  [#348](https://github.com/gimli-rs/addr2line/pull/348)
+
+### Changed
+
+* Fixed handling of Windows paths that use forward slashes.
+  [#342](https://github.com/gimli-rs/addr2line/pull/342)
+
+* Removed `compiler-builtins` from `rustc-dep-of-std` dependencies.
+  [#345](https://github.com/gimli-rs/addr2line/pull/345)
+
+--------------------------------------------------------------------------------
+
 ## 0.24.2 (2024/10/04)
 
 ### Changed

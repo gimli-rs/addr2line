@@ -5,6 +5,15 @@ version = 3
 [[package]]
 name = "addr2line"
 version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfbe277e56a376000877090da837660b4427aad530e3028d44e0bffe4f89a1c1"
+dependencies = [
+ "gimli 0.31.1",
+]
+
+[[package]]
+name = "addr2line"
+version = "0.25.0"
 dependencies = [
  "auxiliary",
  "backtrace",
@@ -22,15 +31,6 @@ dependencies = [
  "rustc-std-workspace-core",
  "smallvec",
  "typed-arena",
-]
-
-[[package]]
-name = "addr2line"
-version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbe277e56a376000877090da837660b4427aad530e3028d44e0bffe4f89a1c1"
-dependencies = [
- "gimli 0.31.1",
 ]
 
 [[package]]
@@ -120,7 +120,7 @@ version = "0.3.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6806a6321ec58106fea15becdad98371e28d92ccbc7c8f1b3b6dd724fe8f1002"
 dependencies = [
- "addr2line 0.24.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "addr2line 0.24.2",
  "cfg-if",
  "libc",
  "miniz_oxide",
