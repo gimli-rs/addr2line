@@ -123,6 +123,8 @@ impl<R: gimli::Reader> Context<R> {
             debug_info,
             debug_line,
             debug_line_str,
+            debug_macinfo: default_section.clone().into(),
+            debug_macro: default_section.clone().into(),
             debug_str,
             debug_str_offsets,
             debug_types: default_section.clone().into(),
