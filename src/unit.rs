@@ -187,7 +187,7 @@ impl<R: gimli::Reader> ResUnit<R> {
                 }
                 None => None,
             };
-            let location = self.find_location(probe, unit.dwarf)?;
+            let location = self.find_location(probe, &ctx.sections)?;
             Ok((function, location))
         })
     }

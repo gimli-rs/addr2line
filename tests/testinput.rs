@@ -33,7 +33,7 @@ fn make_tests() -> Vec<Trial> {
             } else if file_type.is_file() {
                 tests.push(Trial::test(
                     format!("addr2line -e {}", in_path.display()),
-                    move || run_test(in_path, out_path, "-afi"),
+                    move || run_test(in_path, out_path, &["-afi", "--all"]),
                 ));
             }
         }
@@ -52,13 +52,20 @@ fn make_tests() -> Vec<Trial> {
         let in_path = in_path.clone();
         let out_path = PathBuf::from(format!("testoutput/flags/base{}", flags));
         tests.push(Trial::test(format!("addr2line {}", flags), move || {
-            run_test(in_path, out_path, &flags)
+            run_test(in_path, out_path, &[&flags, "--all"])
         }));
     }
+
+    let in_path = PathBuf::from("testinput/dwarf/base-gcc-split");
+    let out_path = PathBuf::from("testoutput/flags/base-gcc-split-issue-352");
+    tests.push(Trial::test("addr2line issue-352", move || {
+        run_test(in_path, out_path, &["-afi", "0x1060"])
+    }));
+
     tests
 }
 
-fn run_test(in_path: PathBuf, out_path: PathBuf, flags: &str) -> Result<(), Failed> {
+fn run_test(in_path: PathBuf, out_path: PathBuf, flags: &[&str]) -> Result<(), Failed> {
     let mut exe = env::current_exe().unwrap();
     assert!(exe.pop());
     if exe.file_name().unwrap().to_str().unwrap() == "deps" {
@@ -69,7 +76,7 @@ fn run_test(in_path: PathBuf, out_path: PathBuf, flags: &str) -> Result<(), Fail
 
     let mut cmd = Command::new(exe);
     cmd.env("RUST_BACKTRACE", "1");
-    cmd.arg("--exe").arg(in_path).arg("--all").arg(flags);
+    cmd.arg("--exe").arg(in_path).args(flags.iter());
 
     let output = cmd.output().unwrap();
     assert!(output.status.success());
