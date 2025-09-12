@@ -167,7 +167,8 @@ impl<R: gimli::Reader> Context<R> {
     pub fn find_dwarf_and_unit(
         &self,
         probe: u64,
-    ) -> LookupResult<impl LookupContinuation<Output = Option<gimli::UnitRef<R>>, Buf = R>> {
+    ) -> LookupResult<impl LookupContinuation<Output = Option<gimli::UnitRef<'_, R>>, Buf = R>>
+    {
         let mut units_iter = self.units.find(probe);
         if let Some(unit) = units_iter.next() {
             return LoopingLookup::new_lookup(
