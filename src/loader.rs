@@ -111,7 +111,7 @@ impl Loader {
         &self,
         probe_low: u64,
         probe_high: u64,
-    ) -> Result<LocationRangeIter<'_, LoaderReader>> {
+    ) -> Result<LocationRangeIter<'_, LoaderReader<'_>>> {
         self.borrow_internal(|i, data, mmap| {
             i.find_location_range(probe_low, probe_high, data, mmap)
         })
@@ -132,7 +132,7 @@ impl Loader {
     }
 
     /// Find the symbol table entry corresponding to the given virtual memory address.
-    pub fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
+    pub fn find_symbol_info(&self, probe: u64) -> Option<Symbol<'_>> {
         self.borrow_internal(|i, _data, _mmap| i.find_symbol_info(probe))
     }
 
@@ -294,7 +294,7 @@ impl<'a> LoaderInternal<'a> {
         object_context.ctx(symbol.name(), probe - symbol.address())
     }
 
-    fn find_symbol_info(&self, probe: u64) -> Option<Symbol> {
+    fn find_symbol_info(&self, probe: u64) -> Option<Symbol<'a>> {
         self.symbols.get(probe).map(|x| Symbol {
             name: x.name(),
             address: x.address(),
@@ -327,7 +327,7 @@ impl<'a> LoaderInternal<'a> {
         probe_high: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Result<LocationRangeIter<'a, LoaderReader>> {
+    ) -> Result<LocationRangeIter<'_, LoaderReader<'a>>> {
         let (ctx, probe) = self.ctx(probe_low, arena_data, arena_mmap);
         // TODO: handle ranges that cover multiple objects
         let probe_high = probe + (probe_high - probe_low);
@@ -339,7 +339,7 @@ impl<'a> LoaderInternal<'a> {
         probe: u64,
         arena_data: &'a Arena<Vec<u8>>,
         arena_mmap: &'a Arena<Mmap>,
-    ) -> Result<FrameIter<'a, LoaderReader>> {
+    ) -> Result<FrameIter<'_, LoaderReader<'a>>> {
         let (ctx, probe) = self.ctx(probe, arena_data, arena_mmap);
         let mut frames = ctx.find_frames(probe);
         loop {
