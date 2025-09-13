@@ -2,6 +2,18 @@
 
 --------------------------------------------------------------------------------
 
+## 0.25.1 (2025/09/13)
+
+### Changed
+
+* Fixed line parsing for split DWARF.
+  [#353](https://github.com/gimli-rs/addr2line/pull/353)
+
+* Changed `.debug_aranges` parsing to skip invalid entries instead of failing.
+  [#355](https://github.com/gimli-rs/addr2line/pull/355)
+
+--------------------------------------------------------------------------------
+
 ## 0.25.0 (2025/06/11)
 
 ### Breaking changes
