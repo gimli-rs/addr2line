@@ -94,7 +94,7 @@ impl Lines {
                 column,
             });
         }
-        sequences.sort_by_key(|x| x.start);
+        sequences.sort_unstable_by_key(|x| x.start);
 
         let mut files = Vec::new();
         let header = rows.header();

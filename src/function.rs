@@ -158,7 +158,7 @@ impl<R: gimli::Reader> Functions<R> {
         // It's possible for multiple functions to have the same address range if the
         // compiler can detect and remove functions with identical code.  In that case
         // we'll nondeterministically return one of them.
-        addresses.sort_by_key(|x| x.range.begin);
+        addresses.sort_unstable_by_key(|x| x.range.begin);
 
         Ok(Functions {
             functions: functions.into_boxed_slice(),
@@ -252,7 +252,7 @@ impl<R: gimli::Reader> Function<R> {
         // In this example, if you want to look up address 7 at depth 0, and you
         // encounter [0..2 at depth 1], are you before or after the target range?
         // You don't know.
-        state.addresses.sort_by(|r1, r2| {
+        state.addresses.sort_unstable_by(|r1, r2| {
             if r1.call_depth < r2.call_depth {
                 Ordering::Less
             } else if r1.call_depth > r2.call_depth {

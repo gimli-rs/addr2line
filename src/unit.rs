@@ -208,7 +208,7 @@ impl<R: gimli::Reader> ResUnits<R> {
         while let Some(header) = headers.next()? {
             aranges.push((header.debug_info_offset(), header.offset()));
         }
-        aranges.sort_by_key(|i| i.0);
+        aranges.sort_unstable_by_key(|i| i.0);
 
         let mut unit_ranges = Vec::new();
         let mut res_units = Vec::new();
@@ -362,7 +362,7 @@ impl<R: gimli::Reader> ResUnits<R> {
         }
 
         // Sort this for faster lookup in `Self::find_range`.
-        unit_ranges.sort_by_key(|i| i.range.end);
+        unit_ranges.sort_unstable_by_key(|i| i.range.end);
 
         // Calculate the `min_begin` field now that we've determined the order of
         // CUs.
