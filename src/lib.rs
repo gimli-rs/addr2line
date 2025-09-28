@@ -293,6 +293,7 @@ impl<R: gimli::Reader> Context<R> {
     ///
     ///   // ...
     /// ```
+    #[allow(clippy::type_complexity)]
     pub fn preload_units(
         &'_ self,
         probe: u64,
