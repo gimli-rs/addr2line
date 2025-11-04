@@ -25,7 +25,7 @@ gimli = { version = "0.32.0", default-features = false, features = ["read"] }
 fallible-iterator = { version = "0.3.0", default-features = false, optional = true }
 smallvec = { version = "1", default-features = false, optional = true }
 rustc-demangle = { version = "0.1", optional = true }
-cpp_demangle = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
+cpp_demangle = { version = "0.5", default-features = false, features = ["alloc"], optional = true }
 
 # loader dependencies
 object = { version = "0.37.0", default-features = false, features = ["read", "compression"], optional = true }
