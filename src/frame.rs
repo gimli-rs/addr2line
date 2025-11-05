@@ -198,7 +198,7 @@ pub fn demangle(name: &str, language: gimli::DwLang) -> Option<String> {
         | gimli::DW_LANG_C_plus_plus_17
         | gimli::DW_LANG_C_plus_plus_20 => cpp_demangle::Symbol::new(name)
             .ok()
-            .and_then(|x| x.demangle(&Default::default()).ok()),
+            .and_then(|x| x.demangle_with_options(&Default::default()).ok()),
         _ => None,
     }
 }
