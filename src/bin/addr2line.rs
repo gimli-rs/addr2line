@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgAction, Command};
 
-use addr2line::{Loader, LoaderReader, Location};
+use addr2line::{Loader, Location};
 
 fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
     if string.len() > 2 && string.starts_with("0x") {
@@ -15,16 +15,16 @@ fn parse_uint_from_hex_string(string: &str) -> Option<u64> {
     }
 }
 
-enum Addrs<'a> {
+enum Addrs<'a, R: gimli::Reader> {
     Args(clap::parser::ValuesRef<'a, String>),
     Stdin(Lines<StdinLock<'a>>),
     All {
-        iter: addr2line::LocationRangeIter<'a, LoaderReader<'a>>,
+        iter: addr2line::LocationRangeIter<'a, R>,
         max: u64,
     },
 }
 
-impl<'a> Iterator for Addrs<'a> {
+impl<'a, R: gimli::Reader> Iterator for Addrs<'a, R> {
     type Item = Option<u64>;
 
     fn next(&mut self) -> Option<Option<u64>> {
