@@ -2,6 +2,33 @@
 
 --------------------------------------------------------------------------------
 
+## 0.26.0 (2026/01/11)
+
+### Breaking changes
+
+* Updated `gimli` dependency.
+
+### Changed
+
+* The minimum supported rust version (MSRV) is 1.88.0.
+
+* Updated `demangle` to handle C++ 17 and 20.
+  [#357](https://github.com/gimli-rs/addr2line/pull/357)
+
+* Changed internal sorting to use unstable sort.
+  [#358](https://github.com/gimli-rs/addr2line/pull/358)
+  [#359](https://github.com/gimli-rs/addr2line/pull/359)
+
+* Updated dependencies.
+  [#361](https://github.com/gimli-rs/addr2line/pull/361)
+
+### Added
+
+* Added relocatable object file support to `Loader`.
+  [#362](https://github.com/gimli-rs/addr2line/pull/362)
+
+--------------------------------------------------------------------------------
+
 ## 0.25.1 (2025/09/13)
 
 ### Changed
