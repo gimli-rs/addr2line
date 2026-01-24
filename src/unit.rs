@@ -3,6 +3,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp;
 
+use gimli::ReaderOffset;
+
 use crate::{
     Context, DebugFile, Error, Function, Functions, LazyFunctions, LazyLines, LazyResult,
     LineLocationRangeIter, Lines, Location, LookupContinuation, LookupResult, RangeAttributes,
@@ -217,7 +219,7 @@ impl<R: gimli::Reader> ResUnits<R> {
         let mut units = sections.units();
         while let Some(header) = units.next()? {
             let unit_id = res_units.len();
-            let offset = match header.offset().as_debug_info_offset() {
+            let offset = match header.debug_info_offset() {
                 Some(offset) => offset,
                 None => continue,
             };
@@ -393,7 +395,7 @@ impl<R: gimli::Reader> ResUnits<R> {
             .binary_search_by_key(&offset.0, |unit| unit.offset.0)
         {
             // There is never a DIE at the unit offset or before the first unit.
-            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
+            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset(offset.0.into_u64())),
             Err(i) => Ok(&self.units[i - 1].dw_unit),
         }
     }
@@ -507,7 +509,7 @@ impl<R: gimli::Reader> SupUnits<R> {
         let mut sup_units = Vec::new();
         let mut units = sections.units();
         while let Some(header) = units.next()? {
-            let offset = match header.offset().as_debug_info_offset() {
+            let offset = match header.debug_info_offset() {
                 Some(offset) => offset,
                 None => continue,
             };
@@ -531,7 +533,7 @@ impl<R: gimli::Reader> SupUnits<R> {
             .binary_search_by_key(&offset.0, |unit| unit.offset.0)
         {
             // There is never a DIE at the unit offset or before the first unit.
-            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset),
+            Ok(_) | Err(0) => Err(gimli::Error::NoEntryAtGivenOffset(offset.0.into_u64())),
             Err(i) => Ok(&self.units[i - 1].dw_unit),
         }
     }
