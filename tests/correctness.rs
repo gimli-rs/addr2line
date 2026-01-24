@@ -29,12 +29,15 @@ fn correctness() {
         }
     };
 
-    test(test_function as u64, "correctness::test_function");
     test(
-        small::test_function as u64,
+        test_function as *const () as u64,
+        "correctness::test_function",
+    );
+    test(
+        small::test_function as *const () as u64,
         "correctness::small::test_function",
     );
-    test(auxiliary::foo as u64, "auxiliary::foo");
+    test(auxiliary::foo as *const () as u64, "auxiliary::foo");
 }
 
 mod small {
