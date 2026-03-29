@@ -281,7 +281,7 @@ impl<'a> LoaderInternal<'a> {
     }
 
     fn find_symbol_info(&self, probe: u64) -> Option<Symbol<'a>> {
-        self.symbols.get(probe).map(|x| Symbol {
+        self.symbols.containing(probe).map(|x| Symbol {
             name: x.name(),
             address: x.address(),
         })
