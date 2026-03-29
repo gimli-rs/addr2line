@@ -2,6 +2,18 @@
 
 --------------------------------------------------------------------------------
 
+## 0.26.1 (2026/03/29)
+
+### Changed
+
+* Improved error handling in `addr2line` binary.
+  [#368](https://github.com/gimli-rs/addr2line/pull/368)
+
+* Updated `object` dependency to improve `Loader::find_symbol`.
+  [#369](https://github.com/gimli-rs/addr2line/pull/369)
+
+--------------------------------------------------------------------------------
+
 ## 0.26.0 (2026/01/11)
 
 ### Breaking changes
