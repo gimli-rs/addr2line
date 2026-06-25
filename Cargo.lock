@@ -22,7 +22,7 @@ dependencies = [
  "criterion",
  "fallible-iterator",
  "findshlibs",
- "gimli 0.33.1",
+ "gimli 0.34.0",
  "libtest-mimic",
  "memmap2",
  "object 0.39.0",
@@ -394,9 +394,9 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gimli"
-version = "0.33.1"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e16c5073773ccf057c282be832a59ee53ef5ff98db3aeff7f8314f52ffc196"
+checksum = "1033caf0b349c518623b5396bfb2cf0bddf44f0306d543a250e5743297aafd10"
 dependencies = [
  "rustc-std-workspace-alloc",
  "rustc-std-workspace-core",
