@@ -66,13 +66,7 @@ fn make_tests() -> Vec<Trial> {
 }
 
 fn run_test(in_path: PathBuf, out_path: PathBuf, flags: &[&str]) -> Result<(), Failed> {
-    let mut exe = env::current_exe().unwrap();
-    assert!(exe.pop());
-    if exe.file_name().unwrap().to_str().unwrap() == "deps" {
-        assert!(exe.pop());
-    }
-    exe.push("addr2line");
-    assert!(exe.is_file());
+    let exe = env!("CARGO_BIN_EXE_addr2line");
 
     let mut cmd = Command::new(exe);
     cmd.env("RUST_BACKTRACE", "1");
