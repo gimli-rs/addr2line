@@ -61,3 +61,12 @@ fn zero_function() {
         assert!(ctx.find_frames(probe).unwrap().count().unwrap() < 20);
     }
 }
+
+#[test]
+fn max_address() {
+    let path = std::env::current_exe().unwrap();
+    let ctx = Loader::new(&path).unwrap();
+    let probe = u64::MAX;
+    assert!(ctx.find_location(probe).unwrap().is_none());
+    assert_eq!(ctx.find_frames(probe).unwrap().count().unwrap(), 0);
+}
