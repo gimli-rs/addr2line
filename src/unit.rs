@@ -411,7 +411,10 @@ impl<R: gimli::Reader> ResUnits<R> {
     /// address, and the caller must check if there is actually a function or
     /// location in the CU for that address.
     pub(crate) fn find(&self, probe: u64) -> impl Iterator<Item = &ResUnit<R>> {
-        self.find_range(probe, probe + 1).map(|(unit, _range)| unit)
+        // Ranges are half-open, so no range can contain `u64::MAX`, and a probe range
+        // of `[u64::MAX, u64::MAX)` correctly matches nothing.
+        self.find_range(probe, probe.saturating_add(1))
+            .map(|(unit, _range)| unit)
     }
 
     /// Finds the CUs covering the range of addresses given.
