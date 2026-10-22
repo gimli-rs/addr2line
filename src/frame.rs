@@ -5,6 +5,7 @@ use core::iter;
 use crate::{maybe_small, Error, Function, InlinedFunction, ResUnit};
 
 /// A source location.
+#[derive(Debug)]
 pub struct Location<'a> {
     /// The file name.
     pub file: Option<&'a str>,
@@ -17,6 +18,7 @@ pub struct Location<'a> {
 }
 
 /// A function frame.
+#[derive(Debug)]
 pub struct Frame<'ctx, R: gimli::Reader> {
     /// The DWARF unit offset corresponding to the DIE of the function.
     pub dw_die_offset: Option<gimli::UnitOffset<R::Offset>>,
@@ -160,6 +162,7 @@ where
 }
 
 /// A function name.
+#[derive(Debug)]
 pub struct FunctionName<R: gimli::Reader> {
     /// The name of the function.
     pub name: R,
