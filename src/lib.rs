@@ -24,7 +24,11 @@
 //! The crate has a CLI wrapper around the library which provides some of
 //! the functionality of the `addr2line` command line tool distributed with
 //! [GNU binutils](https://sourceware.org/binutils/docs/binutils/addr2line.html).
-#![deny(missing_docs)]
+#![deny(
+    missing_debug_implementations,
+    clippy::missing_fields_in_debug,
+    missing_docs
+)]
 #![no_std]
 
 #[cfg(feature = "cargo-all")]
@@ -98,6 +102,12 @@ pub struct Context<R: gimli::Reader> {
     sections: Arc<gimli::Dwarf<R>>,
     units: ResUnits<R>,
     sup_units: SupUnits<R>,
+}
+
+impl<R: gimli::Reader> core::fmt::Debug for Context<R> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_struct("Context").finish_non_exhaustive()
+    }
 }
 
 impl<R: gimli::Reader> Context<R> {

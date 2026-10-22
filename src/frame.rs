@@ -5,6 +5,7 @@ use core::iter;
 use crate::{maybe_small, Error, Function, InlinedFunction, ResUnit};
 
 /// A source location.
+#[derive(Debug)]
 pub struct Location<'a> {
     /// The file name.
     pub file: Option<&'a str>,
@@ -17,6 +18,7 @@ pub struct Location<'a> {
 }
 
 /// A function frame.
+#[derive(Debug)]
 pub struct Frame<'ctx, R: gimli::Reader> {
     /// The DWARF unit offset corresponding to the DIE of the function.
     pub dw_die_offset: Option<gimli::UnitOffset<R::Offset>>,
@@ -30,6 +32,15 @@ pub struct Frame<'ctx, R: gimli::Reader> {
 pub struct FrameIter<'ctx, R>(FrameIterState<'ctx, R>)
 where
     R: gimli::Reader;
+
+impl<'ctx, R> core::fmt::Debug for FrameIter<'ctx, R>
+where
+    R: gimli::Reader + 'ctx,
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_struct("FrameIter").finish_non_exhaustive()
+    }
+}
 
 enum FrameIterState<'ctx, R>
 where
@@ -165,6 +176,16 @@ pub struct FunctionName<R: gimli::Reader> {
     pub name: R,
     /// The language of the compilation unit containing this function.
     pub language: Option<gimli::DwLang>,
+}
+
+impl<R: gimli::Reader> core::fmt::Debug for FunctionName<R> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("FunctionName")
+            .field("name", &self.name.to_string_lossy())
+            .field("language", &self.language)
+            .finish()
+    }
 }
 
 impl<R: gimli::Reader> FunctionName<R> {
