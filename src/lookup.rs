@@ -18,6 +18,26 @@ pub struct SplitDwarfLoad<R> {
     pub parent: Arc<gimli::Dwarf<R>>,
 }
 
+impl<R: gimli::Reader> core::fmt::Debug for SplitDwarfLoad<R> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SplitDwarfLoad")
+            .field("dwo_id", &self.dwo_id)
+            .field(
+                "comp_dir",
+                &self
+                    .comp_dir
+                    .as_ref()
+                    .map(|comp_dir| comp_dir.to_string_lossy()),
+            )
+            .field(
+                "path",
+                &self.path.as_ref().map(|path| path.to_string_lossy()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 /// Operations that consult debug information may require additional files
 /// to be loaded if split DWARF is being used. This enum returns the result
 /// of the operation in the `Output` variant, or information about the split
@@ -52,6 +72,18 @@ pub enum LookupResult<L: LookupContinuation> {
     },
     /// The lookup has completed and produced an output.
     Output(<L as LookupContinuation>::Output),
+}
+
+impl<L> core::fmt::Debug for LookupResult<L>
+where
+    L: LookupContinuation,
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Load { .. } => formatter.debug_struct("Load").finish_non_exhaustive(),
+            Self::Output(..) => formatter.debug_tuple("Output").finish_non_exhaustive(),
+        }
+    }
 }
 
 /// This trait represents a partially complete operation that can be resumed

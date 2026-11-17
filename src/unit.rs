@@ -587,6 +587,14 @@ where
     }
 }
 
+impl<'ctx, R: gimli::Reader> core::fmt::Debug for LocationRangeIter<'ctx, R> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("LocationRangeIter")
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(feature = "fallible-iterator")]
 impl<'ctx, R> fallible_iterator::FallibleIterator for LocationRangeIter<'ctx, R>
 where

@@ -141,6 +141,12 @@ impl Loader {
     }
 }
 
+impl core::fmt::Debug for Loader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Loader").finish_non_exhaustive()
+    }
+}
+
 struct LoaderInternal<'a> {
     ctx: Context<LoaderReader<'a>>,
     object: object::File<'a>,
@@ -462,6 +468,7 @@ fn convert_path(bytes: &[u8]) -> Result<PathBuf> {
 }
 
 /// Information from a symbol table entry.
+#[derive(Debug)]
 pub struct Symbol<'a> {
     name: &'a str,
     address: u64,
