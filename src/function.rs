@@ -34,6 +34,10 @@ pub(crate) struct Functions<R: gimli::Reader> {
 /// It is possible for a function to have multiple address ranges; this
 /// is handled by having multiple `FunctionAddress` entries with the same
 /// `function` field.
+/// Maximum inline nesting parsed from DWARF. Deeper frames are skipped so
+/// hostile input cannot exhaust the stack.
+const MAX_INLINED_DEPTH: usize = 256;
+
 pub(crate) struct FunctionAddress {
     range: gimli::Range,
     /// An index into `Functions::functions`.
@@ -371,6 +375,10 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         depth: isize,
         inlined_depth: usize,
     ) -> Result<(), Error> {
+        if inlined_depth >= MAX_INLINED_DEPTH {
+            return Function::skip(&mut state.entries, abbrev, depth);
+        }
+
         let unit = state.unit;
         let mut ranges = RangeAttributes::default();
         let mut name = None;
