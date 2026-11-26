@@ -47,6 +47,9 @@ findshlibs = "0.10"
 libtest-mimic = "0.8.1"
 auxiliary = { path = "tests/auxiliary" }
 
+[profile.dev]
+debug = true
+
 [profile.release]
 debug = true
 
