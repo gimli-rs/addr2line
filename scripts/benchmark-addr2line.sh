@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 ADDR2LINE_BINARY="target/release/addr2line"
 WORKDIR="scripts/tmp"
 SYMBOLS_PATH="$WORKDIR/symbols.txt"
@@ -7,7 +9,7 @@ SYMBOLS_PATH="$WORKDIR/symbols.txt"
 rm -rf $WORKDIR
 mkdir -p $WORKDIR
 benchmark() {
-    $ADDR2LINE_BINARY --all -a -e $1 | grep 0x | shuf --random-source=<(yes 123456789) | head -n $2 > $SYMBOLS_PATH
+    $ADDR2LINE_BINARY --all -a -e $1 | grep 0x | shuf --random-source=<(yes 123456789) | sed -n "1,${2}p" > $SYMBOLS_PATH
     BINARY_NAME=`basename -s .debug $1`
     BINARY_SIZE=`du -hs $1 | cut -f1`
     echo "=== Running benchmark for $BINARY_NAME ==="
