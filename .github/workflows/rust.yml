@@ -80,12 +80,6 @@ jobs:
           rustup default nightly
       - run: cargo bench
 
-  bench-addr2line:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: ./scripts/benchmark-addr2line-docker.sh
-
   msrv:
     runs-on: ubuntu-latest
     steps:

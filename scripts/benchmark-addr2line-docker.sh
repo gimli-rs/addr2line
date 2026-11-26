@@ -1,3 +1,5 @@
+set -e
+
 IMAGE_NAME=opensuse-addr2line
 CWD=`dirname $0`
 
