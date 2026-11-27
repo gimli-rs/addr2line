@@ -34,10 +34,6 @@ pub(crate) struct Functions<R: gimli::Reader> {
 /// It is possible for a function to have multiple address ranges; this
 /// is handled by having multiple `FunctionAddress` entries with the same
 /// `function` field.
-/// Maximum inline nesting parsed from DWARF. Deeper frames are skipped so
-/// hostile input cannot exhaust the stack.
-const MAX_INLINED_DEPTH: usize = 256;
-
 pub(crate) struct FunctionAddress {
     range: gimli::Range,
     /// An index into `Functions::functions`.
@@ -246,7 +242,7 @@ impl<R: gimli::Reader> Function<R> {
             unit,
             ctx,
         };
-        Function::parse_children(&mut state, depth, 0)?;
+        Function::parse_children(&mut state, depth)?;
 
         // Sort ranges in "breadth-first traversal order", i.e. first by call_depth
         // and then by range.begin. This allows finding the range containing an
@@ -280,35 +276,35 @@ impl<R: gimli::Reader> Function<R> {
         })
     }
 
-    fn parse_children(
-        state: &mut InlinedState<R>,
-        depth: isize,
-        inlined_depth: usize,
-    ) -> Result<(), Error> {
+    /// Parses the children of a `DW_TAG_subprogram`, including arbitrarily
+    /// deep inlined-subroutine nesting. `open_frames` holds the depths of the
+    /// inline frames being parsed, so nesting uses heap instead of the stack.
+    fn parse_children(state: &mut InlinedState<R>, depth: isize) -> Result<(), Error> {
+        let mut open_frames = Vec::new();
         loop {
             let dw_die_offset = state.entries.next_offset();
             let next_depth = state.entries.next_depth();
             if next_depth <= depth {
                 return Ok(());
             }
-            if let Some(abbrev) = state.entries.read_abbreviation()? {
-                match abbrev.tag() {
-                    gimli::DW_TAG_subprogram => {
-                        Function::skip(&mut state.entries, abbrev, next_depth)?;
-                    }
-                    gimli::DW_TAG_inlined_subroutine => {
-                        InlinedFunction::parse(
-                            state,
-                            dw_die_offset,
-                            abbrev,
-                            next_depth,
-                            inlined_depth,
-                        )?;
-                    }
-                    _ => {
-                        state.entries.skip_attributes(abbrev.attributes())?;
-                    }
+            while open_frames
+                .last()
+                .is_some_and(|&frame_depth| next_depth <= frame_depth)
+            {
+                open_frames.pop();
+            }
+            let Some(abbrev) = state.entries.read_abbreviation()? else {
+                continue;
+            };
+            match abbrev.tag() {
+                gimli::DW_TAG_subprogram => {
+                    Function::skip(&mut state.entries, abbrev, next_depth)?;
                 }
+                gimli::DW_TAG_inlined_subroutine => {
+                    InlinedFunction::parse(state, dw_die_offset, abbrev, open_frames.len())?;
+                    open_frames.push(next_depth);
+                }
+                _ => state.entries.skip_attributes(abbrev.attributes())?,
             }
         }
     }
@@ -372,13 +368,8 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         state: &mut InlinedState<R>,
         dw_die_offset: gimli::UnitOffset<R::Offset>,
         abbrev: &gimli::Abbreviation,
-        depth: isize,
-        inlined_depth: usize,
+        call_depth: usize,
     ) -> Result<(), Error> {
-        if inlined_depth >= MAX_INLINED_DEPTH {
-            return Function::skip(&mut state.entries, abbrev, depth);
-        }
-
         let unit = state.unit;
         let mut ranges = RangeAttributes::default();
         let mut name = None;
@@ -461,12 +452,12 @@ impl<R: gimli::Reader> InlinedFunction<R> {
         ranges.for_each_range(unit, |range| {
             state.addresses.push(InlinedFunctionAddress {
                 range,
-                call_depth: inlined_depth,
+                call_depth,
                 function: function_index,
             });
         })?;
 
-        Function::parse_children(state, depth, inlined_depth + 1)
+        Ok(())
     }
 }
 
